@@ -4,6 +4,14 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ## Unreleased
 
+### New
+
+- A code of conduct, the Contributor Covenant 2.1, linked from the contributing guide.
+
+### Changed
+
+- The README's demo GIF is a third of its old size, so it loads faster on a phone.
+
 ## 0.2.1 - 2026-10-11
 
 Your folder of teams, members and settings is now called your **crew** everywhere (the folder layout still says cadrei: `~/.cadrei/<name>`, `cadrei.conf`).

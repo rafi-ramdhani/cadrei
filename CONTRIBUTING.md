@@ -4,6 +4,7 @@ Thanks for helping. Cadrei is small on purpose: one program that starts and stop
 
 ## Before you start
 
+- **Be kind:** everyone here follows the [code of conduct](CODE_OF_CONDUCT.md).
 - **Bugs:** open an issue with what you ran, what you expected and what happened, plus your OS and `cadrei --version`.
 - **Features:** open an issue first to talk it through. If the orchestrator can do something on request, it needs no code: many ideas fit better in the skill, or in your own crew (a member, a playbook rule), than in the program.
 
