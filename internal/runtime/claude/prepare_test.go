@@ -30,7 +30,7 @@ func TestPrepareWithABrokenFileStillDenies(t *testing.T) {
 	if got.Grants == "" {
 		t.Fatal("a broken file gave no copy: the member would start without any deny rule")
 	}
-	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "no grants, only cadrei's deny rules") {
+	if len(got.Warnings) != 1 || !strings.Contains(got.Warnings[0], "nothing extra allowed, only cadrei's limits") {
 		t.Errorf("warnings %q", got.Warnings)
 	}
 	raw, _ := os.ReadFile(got.Grants)

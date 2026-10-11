@@ -4,6 +4,74 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ## Unreleased
 
+## 0.2.1 - 2026-10-11
+
+Your folder of teams, members and settings is now called your **crew** everywhere (the folder layout still says cadrei: `~/.cadrei/<name>`, `cadrei.conf`).
+
+### New
+
+- **A friendlier first run**: one screen checks your tools (one line when all is well), shows the whole plan, and asks for one key. Enter sets it all up and opens your orchestrator, `p` keeps it in the plain terminal, `r` restores a crew from GitHub, `q` quits and changes nothing. In a repo with its own Claude Code settings, skills or agents, the repo isn't trusted unless you press `a`. A new crew's folder is trusted in Claude Code, so your orchestrator opens without a prompt.
+- **A mascot and the brand's colors**: a tiny mascot tops the first run and `cadrei --version` in a terminal with 256 colors or more, your crew's name shows in clay, and cadrei's tmux sessions have a green status bar. Plain mode, `NO_COLOR` and pipes stay as they were.
+- **Model and effort per member**: `model:` and `effort:` at the top of a member's file, `MODEL=` and `EFFORT=` in `cadrei.conf` for the whole crew, or `cadrei up ... --model <model> --effort <level>` for one start. `cadrei ls` shows them, and your orchestrator keeps its own model unless you set `ORCHESTRATOR_MODEL`.
+- **Plug back in**: after `cadrei uninstall`, or after deleting `~/.cadrei/config` and `~/.cadrei/framework`, the next `cadrei` finds your crews and plugs them back in. Each crew now keeps everything about itself: where its projects are on this machine and its orchestrator's chat (in `.claude/local/`, which git ignores), and the tmux choice (`ORCHESTRATOR` in `cadrei.conf`).
+- **Delete everything**: `cadrei uninstall --all` removes cadrei for good: every crew, cadrei's settings and state, and every archive, after a dry run (`--dry-run`) that warns about crews whose backup is behind, and only once you type `delete everything` (`--yes` isn't enough; scripts pass `--confirm "delete everything"`). Your projects' folders are never deleted. Plain `cadrei uninstall` still keeps your crews.
+- **Newer crews are safe from older versions**: a crew whose tracked `cadrei.conf` has a `FORMAT` above 1 (written by a later cadrei that changes the layout) is only read by this one: opening its orchestrator, starting members, grants, projects and the tmux setting are refused with a note to upgrade, while `ls`, `attach`, `stop`, `--check` and `uninstall` still work. Notes in `.claude/local/` and archives written by a newer cadrei are refused the same way.
+- **Team members are kept away from uninstall and restore in every form**: a check that runs before each of a member's shell commands (`cadrei hook guard`) refuses them through `env`, `sh -c`, any path or quoting, beside the deny rules and the commands' own checks. Uninstalls also look for your teams on every tmux server they were started on, whatever `CADREI_TMUX_SOCKET` or `TMUX_TMPDIR` say. [SECURITY.md](SECURITY.md) says what each layer can and can't stop.
+- A member can't be called `orchestrator`, a name kept for your orchestrator.
+- **Your orchestrator hears when a member goes quiet**: if it sends a member a task without asking to hear when the member goes idle, a note from cadrei right after the send has it ask for that notice. The note never blocks or changes a message.
+- A member whose reply is denied sends one short status instead, naming only the rule, and your orchestrator tells you which window to open. It never reads the blocked content from the member's window, chat record or files. A member that goes idle without replying gets at most one request for a short status, and then your orchestrator sends you to its window instead of reading it.
+- `cadrei help advanced` starts with the everyday commands and every option they take, and lists every option of `project add` and `project link`.
+- **Uninstall removes a Homebrew install too**: with Homebrew, every `cadrei uninstall` ends by running `brew uninstall cadrei`, as its plan's last line, after all of cadrei's own cleanup and under the same yes. `--keep-program` keeps the program. Other installs still end with the `rm` to run.
+- **Archive and restore**: `cadrei uninstall --archive` checks each crew's backup, offers to push it, and packs your crews and settings away in `~/.cadrei-archive/<date-time>/`, so a reinstall is a true first run. `cadrei restore`, or `o` on that first run, brings it all back to the same places, chats included. A run that stopped halfway finishes when you run it again.
+- **Your orchestrator opens in tmux** by default, so it keeps going when you close the window. `cadrei tmux on|off [--here]` changes that, and `--no-tmux`, `--detach` and `--fresh` work for one run.
+- **The orchestrator greets you**: by name and crew, with the first thing worth knowing (a stuck member, leftover one-time permissions, a missing project). It gets a live snapshot of your setup when it opens, and a few read-only commands are allowed for it without a prompt.
+- **A team status line** ends your orchestrator's replies while someone is running: `Team: engineer working 4m · reviewer idle`. Say "hide the team line" to turn it off for your crew.
+- **`cadrei ls` is a status screen** showing what each member is doing: working, waiting on you, idle, starting, or stopped by Claude's safeguards. `cadrei ls --json` has the same states.
+- **Safeguard stops**: when Claude's safeguards stop a member's reply, `cadrei up`, `cadrei ls`, the status line and your orchestrator tell you, with how to fix it in its window or start it fresh.
+- **`cadrei new <name>`** makes a crew. `cadrei init` still works.
+- **`cadrei hook on|off|skip`** manages the every-chat hook, and your orchestrator offers it once, after your first finished task.
+- **Did you mean**: a mistyped command gets a suggestion, and `cadrei project` alone lists the project commands.
+
+### Changed
+
+- Every command speaks in one voice: errors say what happened and then how to fix it, checks use ✓, ! and ✗ (plain `+`, `!` and `x` when the output isn't a terminal), and paths show with `~`. Colors follow your terminal's theme, and `NO_COLOR` turns them off.
+- `cadrei help` is shorter, with examples of what to ask your orchestrator, and `cadrei help advanced` has Crews and Setup groups.
+- Hook commands cadrei writes do nothing when the program is gone, so an uninstall without `cadrei uninstall` leaves no errors behind.
+- `cadrei project sync` and a GitHub restore trust only clones without their own Claude Code settings.
+- The member protocol asks members never to write a real-looking secret, not even a fake one.
+- Sessions cadrei starts from inside a Claude Code chat no longer take that chat's own session markers, so a member keeps its transcript and its own effort.
+- `cadrei stop`, `uninstall` and `uninstall --archive` act only on sessions your crews recorded as theirs, never on another setup's sessions on the same tmux server. Every uninstall stops before changing anything when tmux can't say which teams run.
+- Your orchestrator's greeting names a waiting or stopped member by its own team and project, with the command to open it.
+- The README is short now and points to [cadrei.dev](https://cadrei.dev) for the docs. The new [command reference](docs/commands.md) lists every command and option.
+- The brand art (the logo, the characters and the lead's terminal art, in `mascot/` and `docs/brand/`) is all rights reserved, not covered by the MIT license. [NOTICE](NOTICE) lists its files, and release archives carry it. The code stays MIT. The Homebrew formula's license says the same: MIT, plus terms Homebrew can't name.
+
+### Security
+
+- Team members can't edit a crew's `CLAUDE.md`, `CLAUDE.local.md` or `.mcp.json`, can't read or write `~/.cadrei-archive`, and can't run `cadrei new`, `cadrei uninstall` (any form) or `cadrei restore`, even with their own variables emptied: cadrei also knows them by their tmux window.
+- The health check warns about `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json` and Claude Code settings at the top of a crew, since your orchestrator loads them.
+- The pre-push check refuses this machine's own files (`.claude/local/`) if they were ever committed, and a password or token in a URL. A project's repo URL is stored and shown without its password or token.
+- `cadrei project add` and `project link` don't trust a folder whose own Claude Code settings, or skills, agents or commands in any of its folders (for a worktree or a submodule, in its main checkout or superproject too), would run for your team, links among them included; trust it yourself with `cadrei project trust` once you've looked.
+- An archive or restore refuses crew names that would climb out of their folder, and archives whose folders are links. A restore goes back to a linked place only for an archive made on this machine, needs `~/.cadrei` empty, keeps the config it would replace, names any model settings it brings back, and never deletes a crew's only whole copy, or anything it didn't make, while moving it. A restore of an archive from elsewhere names, before you agree, anything in a crew's git settings or layout that could run a program, and cadrei's own git commands in a crew run none of its hooks and use only the crew's own repo, never one in a folder above it. A restore won't bring back a `.git` into `~/.cadrei`, and names a crew that has no repo of its own.
+
+### For tool builders
+
+`cadrei ls --json` is now a documented public interface, version 1, with a compatibility promise: within a version, fields, line types and values in a field's list are only added, and a value your tool doesn't know has a safe meaning. See [For tool builders](docs/tools.md).
+
+- New: `--json-version 1` pins the version a tool reads; any other number is refused.
+- `session` and a member's `name` are keys, not to be split on `-`; `cadrei`, `cadreis` and `other_cadreis` keep their names for all of version 1.
+- New: `cadrei ls --json --watch` streams the same state as JSON lines, a whole snapshot first and then each change. A snapshot of a crew that's gone carries `missing`, and a `team_started` line carries `legacy` for a team from cadre 0.1.x.
+- Added at the top level: `orchestrator_opens_in` and `hook`. Added to each running member: `state`, `since` and `waiting_for`.
+- Added to each running member: `no_activity_since` (working or waiting, with no activity for 10 minutes or more) and `turn_error` (idle after a turn that ended in an error), and `model`, `effort`, `model_from` and `effort_from`. Added to the crew: `model` and `effort`.
+- `cadrei ls --json` never asks which crew; with a project in several crews it fails as it does without a terminal.
+- A team from cadre 0.1.x counts as your default crew's: it shows in that crew's `running` with `legacy: true`, and with `--all` under `legacy` too.
+- `cadrei ls --json --all` with no crews at all exits 0, with `"cadreis": []` and `orchestrator_opens_in` set to `terminal`.
+
+### Upgrading from 0.2.0
+
+Nothing to do. On its first run, 0.2.1 moves each crew's project places and orchestrator chat from `~/.cadrei/config` into the crew, adds `/.claude/local/` to the crew's `.gitignore`, and says so once. A crew you already have keeps opening its orchestrator in the terminal; run `cadrei tmux on` to move it to tmux.
+
+Once 0.2.1 has run, 0.2.0 can't find your projects or pick up your orchestrator's chat: they're in each crew's `.claude/local/` now, where 0.2.0 doesn't look. Going back to 0.2.1 brings them back. `cadrei help`, `cadrei --version` and `cadrei --check` don't move anything, so you can try those first. A project you link again while on 0.2.0 loses to the crew's own copy, so link it after upgrading, not before.
+
 ## 0.2.0 - 2026-10-09
 
 **Cadre is now Cadrei** (pronounced CAD-ray), since other AI agent tools already use the name Cadre. Cadrei is one program, written in Go, that you install with Homebrew or a small download script. Run `cadrei`, then talk to the orchestrator. **This is a breaking upgrade**: read "Upgrading from 0.1.x" below before you install.

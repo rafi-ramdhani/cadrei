@@ -13,11 +13,15 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
+	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
+	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/jsonx"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
+	"github.com/rafi-ramdhani/cadrei/internal/runtime/claude/settings"
 )
 
 // ConfigDir is Claude Code's config folder: CLAUDE_CONFIG_DIR, else
@@ -48,6 +52,9 @@ func parseVersion(s string) ([3]int, bool) {
 	return v, true
 }
 
+// versionText writes a version as people read it: 2.1.295.
+func versionText(v [3]int) string { return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2]) }
+
 func atLeast(v, floor [3]int) bool {
 	for i := range v {
 		if v[i] != floor[i] {
@@ -59,53 +66,67 @@ func atLeast(v, floor [3]int) bool {
 
 // output runs claude with args, no input and a time limit.
 func output(bin string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return outputWithin(15*time.Second, bin, args...)
+}
+
+// authLimit is how long the login check may take: offline, claude auth
+// status can wait a long time, and setup shows the check as it runs.
+const authLimit = 3 * time.Second
+
+func outputWithin(limit time.Duration, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = nil
+	// At the limit, everything it started goes too, and a child that
+	// keeps the output open can't hold cadrei past it.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 500 * time.Millisecond
 	return cmd.Output()
 }
 
 func (c Claude) Health(full bool, cadreiDirs []string) []runtime.Problem {
 	var out []runtime.Problem
-	in, err := c.Detect()
-	if err != nil {
-		return []runtime.Problem{{What: "Claude Code (claude) is not on your PATH", Fatal: true,
-			Fix: "brew install --cask claude-code, or see https://claude.com/claude-code"}}
+	help := c.Help()
+	if _, err := c.Detect(); err != nil {
+		fix := "Install it from " + help.URL
+		if _, err := exec.LookPath("brew"); err == nil {
+			fix = "Install it with " + help.Install + ", or see " + help.URL
+		}
+		return []runtime.Problem{{What: runtime.Probe{}.Says(c.Title()), Fatal: true, Fix: fix}}
 	}
+	// The full check asks Claude Code as the first run's screen does: the
+	// one Probe, so both say the same.
 	if full {
-		raw, err := output(in.Path, "--version")
-		v, ok := parseVersion(string(raw))
-		switch {
-		case err != nil || !ok:
-			out = append(out, runtime.Problem{What: fmt.Sprintf("%s --version does not run", in.Path), Fatal: true,
-				Fix: "reinstall Claude Code (brew reinstall --cask claude-code, or see https://claude.com/claude-code)"})
-		case !atLeast(v, authStatusSince):
-			out = append(out, runtime.Problem{What: "could not check the login",
-				Fix: "if Claude Code asks you to log in, do so"})
-		default:
-			raw, err := output(in.Path, "auth", "status")
-			var exit *exec.ExitError
-			isJSON := json.Valid(bytes.TrimSpace(raw))
-			switch {
-			case err == nil && isJSON:
-			case errors.As(err, &exit) && exit.ExitCode() == 1 && isJSON:
-				out = append(out, runtime.Problem{What: "Claude Code is not logged in", Fix: "run claude and log in"})
-			default:
-				out = append(out, runtime.Problem{What: "could not check the login",
-					Fix: "if Claude Code asks you to log in, do so"})
-			}
+		switch p := c.Probe(); {
+		case !p.Runs:
+			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fatal: true, Fix: "Reinstall it with " + help.Reinstall})
+		case p.Login != runtime.LoggedIn:
+			out = append(out, runtime.Problem{What: p.Says(c.Title())})
+		}
+	}
+	// Member settings with no record here and no commit (a crew without
+	// a git identity, after ~/.cadrei/config was deleted): taken as they
+	// are, and said so.
+	for _, d := range cadreiDirs {
+		file := filepath.Join(d, settings.Rel)
+		if full && settings.FirstUse(d, file, hashFile()) {
+			settings.Record(file, hashFile())
+			out = append(out, runtime.Problem{
+				What: filepath.Base(d) + "'s team permissions (" + cadreis.Tilde(file) + ") have no record on this machine and no commit to check them against, so cadrei takes them as they are now.",
+				Fix:  "See them with cadrei allow list."})
 		}
 	}
 	// Once a cadrei folder is trusted, Claude Code loads these for its
 	// orchestrator; cadrei never writes them (N.7).
 	for _, d := range cadreiDirs {
-		for _, f := range []string{"settings.json", "settings.local.json"} {
-			p := filepath.Join(d, ".claude", f)
+		for _, f := range []string{".claude/settings.json", ".claude/settings.local.json", "CLAUDE.md", "CLAUDE.local.md", ".mcp.json"} {
+			p := filepath.Join(d, f)
 			if _, err := os.Lstat(p); err == nil {
 				out = append(out, runtime.Problem{
-					What: p + " exists: Claude Code loads it for this cadrei's orchestrator, and cadrei never writes it",
-					Fix:  "look at what it holds, and remove it unless you added it yourself"})
+					What: cadreis.Tilde(p) + " exists. Claude Code loads it into your orchestrator, and cadrei never writes it.",
+					Fix:  "Check what's in it, and remove it unless you added it."})
 			}
 		}
 	}
@@ -198,6 +219,21 @@ func isOrchestratorHook(command string) bool {
 }
 
 func (h hooks) Find() ([]string, error) {
+	commands, err := h.commands()
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	for _, c := range commands {
+		if prog, ok := OrchestratorHook(c); ok {
+			found = append(found, prog)
+		}
+	}
+	return found, nil
+}
+
+// commands lists the SessionStart hook commands in the settings file.
+func (h hooks) commands() ([]string, error) {
 	raw, err := os.ReadFile(h.File())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -217,17 +253,42 @@ func (h hooks) Find() ([]string, error) {
 	for _, g := range groups.Items {
 		for _, hk := range g.Get("hooks").Items {
 			if c, ok := commandOf(hk); ok {
-				if prog, ok := OrchestratorHook(c); ok {
-					found = append(found, prog)
-				}
+				found = append(found, c)
 			}
 		}
 	}
 	return found, nil
 }
 
-// HookCommand is the hook command for a cadrei binary.
-func HookCommand(binary string) string { return quote(binary) + " hook orchestrator" }
+// HookCommand is the every-chat hook's command for a cadrei binary.
+func HookCommand(binary string) string { return hookCommand(binary, "orchestrator") }
+
+// hookCommand is the form of every hook command cadrei writes: it runs
+// `<binary> hook <sub>` only while the program is there, with its stderr
+// dropped, and always ends with exit 0, so a removed program, or an older
+// one that doesn't know sub, shows nothing at all. test is a shell
+// builtin, and there's no exec, since a failed exec would end the shell
+// before exit 0. cadrei's hooks never write to stderr themselves.
+func hookCommand(binary, sub string) string {
+	q := quote(binary)
+	return "test -x " + q + " && " + q + " hook " + sub + " 2>/dev/null; exit 0"
+}
+
+// Outdated reports whether the every-chat hook for binary is written in
+// an older form than HookCommand's, so Set would rewrite it.
+func (h hooks) Outdated(binary string) (bool, error) {
+	commands, err := h.commands()
+	if err != nil {
+		return false, err
+	}
+	bin := paths.Real(binary)
+	for _, c := range commands {
+		if prog, ok := OrchestratorHook(c); ok && paths.Real(prog) == bin && c != HookCommand(binary) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 
 func quote(w string) string {
 	if w != "" && strings.Trim(w, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-./=:@%+,") == "" {
@@ -303,4 +364,55 @@ func (hooks) Output(text string) []byte {
 		HookSpecificOutput specific `json:"hookSpecificOutput"`
 	}{specific{"SessionStart", text}})
 	return append(b, '\n')
+}
+
+// SnapshotSettings writes <dir>/orchestrator-settings.json, holding the
+// session start hook that runs `<binary> hook snapshot`, the prompt hook
+// that runs `<binary> hook team-status`, and the hook after each
+// SendMessage call that runs `<binary> hook notify`. Claude Code adds their
+// output to the session's context (the snapshot on startup, on resume and
+// after /clear and /compact; the team status on each prompt; the notify
+// note after a send), and shows none of it in the chat.
+func (hooks) SnapshotSettings(dir, binary string) (string, error) {
+	entry := func(sub, timeout, matcher string) *jsonx.Value {
+		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(hookCommand(binary, sub)), "timeout", jsonx.Literal(timeout))
+		group := jsonx.NewObject("hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
+		if matcher != "" {
+			group = jsonx.NewObject("matcher", jsonx.String(matcher), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
+		}
+		return &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}}
+	}
+	root := jsonx.NewObject("hooks", jsonx.NewObject("SessionStart", entry("snapshot", "10", ""), "UserPromptSubmit", entry("team-status", "5", ""),
+		"PostToolUse", entry("notify", "5", "SendMessage")))
+	path := filepath.Join(dir, "orchestrator-settings.json")
+	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
+}
+
+// Probe runs claude --version, and claude auth status when this version
+// has it (3 seconds at most: offline it can wait much longer).
+func (c Claude) Probe() runtime.Probe {
+	in, err := c.Detect()
+	if err != nil {
+		return runtime.Probe{}
+	}
+	p := runtime.Probe{Installed: true, Login: runtime.LoginUnsure}
+	raw, err := output(in.Path, "--version")
+	v, ok := parseVersion(string(raw))
+	if err != nil || !ok {
+		return p
+	}
+	p.Runs, p.Version = true, versionText(v)
+	if !atLeast(v, authStatusSince) {
+		return p
+	}
+	raw, err = outputWithin(authLimit, in.Path, "auth", "status")
+	var exit *exec.ExitError
+	isJSON := json.Valid(bytes.TrimSpace(raw))
+	switch {
+	case err == nil && isJSON:
+		p.Login = runtime.LoggedIn
+	case errors.As(err, &exit) && exit.ExitCode() == 1 && isJSON:
+		p.Login = runtime.LoggedOut
+	}
+	return p
 }

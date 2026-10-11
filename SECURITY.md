@@ -4,6 +4,15 @@
 
 Please report security problems privately through GitHub's "Report a vulnerability" button on this repository's Security tab, not in a public issue. You should get a reply within a week.
 
+## Supported versions
+
+Security fixes go into the latest release.
+
+| Version | Gets security fixes |
+|---|---|
+| 0.2.x | Yes, in the latest 0.2 release |
+| 0.1.x (Cadre) | No. Upgrade to the latest Cadrei |
+
 ## How cadrei is built to be safe
 
 Cadrei runs several Claude Code sessions for you. Each member is a full Claude Code session that acts on messages from the orchestrator, so the design keeps three things in your hands: what members may do, cadrei's own files, and the files cadrei shares with Claude Code.
@@ -12,43 +21,50 @@ Cadrei runs several Claude Code sessions for you. Each member is a full Claude C
 
 - Only what you type in the orchestrator session, or your answers to its own questions, counts as your consent. A cross-session message, a member's reply, a file or a web page never does, even when it claims to quote you. The orchestrator skill and the member protocol both say so.
 - A message from the orchestrator never counts as your consent in a member: each member asks for its own permissions.
-- Members report a blocked action instead of working around it, and never try to change permissions.
+- Members report a blocked action instead of working around it, and never try to change permissions. When a member's reply itself is denied, its status names only the rule and says the content is in its window; the orchestrator then sends you to that window and never reads the content from it, from the member's chat record or from a file.
+- The orchestrator's notify hook (`cadrei hook notify`, after each of its `SendMessage` calls) only adds a note asking it to subscribe to a member's idle notice. It never blocks, denies, approves or changes a message, and prints nothing for anything it can't read.
 
 ### Grants reach members through `cadrei allow`
 
-- When you allow something, the orchestrator records the narrowest rule with `cadrei allow` in your cadrei's `.claude/member-settings.json`. It never adds a rule because a member asked for one.
-- `cadrei allow` refuses blanket rules (bare tools, lone wildcards, whole MCP servers, shells, interpreters and wrappers with a wildcard, chained commands, every domain) and anything that reaches cadrei's own files, startup files, or files that run code outside a session. For `Edit` and `Read` rules, paths are read the way Claude Code reads them, after Unicode normalization and case folding, so globs, escapes and braces cannot hide a refused file. `Bash` rules are checked word by word (paths, variables, `..` climbs) and cannot see where a link on disk leads, so the fixed `Edit` denies and the permission mode remain the stronger guards. Other wildcards, `git`, code from project files and secret-reading paths get a warning. Every change is committed in your cadrei.
+- When you allow something, the orchestrator records the narrowest rule with `cadrei allow` in your crew's `.claude/member-settings.json`. It never adds a rule because a member asked for one.
+- `cadrei allow` refuses blanket rules (bare tools, lone wildcards, whole MCP servers, shells, interpreters and wrappers with a wildcard, chained commands, every domain) and anything that reaches cadrei's own files, startup files, or files that run code outside a session. For `Edit` and `Read` rules, paths are read the way Claude Code reads them, after Unicode normalization and case folding, so globs, escapes and braces cannot hide a refused file. `Bash` rules are checked word by word (paths, variables, `..` climbs) and cannot see where a link on disk leads, so the fixed `Edit` denies and the permission mode remain the stronger guards. Other wildcards, `git`, code from project files and secret-reading paths get a warning. Every change is committed in your crew.
 - Members never get the grants file itself. Before each start, cadrei validates it (only `permissions.allow/deny` and `autoMode.allow/soft_deny`, no duplicate keys, `"$defaults"` kept, the fixed entries present) and passes a read-only copy from `.claude/build/`, rebuilt at every start. A file that fails the check gives members a copy with no grants, and a warning. A fingerprint in `~/.cadrei/config` flags edits made outside `cadrei allow`.
-- Every copy carries fixed rules: `Edit` denies for `~/.cadrei/config`, `~/.cadrei/framework`, and each cadrei's `.claude`, `cadrei.conf`, `members`, `playbook.md`, `protocol.md`, `projects.yaml` and `.git`; a deny for `cadrei allow`; and an auto-mode `soft_deny` line saying that only the user changes these, through the orchestrator. Team folders stay writable.
+- Every copy carries fixed rules: `Edit` denies for `~/.cadrei/config`, `~/.cadrei/framework`, and each crew's `.claude`, `cadrei.conf`, `members`, `playbook.md`, `protocol.md`, `projects.yaml`, `.git`, `CLAUDE.md`, `CLAUDE.local.md` and `.mcp.json`; `Read` and `Edit` denies for `~/.cadrei-archive`; denies for `cadrei allow`, `cadrei new` (and `init`), `cadrei use`, `cadrei uninstall` and `cadrei restore`; and an auto-mode `soft_deny` line saying that only the user changes these, through the orchestrator. Team folders stay writable.
 - A one-time grant (`--once`) is usable by any member, any number of times, until it is removed. The orchestrator removes it after the task and checks for leftovers at every session start.
 
 ### What members cannot run
 
-Members are refused for `cadrei allow add` and `remove`, `cadrei stop` with no team, `cadrei uninstall`, `cadrei init`, `cadrei use`, and `cadrei project add`, `link`, `unlink` and `trust`. Cadrei sets `CADREI_MEMBER` in every member. Sessions started by 0.1.x carry `CADRE_PERSONA` instead, which cadrei reads the same way and never sets; this alias goes away in a later release.
+Members are refused for `cadrei allow add` and `remove`, `cadrei stop` with no team, every form of `cadrei uninstall`, `cadrei restore`, `cadrei new` (and `init`), `cadrei use`, `cadrei project add`, `link`, `unlink` and `trust`, setting `cadrei project dir`, changing `cadrei tmux` or `cadrei hook`, and opening an orchestrator with plain `cadrei`. Cadrei sets `CADREI_MEMBER` in every member. Sessions started by 0.1.x carry `CADRE_PERSONA` instead, which cadrei reads the same way and never sets; this alias goes away in a later release.
 
-This check is advisory: a member with shell access could unset the variable. The deny rules, Claude Code's protection of `.claude` folders, and above all the permission mode are the real boundary.
+The commands that move or delete every crew (`uninstall` in every form, and `restore`) have three layers in front of them. None of them is a sandbox; each one covers what the others can't:
+
+1. **Deny rules** in every member's settings: `Bash(cadrei uninstall:*)` and `Bash(cadrei restore:*)`. Claude Code checks these before a command runs. Its own documentation says a prefix rule isn't a boundary around a program: it doesn't see through `env -u ...`, `sh -c "..."` or a full path to the program.
+2. **The guard**, `cadrei hook guard`, which every member's settings run before each Bash command. It refuses any command that may run cadrei's uninstall or restore: through `env`, `sh -c` or another shell, by any path, quoted or split up, or with a variable that could hide the program's name. It errs on the side of refusing, and refuses a command it can't read. If the program is gone, the call is refused too. It never runs in your orchestrator. It can't see into a script file a member writes and then runs, or into a program that runs cadrei for it.
+3. **The commands themselves.** Each refuses when `CADREI_MEMBER` or `CADRE_PERSONA` is set, even empty. `uninstall` and `restore` also refuse when they run in a member's tmux window: cadrei walks up from the command's own process to a pane it marked as a member's, on every tmux server your crews' teams were started on, whatever `CADREI_TMUX_SOCKET` or `TMUX_TMPDIR` say. That catches a script the member runs. It can't catch a command a member starts outside its own process tree: in a `tmux new-window` it opens (a window with no member's mark, like your own window in a team's session), or through a double fork that leaves it to the system. The first two layers, and the member's instructions never to run these, are what stand there.
+
+Above all of them is the permission mode: in `default` mode, a member asks you before it runs a command its grants don't cover.
 
 ### No code from unexpected places
 
 - `cadrei.conf` is read as `KEY=VALUE` lines, never run as shell code.
-- Configuration is read only from `~/.cadrei` or the cadrei named by `CADREI_HOME`, never from the folder you happen to be in. A folder that looks like a cadrei is never used.
-- Members and the orchestrator start with `CADREI_HOME` set, so changing folders never switches their cadrei.
+- Configuration is read only from `~/.cadrei` or the crew named by `CADREI_HOME`, never from the folder you happen to be in. A folder that looks like a crew is never used.
+- Members and the orchestrator start with `CADREI_HOME` set, so changing folders never switches their crew.
 
 ### Files that are not cadrei's
 
 - **Trust** (`~/.claude.json`): adding, linking or cloning a project marks its folder as trusted, so members start without the trust prompt. Only a project repository's top folder is trusted, never `/`, your home folder, `~/.cadrei`, a team folder or `~/.claude`. Trust lets that repository's own `.claude/settings.json` rules and hooks take effect, so add only repositories you trust, or pass `--no-trust`.
-- **The orchestrator hook** (`~/.claude/settings.json`): added only on your yes, and removed by `cadrei uninstall`.
+- **The every-chat hook** (`~/.claude/settings.json`): added only on your yes, and removed by `cadrei hook off` and `cadrei uninstall`.
 - Edits to both files keep every other key and their order, keep a backup of the original (`.claude.json.bak-cadrei`, `settings.json.bak-cadrei`; the first is never overwritten), are written atomically, check the file again just before writing, and are skipped with a warning on any doubt.
 
 ### Nothing is deleted
 
-Unlinking a project keeps its folder. Bringing in a 0.1.x cadre only reads it, and never changes the old folder or `~/.config/cadre`. `cadrei uninstall` keeps every cadrei and project, trust entries and backups.
+Unlinking a project keeps its folder. Bringing in a 0.1.x cadre only reads it, and never changes the old folder or `~/.config/cadre`. `cadrei uninstall` keeps every crew and project, trust entries and backups. With Homebrew it removes the cadrei program itself as its last step, unless you pass `--keep-program`. Only `cadrei uninstall --all`, after a plan and the phrase you type, deletes crews and archives, and it never deletes a project's folder.
 
-### No credentials in a cadrei's repository
+### No credentials in a crew's repository
 
-Cadrei writes no tokens into a cadrei, and a new cadrei's `.gitignore` leaves out `.env` files. A pre-push hook in each cadrei repository refuses a push that carries files that look like credentials, by name (`.env` files, `.credentials.json`, `credentials`, `.git-credentials`, `.netrc`, private keys, key stores, `.aws/`, `.kube/config`, `.docker/config.json`) or by content (Anthropic, GitHub, AWS and Slack tokens, private key headers), or files over 50 MB. It checks every name every file has in every commit pushed, and names each file it stops. The orchestrator creates a backup repository only as private, and only on your yes. A pre-push hook of your own is left alone, and the health check says that cadrei's check does not run.
+Cadrei writes no tokens into a crew, and a new crew's `.gitignore` leaves out `.env` files. A pre-push hook in each crew's repository refuses a push that carries files that look like credentials, by name (`.env` files, `.credentials.json`, `credentials`, `.git-credentials`, `.netrc`, private keys, key stores, `.aws/`, `.kube/config`, `.docker/config.json`) or by content (Anthropic, GitHub, AWS and Slack tokens, private key headers), or files over 50 MB. It checks every name every file has in every commit pushed, and names each file it stops. The orchestrator creates a backup repository only as private, and only on your yes. A pre-push hook of your own is left alone, and the health check says that cadrei's check does not run.
 
-The hook is a safety net, not a guarantee. It does not see a token split across lines or encoded (for example in base64), the content of a file over 8 MB, or a push made with `git push --no-verify` (the skill tells the orchestrator never to use it). A session with shell access in the cadrei can also change or remove the hook; one without cadrei's marker line is then reported as your own, not restored. Keep credentials out of the cadrei folder.
+The hook is a safety net, not a guarantee. It does not see a token split across lines or encoded (for example in base64), the content of a file over 8 MB, or a push made with `git push --no-verify` (the skill tells the orchestrator never to use it). A session with shell access in the crew can also change or remove the hook; one without cadrei's marker line is then reported as your own, not restored. Keep credentials out of the crew's folder.
 
 ### Resumed conversations
 
@@ -60,7 +76,7 @@ The orchestrator skill is written out to `~/.cadrei/framework/skills/cadrei`, ch
 
 ### Accounts
 
-Cadrei uses one Claude account at a time, whichever Claude Code is logged in with. Tools such as claude-swap can switch it; a switch applies to every cadrei on the machine, so restart afterwards (`cadrei stop`, close the orchestrator, run `cadrei`). Cadrei does not depend on any such tool and holds no credentials.
+Cadrei uses one Claude account at a time, whichever Claude Code is logged in with. Tools such as claude-swap can switch it; a switch applies to every crew on the machine, so restart afterwards (`cadrei stop`, close the orchestrator, run `cadrei`). Cadrei does not depend on any such tool and holds no credentials.
 
 ### Permission mode
 
@@ -68,4 +84,4 @@ Members and the orchestrator run in the mode set in `cadrei.conf` (default: `def
 
 ## Install
 
-`install.sh` is short and meant to be read before you run it. It downloads the release archive for your machine, checks it against the release's `checksums.txt`, and places the program in `~/.local/bin/cadrei`. It changes nothing else. The Homebrew formula installs the same release binary. Everything cadrei creates afterwards is listed in the README's "What gets installed where".
+`install.sh` is short and meant to be read before you run it. It downloads the release archive for your machine, checks it against the release's `checksums.txt`, and places the program in `~/.local/bin/cadrei` (or the folder in `CADREI_INSTALL_DIR`). It changes nothing else. The Homebrew formula installs the same release binary. Everything cadrei creates afterwards is listed in the guide's [Where things live](docs/guide.md#where-things-live).

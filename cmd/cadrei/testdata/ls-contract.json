@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "orchestrator_opens_in": "terminal",
+  "hook": "off",
+  "cadrei": {
+    "name": "work",
+    "path": "<home>/.cadrei/work",
+    "from": "from this folder",
+    "default": true,
+    "model": "sonnet",
+    "effort": "medium"
+  },
+  "orchestrator": {
+    "running": true,
+    "mode": "tmux",
+    "session": "cadrei-work"
+  },
+  "running": [
+    {
+      "session": "cadre-dev",
+      "team": "dev",
+      "legacy": true,
+      "members": [
+        {
+          "name": "dev-pm",
+          "role": "pm",
+          "state": "unknown"
+        }
+      ]
+    },
+    {
+      "session": "cadrei-work-dev",
+      "team": "dev",
+      "legacy": false,
+      "members": [
+        {
+          "name": "work-dev-approval",
+          "role": "approval",
+          "state": "waiting",
+          "since": "<time>",
+          "waiting_for": "approval",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-error",
+          "role": "error",
+          "state": "idle",
+          "since": "<time>",
+          "turn_error": true,
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-idle",
+          "role": "idle",
+          "state": "idle",
+          "since": "<time>",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-question",
+          "role": "question",
+          "state": "waiting",
+          "since": "<time>",
+          "waiting_for": "question",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-quiet",
+          "role": "quiet",
+          "state": "working",
+          "since": "<time>",
+          "no_activity_since": "<time>",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-starting",
+          "role": "starting",
+          "state": "starting",
+          "since": "<time>",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-stopped",
+          "role": "stopped",
+          "state": "stopped_by_safeguards",
+          "since": "<time>",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-unknown",
+          "role": "unknown",
+          "state": "unknown",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        },
+        {
+          "name": "work-dev-working",
+          "role": "working",
+          "state": "working",
+          "since": "<time>",
+          "model": "sonnet",
+          "effort": "medium",
+          "model_from": "crew",
+          "effort_from": "crew"
+        }
+      ]
+    },
+    {
+      "session": "cadrei-work-dev-app",
+      "team": "dev",
+      "project": "app",
+      "legacy": false,
+      "members": [
+        {
+          "name": "work-dev-app-working",
+          "role": "working",
+          "state": "starting",
+          "since": "<time>",
+          "model": "opus",
+          "effort": "medium",
+          "model_from": "start",
+          "effort_from": "crew"
+        }
+      ]
+    }
+  ],
+  "projects": [
+    {
+      "name": "app",
+      "repo": "https://example.com/me/app.git",
+      "team": "dev",
+      "about": "the app",
+      "path": "<home>/Developer/app",
+      "cloned": true,
+      "state": "present"
+    },
+    {
+      "name": "lib",
+      "repo": "https://example.com/me/lib.git",
+      "path": "",
+      "cloned": false,
+      "state": "not here",
+      "found": "<home>/Developer/lib"
+    },
+    {
+      "name": "gone",
+      "path": "<home>/Developer/gone",
+      "cloned": false,
+      "state": "missing"
+    },
+    {
+      "name": "usb",
+      "path": "/Volumes/NoSuchDisk/usb",
+      "cloned": false,
+      "state": "drive"
+    }
+  ],
+  "teams": {
+    "dev": [
+      {
+        "name": "work-dev-approval",
+        "role": "approval"
+      },
+      {
+        "name": "work-dev-error",
+        "role": "error"
+      },
+      {
+        "name": "work-dev-idle",
+        "role": "idle"
+      },
+      {
+        "name": "work-dev-question",
+        "role": "question"
+      },
+      {
+        "name": "work-dev-quiet",
+        "role": "quiet"
+      },
+      {
+        "name": "work-dev-starting",
+        "role": "starting"
+      },
+      {
+        "name": "work-dev-stopped",
+        "role": "stopped"
+      },
+      {
+        "name": "work-dev-unknown",
+        "role": "unknown"
+      },
+      {
+        "name": "work-dev-working",
+        "role": "working"
+      }
+    ]
+  },
+  "other_cadreis": [
+    {
+      "name": "life",
+      "path": "<home>/.cadrei/life",
+      "running": 0
+    }
+  ],
+  "problems": []
+}

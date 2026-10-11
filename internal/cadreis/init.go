@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
+	"github.com/rafi-ramdhani/cadrei/internal/gitx"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 )
 
@@ -22,10 +22,10 @@ func Create(name string, tmpl fs.FS) (c Cadrei, note string, err error) {
 	}
 	dest := filepath.Join(Root(), name)
 	if _, err := os.Lstat(dest); err == nil {
-		return c, "", fmt.Errorf("%s already exists", dest)
+		return c, "", fmt.Errorf("%s already exists", Tilde(paths.Real(dest)))
 	}
 	if other, ok := Clash(name, paths.Real(dest)); ok {
-		return c, "", fmt.Errorf("a cadrei named %s is already at %s; choose another name", other.Name, other.Path)
+		return c, "", fmt.Errorf("a crew called %s is already at %s. Pick another name", other.Name, Tilde(other.Path))
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return c, "", err
@@ -65,20 +65,23 @@ func writeTemplate(tmpl fs.FS, dest, name string) error {
 }
 
 func git(dir string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	out, err := gitx.Reading(dir, args...).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
 // Commit commits files (paths inside the cadrei) with msg. Without a git
 // identity it leaves the change uncommitted and returns a note saying so;
-// a cadrei that is not a git repository is left alone.
+// a cadrei that is not a git repository of its own is left alone.
 func Commit(cadrei, msg string, files ...string) (string, error) {
+	if _, err := os.Lstat(filepath.Join(cadrei, ".git")); err != nil {
+		return "", nil
+	}
 	if _, err := git(cadrei, "rev-parse", "--git-dir"); err != nil {
 		return "", nil
 	}
 	if _, err := git(cadrei, "config", "user.email"); err != nil {
-		return "note: git has no user identity, so this change was left uncommitted in " + cadrei +
-			"; set one (git config --global user.name/user.email) and commit", nil
+		return "Git has no name or email set, so this change was left uncommitted in " + Tilde(paths.Real(cadrei)) +
+			". Set them (git config --global user.name and user.email), then commit it.", nil
 	}
 	if out, err := git(cadrei, append([]string{"add", "--"}, files...)...); err != nil {
 		return "", fmt.Errorf("git add: %s", out)

@@ -24,7 +24,7 @@ func fakeCadrei(t *testing.T) string {
 	must(t, "init", "work")
 	t.Setenv("CADREI_TEST_RUNTIME", "fake")
 	stub := filepath.Join(home, "fake-agent")
-	os.WriteFile(stub, []byte("#!/bin/sh\n{ printf '%s\\n' \"$@\"; env; } > \""+home+"/fake-ran\"\nexec sleep 300\n"), 0o755)
+	writeStub(t, stub, "#!/bin/sh\n{ printf '%s\\n' \"$@\"; env; } > \""+home+"/fake-ran\"\nexec sleep 300\n")
 	t.Setenv("CADREI_FAKE_BIN", stub)
 	t.Cleanup(func() { fake.Off = map[string]bool{} })
 	return home
@@ -34,7 +34,7 @@ func fakeCadrei(t *testing.T) string {
 func TestUpRunsWhatLaunchBuilt(t *testing.T) {
 	home := fakeCadrei(t)
 	out := must(t, "up", "dev/engineer")
-	if !strings.Contains(out, "work-dev-engineer started") {
+	if !strings.Contains(out, "+ Started the engineer") {
 		t.Fatalf("up: %q", out)
 	}
 	var ran string
@@ -64,21 +64,21 @@ func TestUpRefusesAnUnfitRuntime(t *testing.T) {
 		{"Messaging", "has no way to message the orchestrator"},
 	} {
 		fake.Off = map[string]bool{tc.off: true}
-		code, out, _ := call("up", "dev/engineer")
-		if code == 0 || !strings.Contains(out, "work-dev-engineer not started: runtime fake "+tc.want) {
-			t.Errorf("%s off: %d %q", tc.off, code, out)
+		code, _, errOut := call("up", "dev/engineer")
+		if code == 0 || !strings.Contains(flat(errOut), "the engineer didn't start: runtime fake "+tc.want) {
+			t.Errorf("%s off: %d %q", tc.off, code, errOut)
 		}
 	}
 	fake.Off = map[string]bool{}
 	t.Setenv("CADREI_PERMISSION_MODE", "auto")
-	if code, out, _ := call("up", "dev/engineer"); code == 0 || !strings.Contains(out, "runtime fake has no permission mode auto") {
-		t.Errorf("an unknown mode: %d %q", code, out)
+	if code, _, errOut := call("up", "dev/engineer"); code == 0 || !strings.Contains(flat(errOut), "runtime fake has no permission mode auto") {
+		t.Errorf("an unknown mode: %d %q", code, errOut)
 	}
 	// Capabilities can also come from the environment, for the smoke test.
 	t.Setenv("CADREI_PERMISSION_MODE", "")
 	t.Setenv("CADREI_FAKE_OFF", "Messaging")
-	if code, out, _ := call("up", "dev/engineer"); code == 0 || !strings.Contains(out, "has no way to message") {
-		t.Errorf("CADREI_FAKE_OFF: %d %q", code, out)
+	if code, _, errOut := call("up", "dev/engineer"); code == 0 || !strings.Contains(flat(errOut), "has no way to message") {
+		t.Errorf("CADREI_FAKE_OFF: %d %q", code, errOut)
 	}
 }
 
@@ -93,7 +93,7 @@ func TestLsListsWhatKeepsMembersFromStarting(t *testing.T) {
 		t.Errorf("problems with a fit runtime: %v", st.Problems)
 	}
 	fake.Off = map[string]bool{"Messaging": true}
-	if out := must(t, "ls"); !strings.Contains(out, "problem: runtime fake has no way to message the orchestrator") {
+	if out := must(t, "ls"); !strings.Contains(out, "! Runtime fake has no way to message the orchestrator") {
 		t.Errorf("ls with messaging off:\n%s", out)
 	}
 }
@@ -102,8 +102,9 @@ func TestLsListsWhatKeepsMembersFromStarting(t *testing.T) {
 // new one, saying why, when asked or when it cannot resume.
 func TestUpResumesConversations(t *testing.T) {
 	home := fakeCadrei(t)
+	// Up to 20 seconds on a busy machine; most runs take a moment.
 	ran := func() string {
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 400; i++ {
 			if b, _ := os.ReadFile(home + "/fake-ran"); len(b) > 0 {
 				return string(b)
 			}
@@ -117,22 +118,22 @@ func TestUpResumesConversations(t *testing.T) {
 		return must(t, append([]string{"up", "dev/engineer"}, args...)...)
 	}
 	out := must(t, "up", "dev/engineer")
-	if !strings.Contains(out, "(a new conversation)") || !strings.Contains(ran(), "--fake-session\nfake-session\n") {
+	if out != "+ Started the engineer (fresh chat)\n" || !strings.Contains(ran(), "--fake-session\nfake-session\n") {
 		t.Errorf("first start: %q", out)
 	}
 	record := home + "/.cadrei/work/.fake/build/sessions/work-dev-engineer.json"
 	if !strings.Contains(readFile(t, record), `"id":"fake-session"`) {
 		t.Errorf("record %q", readFile(t, record))
 	}
-	if out := restart(); !strings.Contains(out, "(resumed its conversation)") || !strings.Contains(ran(), "--fake-resume\nfake-session\n") {
+	if out := restart(); !strings.Contains(out, "(picked up where it left off)") || !strings.Contains(ran(), "--fake-resume\nfake-session\n") {
 		t.Errorf("second start: %q", out)
 	}
 	t.Setenv("CADREI_FAKE_GONE", "fake-session")
-	if out := restart(); !strings.Contains(out, "(a new conversation: the last one is gone)") {
+	if out := restart(); out != "+ Started the engineer (fresh chat)\n  The last one couldn't be found.\n" {
 		t.Errorf("a lost conversation: %q", out)
 	}
 	t.Setenv("CADREI_FAKE_GONE", "")
-	if out := restart("--fresh"); !strings.Contains(out, "(a new conversation, as asked)") {
+	if out := restart("--fresh"); out != "+ Started the engineer (fresh chat)\n" {
 		t.Errorf("--fresh: %q", out)
 	}
 	call("stop", "dev/engineer", "--fresh")
@@ -140,7 +141,7 @@ func TestUpResumesConversations(t *testing.T) {
 		t.Error("stop --fresh kept the record")
 	}
 	os.Remove(home + "/fake-ran")
-	if out := must(t, "up", "dev/engineer"); !strings.Contains(out, "(a new conversation)") {
+	if out := must(t, "up", "dev/engineer"); out != "+ Started the engineer (fresh chat)\n" {
 		t.Errorf("after stop --fresh: %q", out)
 	}
 }
@@ -151,13 +152,12 @@ func TestTheOrchestratorResumes(t *testing.T) {
 	home := fakeCadrei(t)
 	// It exits at once: with an error when asked to resume, as a runtime
 	// that lost the conversation does.
-	os.WriteFile(home+"/fake-agent", []byte("#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\ncase \"$*\" in *'--fake-resume fake-session'*) exit 1 ;; esac\nexit 0\n"), 0o755)
-	out := must(t)
-	if !strings.Contains(out, "The orchestrator: a new conversation.") {
+	writeStub(t, home+"/fake-agent", "#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\ncase \"$*\" in *'--fake-resume fake-session'*) exit 1 ;; esac\nexit 0\n")
+	// A first chat and a resumed one need no note; a fresh chat says why.
+	if out := must(t); out != "" {
 		t.Errorf("first: %q", out)
 	}
-	out = must(t)
-	if !strings.Contains(out, "The orchestrator: resumed its conversation.") || !strings.Contains(out, "The orchestrator: a new conversation: resuming failed.") {
+	if out := must(t); out != "  Starting a fresh chat. The last one wouldn't reopen.\n" {
 		t.Errorf("second: %q", out)
 	}
 	if runs := readFile(t, home+"/orch-runs"); strings.Count(runs, "--fake-name work-orchestrator") != 3 {
@@ -167,7 +167,7 @@ func TestTheOrchestratorResumes(t *testing.T) {
 	// and then quit at once ends there, with its status: no new
 	// conversation opens.
 	transcripts := home + "/.cadrei/work/.fake-transcripts"
-	os.WriteFile(home+"/fake-agent", []byte("#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\nmkdir -p '"+transcripts+"' && touch '"+transcripts+"/fake-session'\nexit 3\n"), 0o755)
+	writeStub(t, home+"/fake-agent", "#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\nmkdir -p '"+transcripts+"' && touch '"+transcripts+"/fake-session'\nexit 3\n")
 	code, out, _ := call()
 	if code != 3 || strings.Contains(out, "resuming failed") {
 		t.Errorf("a quick quit: %d %q", code, out)
@@ -181,7 +181,7 @@ func TestTheOrchestratorResumes(t *testing.T) {
 // record that names another id is not resumed.
 func TestTheOrchestratorResumesOnlyWhatCadreiIssued(t *testing.T) {
 	home := fakeCadrei(t)
-	os.WriteFile(home+"/fake-agent", []byte("#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\nexit 0\n"), 0o755)
+	writeStub(t, home+"/fake-agent", "#!/bin/sh\necho \"$@\" >> \""+home+"/orch-runs\"\nexit 0\n")
 	must(t)
 	c := home + "/.cadrei/work"
 	record := c + "/.fake/build/sessions/work-orchestrator.json"
@@ -193,15 +193,14 @@ func TestTheOrchestratorResumesOnlyWhatCadreiIssued(t *testing.T) {
 		record = matches[0]
 	}
 	os.WriteFile(record, []byte(`{"id":"planted","dir":"`+c+`"}`), 0o600)
-	out := must(t)
-	if !strings.Contains(out, "The orchestrator: a new conversation: its record is not one cadrei wrote.") {
+	if out := must(t); out != "  Starting a fresh chat. The last one wasn't opened by cadrei.\n" {
 		t.Errorf("planted record: %q", out)
 	}
 	if strings.Contains(readFile(t, home+"/orch-runs"), "--fake-resume planted") {
 		t.Error("the planted conversation was resumed")
 	}
 	// The one cadrei issued is resumed.
-	if out := must(t); !strings.Contains(out, "The orchestrator: resumed its conversation.") {
+	if out := must(t); out != "" || !strings.Contains(readFile(t, home+"/orch-runs"), "--fake-resume") {
 		t.Errorf("issued: %q", out)
 	}
 }

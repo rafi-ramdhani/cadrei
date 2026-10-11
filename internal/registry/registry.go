@@ -1,7 +1,10 @@
 // Package registry reads and edits a cadrei's projects.yaml: a flat list of
 // entries, each a "name:" line followed by indented "key: value" lines.
 // It is not general YAML. Edits change only the lines they must, so the
-// user's comments and blank lines survive (section L.5).
+// user's comments and blank lines survive (section L.5). A value runs to
+// the end of its line, inline # and quotes included. It stays this subset:
+// a real YAML parser would read existing files differently, so one could
+// only come with a crew format bump (cadreis.Format).
 package registry
 
 import (

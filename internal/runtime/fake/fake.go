@@ -9,6 +9,7 @@ package fake
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -29,6 +30,13 @@ type Fake struct{}
 
 func (Fake) Name() string  { return "fake" }
 func (Fake) Title() string { return "the fake runtime" }
+func (Fake) Model() string { return "the fake model" }
+
+func (Fake) ModelHint() string { return "a fake model name" }
+
+func (Fake) SessionVars() []string { return nil }
+
+func (Fake) SetupVars() []string { return nil }
 
 func off(name string) bool {
 	if Off[name] {
@@ -55,6 +63,12 @@ func (Fake) Caps() runtime.Capabilities {
 	return c
 }
 
+func (Fake) Help() runtime.InstallHelp { return runtime.InstallHelp{URL: "https://example.com/fake"} }
+
+func (Fake) Probe() runtime.Probe {
+	return runtime.Probe{Installed: true, Runs: true, Version: "1.0.0", Login: runtime.LoggedIn}
+}
+
 func (Fake) Detect() (runtime.Install, error) {
 	return runtime.Install{Path: os.Getenv("CADREI_FAKE_BIN"), Version: "0.0.0-fake"}, nil
 }
@@ -65,7 +79,8 @@ func (f Fake) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 	in, _ := f.Detect()
 	return runtime.Command{
 		Argv: []string{in.Path, "--fake-name", s.Name, "--fake-mode", s.Mode, "--fake-prompt", s.PromptFile, "--fake-grants", s.Grants,
-			"--fake-session", s.SessionID, "--fake-resume", s.Resume},
+			"--fake-session", s.SessionID, "--fake-resume", s.Resume, "--fake-settings", s.Settings,
+			"--fake-allowed", strings.Join(s.Allowed, "|"), "--fake-first", s.Prompt, "--fake-model", s.Model, "--fake-effort", s.Effort},
 		Env: []string{"CADREI_FAKE_LAUNCHED=" + s.Name},
 		Dir: s.WorkDir,
 	}, nil
@@ -137,11 +152,15 @@ func (i instructions) Link(dir string) error {
 // hooks keep no settings: the fake has no orchestrator hook.
 type hooks struct{}
 
-func (hooks) File() string                      { return filepath.Join(os.Getenv("HOME"), ".fake", "settings.json") }
-func (hooks) Find() ([]string, error)           { return nil, nil }
-func (hooks) Set(string) (bool, error)          { return false, errors.New("the fake runtime has no hooks") }
-func (hooks) Remove(string) (bool, error)       { return false, nil }
-func (hooks) Output(text string) []byte         { return []byte(text + "\n") }
+func (hooks) File() string                  { return filepath.Join(os.Getenv("HOME"), ".fake", "settings.json") }
+func (hooks) Find() ([]string, error)       { return nil, nil }
+func (hooks) Set(string) (bool, error)      { return false, errors.New("the fake runtime has no hooks") }
+func (hooks) Remove(string) (bool, error)   { return false, nil }
+func (hooks) Outdated(string) (bool, error) { return false, nil }
+func (hooks) Output(text string) []byte     { return []byte(text + "\n") }
+func (hooks) SnapshotSettings(dir, binary string) (string, error) {
+	return filepath.Join(dir, "fake-snapshot-settings"), nil
+}
 func (Fake) Permissions() runtime.PermissionOps { return permissions{} }
 func (Fake) Trust() runtime.TrustOps            { return trust{} }
 
@@ -166,4 +185,48 @@ type trust struct{}
 func (trust) Mark(f []runtime.Folder) ([]runtime.TrustResult, string)   { return nil, "" }
 func (trust) Unmark(f []runtime.Folder) ([]runtime.TrustResult, string) { return nil, "" }
 func (trust) Protected() []string                                       { return nil }
+func (trust) Risky(string) []string                                     { return nil }
 func (trust) Loaded(string) []string                                    { return nil }
+
+// StateEvent reads {"event": ..., "session_id": ...}: the fake's hooks.
+func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
+	var in struct {
+		Event   string `json:"event"`
+		Session string `json:"session_id"`
+	}
+	json.NewDecoder(input).Decode(&in)
+	return runtime.StateEvent{Name: in.Event, Session: in.Session}
+}
+
+func (sessions) TranscriptFile(id, dir string) string { return "" }
+
+func (sessions) UnansweredPrompt(string, string) bool { return false }
+
+func (sessions) SafeguardStop(string) (time.Time, bool) { return time.Time{}, false }
+
+// Ready: the fake has no screen, so it's ready once it runs.
+func (sessions) Ready(string) bool { return true }
+
+func (sessions) Waiting(string) bool { return false }
+
+func (sessions) Sent(input io.Reader) (runtime.Sent, bool) {
+	var in struct {
+		To       *string
+		Notify   bool
+		Subagent bool
+	}
+	if json.NewDecoder(input).Decode(&in) != nil || in.To == nil {
+		return runtime.Sent{}, false
+	}
+	return runtime.Sent{To: *in.To, Notify: in.Notify, Subagent: in.Subagent}, true
+}
+
+func (sessions) SentContext(text string) []byte { return []byte(text + "\n") }
+
+func (sessions) ShellCommand(input io.Reader) (string, bool, error) {
+	var in struct{ Command string }
+	if err := json.NewDecoder(input).Decode(&in); err != nil {
+		return "", false, err
+	}
+	return in.Command, true, nil
+}

@@ -5,15 +5,24 @@
 #
 # Before recording:
 # - Use a throwaway HOME or a separate user account. The first run creates
-#   ~/.cadrei and offers the skill link and the hook in ~/.claude, so a
-#   recording must never run against a setup someone uses.
-# - In that HOME: cadrei 0.2.0 on PATH, tmux, git, and Claude Code installed
-#   and logged in (run claude once there and log in). Claude Code asks once
-#   to trust the new cadrei's folder; the tape accepts it on screen.
-# - A small git repository at ~/src/notes-app with an origin remote, for
-#   the request to work on. Its name and the request below can change; keep
-#   the request small so the team finishes within the hidden wait.
-# - Afterwards, cadrei stop --yes in that HOME stops the members.
+#   ~/.cadrei, links cadrei's instructions into ~/.claude and trusts folders
+#   in ~/.claude.json, so a recording must never run against a setup someone
+#   uses. It must not hold ~/.cadrei or ~/.cadrei-archive either, or the
+#   first run offers to plug those back in instead. A development build of
+#   cadrei runs only with HOME in a temporary folder; for a throwaway HOME
+#   elsewhere, set CADREI_DEV_REAL_HOME=1.
+# - In that HOME: cadrei 0.2.1 on PATH, tmux 3.2 or newer, git with a name
+#   and email set, and Claude Code installed and logged in. Run claude once
+#   there and log in: that makes ~/.claude.json, so the first run can trust
+#   the new crew's folder and your orchestrator opens without a trust prompt.
+# - A small git repository at ~/src/notes-app with an origin remote and no
+#   Claude Code settings of its own (no .claude/settings.json,
+#   .claude/settings.local.json or .mcp.json), so Enter adds it as the first
+#   project. Its name can change; keep it small so the review finishes
+#   within the hidden wait.
+# - Run it outside tmux, so your orchestrator opens in cadrei's tmux.
+# - Afterwards, cadrei stop --yes in that HOME stops the team, and
+#   tmux kill-session -t cadrei-main stops your orchestrator.
 # - The Sleep lengths depend on the machine and on Claude Code's speed;
 #   tune them after a first take.
 
@@ -32,66 +41,67 @@ Set Padding 24
 Set TypingSpeed 45ms
 Set Theme "Catppuccin Mocha"
 
+# Always the styled screens (colors and check marks), in the brand's
+# truecolor clay and with the mascot, whatever the recording's terminal
+# tells cadrei about itself.
+Env FORCE_COLOR "1"
+Env COLORTERM "truecolor"
+
 Hide
 Type "cd ~/src/notes-app && export PS1='$ ' && clear"
 Enter
 Show
 
-# The first run: a new cadrei, named demo.
+# The first run: the checks, then the whole plan on one screen.
 Type "cadrei"
 Sleep 600ms
 Enter
-Sleep 1.5s
-Type "new"
-Enter
-Sleep 800ms
-Type "demo"
-Enter
-Sleep 1.2s
+Sleep 3s
 
-# Link this folder to the cadrei (and trust it): yes.
-Type "y"
+# Enter sets it all up: the crew main, notes-app as its first project,
+# cadrei's instructions, and your orchestrator in tmux.
 Enter
-Sleep 1.2s
-# Make every new Claude Code session the orchestrator: no, for the demo.
-Type "n"
-Enter
-Sleep 1s
-# Link the cadrei skill into Claude Code: yes.
-Type "y"
-Enter
+Sleep 2.5s
 
-# The greeting, then the orchestrator opens; trust its folder once.
-Sleep 6s
+# Your orchestrator speaks first: the greeting and three ways to start.
+Sleep 12s
+
+# Pick the read-only review. Only the reviewer runs, and nothing changes.
+Type "1"
+Sleep 600ms
 Enter
+Sleep 15s
+
+# The reply ends with the team line, and its one-time hint under it.
 Sleep 4s
 
-Type "Add a --version flag to notes-app, then have the reviewer check it."
-Sleep 800ms
-Enter
-Sleep 20s
-
-# The team works; skip the wait.
+# The reviewer works; skip the wait.
 Hide
 Sleep 180s
 Show
 
-# What runs, from inside the orchestrator.
-Type "! cadrei ls"
+# The reviewer's top 3, relayed. Then look at the team, from your
+# orchestrator: Ctrl-b then s lists every session.
+Sleep 6s
+Ctrl+B
+Type "s"
+Sleep 3s
+Escape
+Sleep 1s
+
+# Leave tmux (Ctrl-b then d). Everything keeps running.
+Ctrl+B
+Type "d"
+Sleep 2s
+
+# The status screen: who's working, who's idle, and your projects.
+Type "cadrei ls"
 Sleep 500ms
 Enter
 Sleep 5s
 
-# The orchestrator's report, then leave.
-Sleep 6s
-Type "/exit"
+# Back to your orchestrator, right where you left it.
+Type "cadrei"
+Sleep 500ms
 Enter
-Sleep 1.5s
-
-# Watch the team directly, then detach (the tmux prefix, then d).
-Type "cadrei attach dev notes-app"
-Enter
-Sleep 6s
-Ctrl+B
-Type "d"
-Sleep 2s
+Sleep 4s

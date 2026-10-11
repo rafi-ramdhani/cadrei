@@ -3,17 +3,15 @@
 package main
 
 import (
-	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
-	"github.com/rafi-ramdhani/cadrei/internal/backup"
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
-	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
 // runUninstall is cadrei uninstall: it removes what this cadrei made outside
@@ -24,50 +22,38 @@ import (
 // ~/.cadrei/config and ~/.cadrei/framework; and keeps every cadrei and
 // project. The program itself is removed last, by the user.
 func runUninstall(e *env) int {
-	yes, dry := false, false
+	// Flags in another order: --all or --archive after --dry-run, say.
+	switch {
+	case contains(e.args, "--all"):
+		return runUninstallAll(e)
+	case contains(e.args, "--archive"):
+		e.args = without(e.args, "--archive")
+		return runUninstallArchive(e)
+	}
+	yes, dry, keep := false, false, false
 	for _, a := range e.args {
 		switch a {
 		case "--yes", "-y":
 			yes = true
 		case "--dry-run":
 			dry = true
+		case keepFlag:
+			keep = true
 		default:
-			return e.fail("usage: cadrei uninstall [--yes | --dry-run]")
+			return e.failWith("Use " + cmd("cadrei uninstall") + ", with --dry-run or --yes, and " + cmd(keepFlag) + ", if you like.")
 		}
 	}
-	if e.member("uninstall cadrei") {
+	if e.memberAnyway("uninstall cadrei") {
 		return 1
 	}
 	rt, err := runtime.Get(runtimeName())
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	t := session.Default()
-	known := knownCadreis()
 	list, _ := cadreis.List()
 
 	// The plan: only what this cadrei made, and where it still points here.
-	// Sessions started by 0.1.x are not this cadrei's to stop: on a machine
-	// that runs 0.1.x too, they are the user's live sessions.
-	// Nor are sessions without cadrei's markers, which cadrei did not make
-	// in full.
-	var members, orchestrators, legacy, unmarked []string
-	for _, i := range session.All(t, known) {
-		if i.Legacy() {
-			legacy = append(legacy, i.Name)
-			continue
-		}
-		if i.Home == "" {
-			unmarked = append(unmarked, i.Name)
-			continue
-		}
-		members = append(members, i.Name)
-	}
-	for _, i := range t.Sessions() {
-		if i.Role == "orchestrator" {
-			orchestrators = append(orchestrators, i.Name)
-		}
-	}
+	td := planTeardown(rt, list)
 	var terminals []string
 	for _, c := range list {
 		if l := orchestrator.ReadLock(orchestrator.LockPath(rt.BuildDir(c.Path))); l != nil && l.Mode == orchestrator.Terminal {
@@ -75,27 +61,7 @@ func runUninstall(e *env) int {
 		}
 	}
 	skills := rt.Instructions()
-	skillOurs := false
-	if target, err := skills.Target(); err == nil && paths.Real(target) == paths.Real(framework.SkillDir()) {
-		skillOurs = true
-	}
-	bin := framework.Binary()
-	hookOurs, hookOthers := false, false
-	if progs, err := rt.Hooks().Find(); err == nil {
-		for _, p := range progs {
-			if paths.Real(p) == paths.Real(bin) {
-				hookOurs = true
-			} else {
-				hookOthers = true
-			}
-		}
-	}
-	var guarded []cadreis.Cadrei
-	for _, c := range list {
-		if backup.Installed(c.Path) {
-			guarded = append(guarded, c)
-		}
-	}
+	bin := td.bin
 	var folders []string
 	for _, d := range []string{cadreis.ConfigDir(), framework.Dir()} {
 		if _, err := os.Lstat(d); err == nil {
@@ -105,127 +71,180 @@ func runUninstall(e *env) int {
 
 	e.say("cadrei uninstall will:")
 	steps := 0
-	step := func(format string, a ...any) {
+	step := func(text string) {
 		steps++
-		e.say("  "+format, a...)
+		e.note("  ", markBullet, text)
 	}
-	if len(members) > 0 {
-		step("stop %d member sessions: %s", len(members), joinNames(members))
+	if len(td.sessions) > 0 {
+		step("stop your running teams: " + strings.Join(td.teams, ", "))
 	}
-	if len(orchestrators) > 0 {
-		step("stop the orchestrator sessions in tmux, last: %s", joinNames(orchestrators))
+	if len(td.orchestrators) > 0 {
+		step("stop your orchestrator in tmux")
 	}
-	if skillOurs {
-		step("remove the skill link %s", cadreis.Tilde(skills.Path()))
-	}
-	if hookOurs {
-		step("remove the orchestrator hook from %s (other hooks stay)", cadreis.Tilde(rt.Hooks().File()))
-	}
-	for _, c := range guarded {
-		step("remove cadrei's pre-push check from %s", display(c.Path))
-	}
+	td.linkSteps(step)
+	// 0.2.0 notes cadrei couldn't move into their crews stay, so a
+	// reinstall still finds where those crews' projects are.
+	leftovers := cadreis.Leftovers()
 	for _, d := range folders {
 		// A link is removed as a link; the folder it points to stays.
 		if st, err := os.Lstat(d); err == nil && st.Mode()&os.ModeSymlink != 0 {
-			step("remove the link %s (its folder %s is kept)", cadreis.Tilde(d), display(d))
+			step("remove the link " + unbroken(cadreis.Tilde(d)) + " (its folder " + unbroken(display(d)) + " stays)")
 			continue
 		}
-		step("remove %s", display(d))
+		if d == cadreis.ConfigDir() && len(leftovers) > 0 {
+			step("remove " + unbroken(display(d)) + ", except the notes of " + andList(leftovers) + " that aren't in their crews yet")
+			continue
+		}
+		step("remove " + unbroken(display(d)))
+	}
+	// The program goes last, after everything that names it.
+	prog := planProgram(keep)
+	if line := prog.step(); line != "" {
+		step(line)
 	}
 	if steps == 0 {
-		e.say("  nothing: cadrei has nothing set up here")
+		e.show("  ", "Nothing: cadrei has nothing set up here.")
 	}
-	e.say("It keeps:")
+	e.say("")
 	if len(list) > 0 {
 		var names []string
 		for _, c := range list {
 			names = append(names, c.Name)
 		}
-		e.say("  every cadrei (%s, in %s) and every project", joinNames(names), display(cadreis.Root()))
+		e.show("", "It keeps your crews ("+joinNames(names)+", in "+unbroken(display(cadreis.Root()))+") and every project.")
 	} else {
-		e.say("  every project")
+		e.show("", "It keeps every project.")
 	}
-	if _, err := skills.Target(); err == nil && !skillOurs {
-		e.say("  the skill link %s, which points at another cadrei program", cadreis.Tilde(skills.Path()))
+	if _, err := skills.Target(); err == nil && !td.skillOurs {
+		e.show("", "It keeps "+unbroken(cadreis.Tilde(skills.Path()))+", which points at another cadrei program.")
 	}
-	if hookOthers {
-		e.say("  orchestrator hooks that run another cadrei program")
+	if td.hookOthers {
+		e.show("", "It keeps every-chat hooks that run another cadrei program.")
 	}
-	if len(legacy) > 0 {
-		e.say("  sessions started by cadre 0.1.x, left running: %s", joinNames(legacy))
-	}
-	if len(unmarked) > 0 {
-		e.say("  sessions without cadrei's markers, left running: %s", joinNames(unmarked))
-	}
+	td.leftRunning(e)
 	for _, name := range terminals {
-		e.say("  the orchestrator of %s open in a terminal: close it yourself", name)
+		e.note("", markWarn, "The orchestrator of "+name+" is open in a terminal. Close it yourself.")
 	}
-	finish := finalStep(bin)
-	if dry {
-		e.say("Then: %s", finish)
+	if !dry && td.unlistedRefusal() != "" {
+		return td.refuseUnlisted(e)
+	}
+	if dry || steps == 0 {
+		if then := prog.then(bin); then != "" {
+			e.show("", then)
+		}
 		return 0
 	}
-	if steps == 0 {
-		e.say("Then: %s", finish)
-		return 0
-	}
-	if !e.confirm("Uninstall cadrei?", yes) {
+	if !e.confirm("Uninstall cadrei?", "Uninstalling", yes) {
 		return 1
 	}
 
 	code := 0
 	warn := func(what string, err error) {
-		fmt.Fprintf(e.stderr, "cadrei: could not %s: %s\n", what, err)
+		e.warn("", "Couldn't "+what+": "+strings.TrimSuffix(err.Error(), ".")+".")
 		code = 2
 	}
-	st := &session.Stopping{T: t}
-	st.Stop(e.stdout, members)
-	st.Stop(e.stdout, orchestrators)
+	st := td.stop(e, e.stdout, true)
 	if len(st.Failed) > 0 {
-		warn("stop "+joinNames(st.Failed), fmt.Errorf("see tmux"))
+		code = 2
 	}
-	if skillOurs {
-		if _, err := skills.Unlink(framework.SkillDir()); err != nil {
-			warn("remove the skill link", err)
-		} else {
-			e.say("  removed the skill link")
+	if stopped := len(td.sessions) + len(td.orchestrators) - len(st.Failed); stopped > 0 {
+		var what []string
+		if len(td.sessions) > 0 {
+			what = append(what, "your teams")
 		}
-	}
-	if hookOurs {
-		if _, err := rt.Hooks().Remove(bin); err != nil {
-			warn("remove the orchestrator hook", err)
-		} else {
-			e.say("  removed the orchestrator hook")
+		if len(td.orchestrators) > 0 {
+			what = append(what, "your orchestrator")
 		}
+		e.note("", markDone, "Stopped "+strings.Join(what, " and "))
 	}
-	for _, c := range guarded {
-		if _, err := backup.Remove(c.Path); err != nil {
-			warn("remove the pre-push check from "+c.Name, err)
-		}
+	for _, line := range td.unlink(e) {
+		e.warn("", line)
+		code = 2
 	}
+	var removed []string
 	for _, d := range folders {
-		what := display(d)
+		what := unbroken(display(d))
+		// A link goes as a link, before anything else: the folder it points
+		// to is the user's, and nothing in it is touched (the plan says so).
 		if st, err := os.Lstat(d); err == nil && st.Mode()&os.ModeSymlink != 0 {
-			what = "the link " + cadreis.Tilde(d)
+			what = "the link " + unbroken(cadreis.Tilde(d))
+			if err := os.Remove(d); err != nil {
+				warn("remove "+what, err)
+			} else {
+				removed = append(removed, what)
+			}
+			continue
+		}
+		if d == cadreis.ConfigDir() && len(leftovers) > 0 {
+			entries, _ := os.ReadDir(d)
+			for _, en := range entries {
+				if en.Name() != "places" && en.Name() != "state.json" {
+					os.RemoveAll(filepath.Join(d, en.Name()))
+				}
+			}
+			e.note("", markWarn, "Kept the notes of "+andList(leftovers)+" in "+what+": cadrei couldn't move them into their crews.")
+			continue
 		}
 		if err := os.RemoveAll(d); err != nil {
 			warn("remove "+what, err)
 		} else {
-			e.say("  removed %s", what)
+			removed = append(removed, what)
 		}
 	}
-	e.say("Uninstalled. Your cadreis and projects are kept. To finish: %s", finish)
+	if len(removed) > 0 {
+		e.note("", markDone, "Removed "+andList(removed))
+	}
+	e.note("", markDone, "Uninstalled. Your crews and projects are still here.")
+	e.show("  ", "Your crews in "+unbroken(cadreis.Tilde(paths.Real(cadreis.Root())))+" are your setup, so keep them. Reinstall and run "+cmd("cadrei")+" to plug them back in.")
+	// A cleanup that partly failed keeps the program, so the same command
+	// can run again to finish, and remove it last.
+	if code != 0 && prog.remove {
+		e.note("", markWarn, "The cadrei program stays, since not all of cadrei could be removed. Fix what's above, then run the same command again: it removes the program last.")
+	} else if _, c := e.finishProgram(prog, bin); c != 0 {
+		code = c
+	}
 	st.Last(e.stdout)
 	return code
 }
 
+// leftRunning says which sessions a teardown leaves running.
+func (td teardown) leftRunning(e *env) {
+	if r := td.unlistedRefusal(); r != "" {
+		e.note("", markWarn, r+" So this stops before it changes anything.")
+	}
+	if len(td.legacy) > 0 {
+		e.show("", "It leaves cadre 0.1.x's teams running: "+joinNames(td.legacy)+".")
+	}
+	if len(td.unmarked) > 0 {
+		e.show("", "It leaves tmux sessions cadrei didn't start running: "+joinNames(td.unmarked)+".")
+	}
+	if len(td.others) > 0 {
+		e.show("", "It leaves another setup's teams running: "+strings.Join(td.others, ", ")+".")
+	}
+}
+
 // finalStep is how the user removes the program itself, by install kind.
 func finalStep(bin string) string {
-	switch framework.Kind(version) {
-	case "homebrew":
-		return "brew uninstall cadrei"
-	case "dev":
+	if installKind() == "dev" {
 		return "delete the cadrei you built (" + display(bin) + ")"
+	}
+	return finalCommand(bin)
+}
+
+// finishText is finalStep marked for output: a command kept whole, or the
+// built program's path kept whole.
+func finishText(bin string) string {
+	if installKind() == "dev" {
+		return "delete the cadrei you built (" + unbroken(display(bin)) + ")"
+	}
+	return cmd(finalCommand(bin))
+}
+
+// finalCommand is the command that removes the installed program.
+func finalCommand(bin string) string {
+	switch installKind() {
+	case "homebrew":
+		return brewRemove
 	}
 	return "rm " + display(bin)
 }

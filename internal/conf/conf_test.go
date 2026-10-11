@@ -40,3 +40,20 @@ func TestTheTemplateReadsAsBefore(t *testing.T) {
 		t.Errorf("%v %q", values, warnings)
 	}
 }
+
+// Audit qual-bugs-6: Set changes what Parse reads, even when the key is
+// set twice (a hand edit, a merge): the first line takes the value and the
+// later ones go.
+func TestSetWinsOverADuplicate(t *testing.T) {
+	data := "# mine\nORCHESTRATOR=tmux\nMODEL=sonnet\nORCHESTRATOR=tmux\n"
+	got := Set(data, "ORCHESTRATOR", "terminal")
+	if got != "# mine\nORCHESTRATOR=terminal\nMODEL=sonnet\n" {
+		t.Errorf("set: %q", got)
+	}
+	if v, _ := Parse(got); v["ORCHESTRATOR"] != "terminal" || v["MODEL"] != "sonnet" {
+		t.Errorf("parse: %v", v)
+	}
+	if got := Set("A=1", "B", "2"); got != "A=1\nB=2\n" {
+		t.Errorf("added: %q", got)
+	}
+}

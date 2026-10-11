@@ -98,6 +98,13 @@ func TestExport(t *testing.T) {
 			t.Errorf("the copy lacks the N.7 entry %s", d)
 		}
 	}
+	// Review of fix round 6 (must-fix 3): no member moves, deletes or
+	// brings back every crew.
+	for _, d := range []string{"Bash(cadrei uninstall:*)", "Bash(cadrei restore:*)"} {
+		if !contains(deny, d) {
+			t.Errorf("the copy lacks %s", d)
+		}
+	}
 	if soft, _ := texts(root.Get("autoMode").Get("soft_deny")); !contains(soft, CadreiSoft) || !contains(soft, FixedSoft) {
 		t.Errorf("the copy's soft_deny: %q", soft)
 	}
@@ -229,6 +236,50 @@ func TestChangedOutside(t *testing.T) {
 	}
 }
 
+// T-E3: with no record here and nothing committed (no commits yet, or a
+// file never committed), the file is taken as it is, as on first use; a
+// later edit is still caught. A detached HEAD still holds the commit.
+func TestFirstUseWithoutACommit(t *testing.T) {
+	for _, setup := range []string{"no commits", "never committed", "detached"} {
+		cadrei := t.TempDir()
+		git(t, cadrei, "init", "-q", "-b", "main")
+		p := filepath.Join(cadrei, Rel)
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		switch setup {
+		case "never committed":
+			os.WriteFile(filepath.Join(cadrei, "a"), []byte("a"), 0o644)
+			git(t, cadrei, "add", "a")
+			git(t, cadrei, "commit", "-qm", "a")
+			Create(p)
+		case "detached":
+			Create(p)
+			git(t, cadrei, "add", "-A")
+			git(t, cadrei, "commit", "-qm", "Add the member settings file")
+			os.WriteFile(filepath.Join(cadrei, "b"), []byte("b"), 0o644)
+			git(t, cadrei, "add", "b")
+			git(t, cadrei, "commit", "-qm", "b")
+			git(t, cadrei, "checkout", "-q", "HEAD~1")
+		default:
+			Create(p)
+		}
+		hashes := filepath.Join(t.TempDir(), "h")
+		if got, want := FirstUse(cadrei, p, hashes), setup != "detached"; got != want {
+			t.Errorf("%s: FirstUse %v", setup, got)
+		}
+		if ChangedOutside(cadrei, p, hashes) {
+			t.Errorf("%s: taken for a change outside cadrei allow", setup)
+		}
+		if FirstUse(cadrei, p, hashes) {
+			t.Errorf("%s: not recorded", setup)
+		}
+		g, _ := OpenGrants(p)
+		g.Add(Rule, "Bash(curl *)", false, time.Now())
+		if !ChangedOutside(cadrei, p, hashes) {
+			t.Errorf("%s: a later hand edit was accepted", setup)
+		}
+	}
+}
+
 func TestGrants(t *testing.T) {
 	p := newFile(t)
 	g, _ := OpenGrants(p)
@@ -297,5 +348,26 @@ func TestGrants(t *testing.T) {
 	}
 	if raw, _ := os.ReadFile(OncePath(p)); len(raw) != 0 {
 		t.Errorf("stale record kept: %q", raw)
+	}
+}
+
+// Review 10: the physical archive path comes from the archive folder
+// itself, which a linked ~/.cadrei doesn't give.
+func TestTheArchiveDenyUsesItsOwnPath(t *testing.T) {
+	got := strings.Join(Places{Root: "/disk/cadrei", Archive: "/Users/u/.cadrei-archive"}.deny(), "\n")
+	if !strings.Contains(got, "Read(//Users/u/.cadrei-archive/**)") || strings.Contains(got, "/disk/.cadrei-archive") {
+		t.Errorf("deny:\n%s", got)
+	}
+}
+
+// Forward-compatibility audit S11: the entries a tracked grants file must
+// hold are frozen, word for word, since every cadrei version checks a crew
+// written by any other against them.
+func TestTheRequiredEntriesAreFrozen(t *testing.T) {
+	if strings.Join(Protect, "|") != "Edit(//**/.claude/member-settings.json)|Bash(cadrei allow:*)" {
+		t.Errorf("Protect changed: %q", Protect)
+	}
+	if FixedSoft != "Changing member permissions (editing a cadrei's .claude/member-settings.json or running cadrei allow) is only done by the user through the orchestrator" {
+		t.Errorf("FixedSoft changed: %q", FixedSoft)
 	}
 }

@@ -18,6 +18,20 @@ type Record struct {
 	ID    string    `json:"id"`
 	Dir   string    `json:"dir"`
 	Since time.Time `json:"since"`
+	// The model and effort the start passed (7.11), and where each was
+	// set, or empty when it passed none.
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	ModelFrom  string `json:"model_from,omitempty"`
+	EffortFrom string `json:"effort_from,omitempty"`
+}
+
+// Choice is the model and effort a record's start passed.
+func (r *Record) Choice() Choice {
+	if r == nil {
+		return Choice{}
+	}
+	return Choice{Model: Setting{r.Model, r.ModelFrom}, Effort: Setting{r.Effort, r.EffortFrom}}
 }
 
 // nameRule is a session name as cadrei makes them; anything else names no

@@ -1,0 +1,7 @@
+work  ~/.cadrei/work
+
+Orchestrator  not running · open it with cadrei
+Teams
+  Nothing running. Ask your orchestrator to start a team.
+Projects
+  None yet. Ask your orchestrator to add one.

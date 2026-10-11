@@ -1,6 +1,7 @@
 package cadreis
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -8,7 +9,9 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
+	"github.com/rafi-ramdhani/cadrei/internal/gitx"
 	"github.com/rafi-ramdhani/cadrei/internal/registry"
 )
 
@@ -96,7 +99,7 @@ func TestCreateWithoutAGitIdentity(t *testing.T) {
 	if err != nil || !c.Present() {
 		t.Fatal(err)
 	}
-	if !strings.Contains(note, "no user identity") {
+	if !strings.Contains(note, "Git has no name or email set") || strings.Contains(note, c.Path) {
 		t.Errorf("no note without a git identity: %q", note)
 	}
 }
@@ -195,7 +198,7 @@ func TestResolve(t *testing.T) {
 	}
 	// One project, two cadreis: refused without a terminal, asked with one.
 	_, err := Resolve(dev+"/shared", nil)
-	if err == nil || err.Error() != "shared is linked by life and work; run from ~/.cadrei/<name>, or set CADREI_HOME" {
+	if err == nil || err.Error() != "shared is in more than one crew (life and work). Run this from the crew's folder, ~/.cadrei/<name>" {
 		t.Errorf("two cadreis without a terminal: %v", err)
 	}
 	r, err := Resolve(dev+"/shared", func(project string, names []string) (string, error) { return "work", nil })
@@ -337,12 +340,41 @@ func TestABrokenPlacesFileIsKept(t *testing.T) {
 			t.Errorf("%s was replaced with %s", bad, raw)
 		}
 	}
-	os.WriteFile(PlacesFile(w), []byte(`{"x": 1, "a": "/elsewhere/a"}`), 0o600)
+	os.WriteFile(PlacesFile(w), []byte(`{"x": 1, "places": {"a": "/elsewhere/a"}}`), 0o600)
 	if err := SetPlace(w, "b", "/elsewhere/b"); err != nil {
 		t.Fatal(err)
 	}
 	if raw, _ := os.ReadFile(PlacesFile(w)); !strings.Contains(string(raw), `"x": 1`) || Place(w, "a") != "/elsewhere/a" || Place(w, "b") != "/elsewhere/b" {
 		t.Errorf("places file:\n%s", raw)
+	}
+}
+
+// Commit runs none of the crew's hooks or its fsmonitor (review of fix
+// round 5, N1).
+func TestCommitRunsNothingOfTheCrews(t *testing.T) {
+	dir, ran := t.TempDir(), t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	git("config", "user.name", "T")
+	git("config", "user.email", "t@example.com")
+	git("config", "core.fsmonitor", "touch "+ran+"/fsmonitor; false")
+	for _, h := range []string{"pre-commit", "commit-msg", "post-commit", "post-index-change"} {
+		os.WriteFile(dir+"/.git/hooks/"+h, []byte("#!/bin/sh\ntouch "+ran+"/"+h+"\n"), 0o755)
+	}
+	os.WriteFile(dir+"/notes.md", []byte("x\n"), 0o644)
+	if note, err := Commit(dir, "notes", "notes.md"); note != "" || err != nil {
+		t.Fatalf("commit: %q %v", note, err)
+	}
+	if out, _ := exec.Command("git", "-C", dir, "-c", "core.fsmonitor=false", "log", "--format=%s").Output(); string(out) != "notes\n" {
+		t.Errorf("log %q", out)
+	}
+	if left, _ := os.ReadDir(ran); len(left) > 0 {
+		t.Errorf("ran: %v", left)
 	}
 }
 
@@ -370,5 +402,101 @@ func TestCommittedLinks(t *testing.T) {
 	got, err := CommittedLinks(dir, "rt")
 	if err != nil || strings.Join(got, " ") != "protocol.md rt/build teams/dev" {
 		t.Errorf("links %q %v", got, err)
+	}
+}
+
+// Review of fix round 6 (must-fix 5): a crew with no repo of its own, or a
+// .git git won't take, isn't committed through a repo above it, such as a
+// ~/.cadrei/.git a restore brought back.
+func TestCommitStaysInTheCrewsOwnRepo(t *testing.T) {
+	for _, layout := range []string{"no .git", "an empty .git"} {
+		above := t.TempDir()
+		git := func(args ...string) string {
+			t.Helper()
+			out, _ := exec.Command("git", append([]string{"-C", above, "-c", "core.fsmonitor=false"}, args...)...).CombinedOutput()
+			return string(out)
+		}
+		git("init", "-q")
+		git("config", "user.name", "T")
+		git("config", "user.email", "t@example.com")
+		crew := filepath.Join(above, "work")
+		os.MkdirAll(crew, 0o755)
+		if layout == "an empty .git" {
+			os.Mkdir(filepath.Join(crew, ".git"), 0o755)
+		}
+		os.WriteFile(filepath.Join(crew, "notes.md"), []byte("x\n"), 0o644)
+		if note, err := Commit(crew, "notes", "notes.md"); note != "" || err != nil {
+			t.Errorf("%s: commit: %q %v", layout, note, err)
+		}
+		if log := git("log", "--format=%s"); strings.Contains(log, "notes") {
+			t.Errorf("%s: committed in the repo above: %q", layout, log)
+		}
+		if staged := git("diff", "--cached", "--name-only"); staged != "" {
+			t.Errorf("%s: added to the repo above: %q", layout, staged)
+		}
+		if out, err := gitx.Reading(crew, "rev-parse", "--git-dir").CombinedOutput(); err == nil {
+			t.Errorf("%s: git found a repo for the crew: %s", layout, out)
+		}
+	}
+}
+
+// Forward-compatibility audit M3: a crew's .claude/local file a newer
+// cadrei wrote is still read, but never written over, so its version
+// is never lowered either; a version 1 file stays version 1.
+func TestANewerLocalFileIsntWrittenOver(t *testing.T) {
+	fakeHome(t, true)
+	c, _, err := Create("work", tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(LocalDir(c.Path), 0o700)
+	newer := `{"places":{"app":"/src/app"},"version":2,"hint":{"remote":"x"}}` + "\n"
+	os.WriteFile(PlacesFile(c), []byte(newer), 0o600)
+	if err := SetPlace(c, "lib", "/src/lib"); err == nil || !strings.Contains(err.Error(), "was written by a newer cadrei. Upgrade cadrei; nothing was changed") {
+		t.Errorf("SetPlace over version 2: %v", err)
+	}
+	if raw, _ := os.ReadFile(PlacesFile(c)); string(raw) != newer {
+		t.Errorf("the newer file changed: %s", raw)
+	}
+	if Places(c)["app"] != "/src/app" {
+		t.Error("a newer file's places can't be read")
+	}
+	os.WriteFile(PlacesFile(c), []byte(`{"places":{},"version":1}`), 0o600)
+	if err := SetPlace(c, "lib", "/src/lib"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(PlacesFile(c)); !strings.Contains(string(raw), `"version": 1`) {
+		t.Errorf("version 1: %s", raw)
+	}
+}
+
+// Forward-compatibility audit M3: an archive a newer cadrei made isn't
+// read for a restore, and counts among the unreadable ones.
+func TestANewerArchiveIsRefused(t *testing.T) {
+	fakeHome(t, true)
+	a, err := NewArchive(Manifest{Version: ManifestVersion + 1, ArchivedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadArchive(a.Dir); err == nil || !strings.Contains(err.Error(), "was made by a newer cadrei (archive version 2). Upgrade cadrei to restore it") {
+		t.Errorf("ReadArchive: %v", err)
+	}
+	if len(Archives()) != 0 || len(Unreadable()) != 1 {
+		t.Errorf("archives %v, unreadable %v", Archives(), Unreadable())
+	}
+}
+
+// Review of fix round 8 (W1): a file a newer cadrei wrote after this one
+// read it isn't written over either: writeLocal checks the file on disk,
+// not only what was read.
+func TestWriteLocalChecksTheFileOnDisk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	read := map[string]json.RawMessage{"version": json.RawMessage("1")}
+	os.WriteFile(path, []byte(`{"version":2,"x":"newer"}`), 0o600)
+	if err := writeLocal(path, read); err == nil || !strings.Contains(err.Error(), "was written by a newer cadrei") {
+		t.Errorf("writeLocal over version 2 on disk: %v", err)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != `{"version":2,"x":"newer"}` {
+		t.Errorf("the file changed: %s", raw)
 	}
 }

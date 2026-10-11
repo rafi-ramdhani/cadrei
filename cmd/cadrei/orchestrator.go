@@ -4,7 +4,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -24,24 +23,30 @@ import (
 	"golang.org/x/term"
 )
 
-// runPlain is plain cadrei: open this cadrei's orchestrator in this
-// terminal, or in tmux with --tmux.
+// runPlain is plain cadrei: open this cadrei's orchestrator where this
+// machine's setting says (tmux or this terminal), or where a flag says for
+// this run.
 func runPlain(e *env) int {
-	useTmux, detach, fresh := false, false, false
+	tmuxFlag, noTmux, detach, fresh := false, false, false, false
 	for _, a := range e.args {
 		switch a {
 		case "--tmux":
-			useTmux = true
+			tmuxFlag = true
+		case "--no-tmux":
+			noTmux = true
 		case "--detach":
 			detach = true
 		case "--fresh":
 			fresh = true
 		default:
-			return e.fail("usage: cadrei [--tmux [--detach]] [--fresh]")
+			return e.failWith("There's no option "+a+" for cadrei.", "Its options are --tmux, --no-tmux, --detach and --fresh.")
 		}
 	}
-	if detach && !useTmux {
-		return e.fail("--detach goes with --tmux")
+	switch {
+	case tmuxFlag && noTmux:
+		return e.failWith("Pick one: --tmux or --no-tmux.")
+	case noTmux && detach:
+		return e.failWith("--detach only works with tmux.", "Drop --no-tmux, or drop --detach.")
 	}
 	if e.member("start the orchestrator") {
 		return 1
@@ -51,7 +56,7 @@ func runPlain(e *env) int {
 		return e.fail("%s", err)
 	}
 	first := false
-	if list, _ := cadreis.List(); len(list) == 0 {
+	if list, _ := cadreis.List(); len(list) == 0 || !cadreis.DefaultSet() {
 		if !e.firstRun(rt) {
 			return 1
 		}
@@ -61,14 +66,23 @@ func runPlain(e *env) int {
 	if !ok {
 		return 1
 	}
+	for _, name := range e.moved {
+		e.note("  ", markDone, name+" now keeps track of where its projects are on this machine.")
+	}
 	if !first {
 		e.openingNotes(r)
 	}
-	if _, fatal := e.health(rt, first); fatal {
+	// After a first run, its screen has already checked the tools: the
+	// quick check runs, without what the screen said (D3, 3.6).
+	if first {
+		e.shown = true
+		cadreis.SetState(cadreis.CheckedVersion, version)
+	}
+	if _, fatal := e.health(rt, false); fatal {
 		return 1
 	}
 	if e.eof {
-		return e.fail("input ended before the orchestrator opened; run cadrei again to open it")
+		return e.failWith("The input ended before your orchestrator opened.", "Run "+cmd("cadrei")+" again to open it.")
 	}
 	if err := runtime.CanOrchestrate(rt); err != nil {
 		return e.fail("%s", err)
@@ -77,13 +91,24 @@ func runPlain(e *env) int {
 	if err := runtime.Usable(rt, mode); err != nil {
 		return e.fail("%s", err)
 	}
-	if first {
-		e.say("%s", greeting)
-		if old := cadreis.OldHome(); old != "" {
-			e.say("You have a cadre from 0.1.x at %s. To bring it in, tell the orchestrator: bring in my old cadre from %s.", display(old), display(old))
-		}
-	} else {
-		e.missingProjects(r)
+	t := session.Default()
+	// Flags win over the setting for one run; --detach means tmux.
+	where, _ := cadreis.OpensIn(r.Cadrei)
+	useTmux := where == cadreis.OpensInTmux
+	switch {
+	case tmuxFlag || detach:
+		useTmux = true
+	case noTmux:
+		useTmux = false
+	}
+	if useTmux && !haveTmux() {
+		e.note("  ", markWarn, "tmux isn't installed, so your orchestrator opens here this time.")
+		useTmux = false
+	}
+	if useTmux && !detach && t.InTmux() == session.OtherServer {
+		// Switching there would move another terminal's client.
+		e.note("  ", markWarn, "You're in tmux on another server, so your orchestrator opens right here this time.")
+		useTmux = false
 	}
 	if useTmux && !e.tmuxReady() {
 		return 1
@@ -105,57 +130,90 @@ func runPlain(e *env) int {
 		}
 	}
 	defer release()
-	t := session.Default()
 	lockPath := orchestrator.LockPath(build)
 	orchestrator.ClearStale(lockPath)
 	if l := openOrchestrator(t, r.Name, r.Path, lockPath, true); l != nil {
 		if l.Mode == orchestrator.Tmux {
 			release()
-			e.say("the orchestrator of %s is already running", r.Name)
+			if !useTmux {
+				e.show("  ", "Your orchestrator is running in tmux. Opening it there.")
+			}
 			return e.attachTo(l.Session, detach)
 		}
-		where := "since " + l.Since.Format("15:04")
-		if l.TTY != "" {
-			where = l.TTY + ", " + where
-		}
-		return e.fail("the orchestrator of %s is already open in another terminal (%s); use that one, or close it first", r.Name, where)
+		return e.failWith("Your orchestrator is already open in another terminal (open since "+l.Since.Format("15:04")+").", "Switch to that one, or close it first.")
 	}
 	// One in tmux that cadrei could not record in the lock still counts.
-	if name := orchestrator.SessionName(r.Name); !useTmux && haveTmux() && orchestratorSession(t, name, r.Path, 0) {
+	if name := orchestrator.SessionName(r.Name); haveTmux() && orchestratorSession(t, name, r.Path, 0) {
 		release()
-		e.say("the orchestrator of %s is already running", r.Name)
+		if !useTmux {
+			e.show("  ", "Your orchestrator is running in tmux. Opening it there.")
+		}
 		return e.attachTo(name, detach)
 	}
 	text, _ := cadrei.Assets.ReadFile("orchestrator.md")
-	from := ""
-	if r.Project != "" {
-		from, _ = projectDir(r, r.Project)
-	}
 	prompt := filepath.Join(build, "orchestrator.md")
-	if err := fsx.WriteFile(prompt, orchestrator.Prompt(text, r.Name, r.Path, r.Project, from), 0o644); err != nil {
+	in := orchestrator.Terminal
+	switch {
+	case useTmux && t.InTmux() == session.SameServer:
+		in = "tmux-inside"
+	case useTmux:
+		in = orchestrator.Tmux
+	}
+	wd, _ := paths.Getwd()
+	settings := e.snapshotSettings(rt, build)
+	body := orchestrator.Prompt(text, r.Name, display(r.Path))
+	if settings == "" {
+		// No hook may name this binary: the snapshot goes into the
+		// prompt, fresh at startup only.
+		body = append(body, "\n"+snapshotOf(rt, r, opening{in: in, from: wd, proj: r.Project}, time.Now())...)
+	}
+	if err := fsx.WriteFile(prompt, body, 0o644); err != nil {
 		return e.fail("%s", err)
 	}
+	// The orchestrator takes only its own model and effort keys, never the
+	// members' MODEL and EFFORT (7.11.5).
+	machine, shared := crewLayers(r.Path, true)
+	for _, c := range []session.Choice{machine, shared} {
+		if err := (choiceCheck{who: "The orchestrator's", crew: r.Path, orchestrator: true}).check(rt, c); err != nil {
+			return e.failErr(err)
+		}
+	}
+	own := machine.Over(shared)
 	// The orchestrator resumes its last conversation, as members do.
 	record := session.RecordPath(build, orchestrator.Name(r.Name))
 	launch := func(conv session.Conversation) (runtime.Command, error) {
-		if conv.Note != "" {
-			e.say("The orchestrator: %s.", conv.Note)
+		if note := freshNote(conv.Note); note != "" {
+			e.show("  ", note)
 		}
 		if conv.SessionID != "" {
 			session.WriteRecord(record, session.Record{ID: conv.SessionID, Dir: r.Path, Since: time.Now()})
-			cadreis.SetState(cadreis.OrchestratorID(r.Name), conv.SessionID)
+			cadreis.SetOrchestratorID(r.Cadrei, conv.SessionID)
+		}
+		// Every open gets the seed, so the orchestrator greets the user,
+		// except on top of a seed it hasn't answered yet.
+		first := seed
+		if conv.Resume != "" {
+			ops := rt.Sessions()
+			if ops.UnansweredPrompt(ops.TranscriptFile(conv.Resume, r.Path), seed) {
+				first = ""
+			}
 		}
 		cmd, err := rt.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: orchestrator.Name(r.Name), Cadrei: r.Path,
-			WorkDir: r.Path, Mode: mode, PromptFile: prompt, SessionID: conv.SessionID, Resume: conv.Resume})
+			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: readOnly, Prompt: first,
+			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value})
 		// Pinned to this cadrei, and marked as the orchestrator, so the
-		// hook adds nothing more (K.3).
-		cmd.Env = append(cmd.Env, "CADREI_HOME="+r.Path, "CADREI_ORCHESTRATOR=1")
+		// hook adds nothing more (K.3). What only this launch knows goes
+		// to the snapshot hook.
+		cmd.Env = append(cmd.Env, "CADREI_HOME="+r.Path, "CADREI_ORCHESTRATOR=1", envOpensIn+"="+in, envOpenedFrom+"="+wd)
+		if r.Project != "" {
+			cmd.Env = append(cmd.Env, envOpenedProject+"="+r.Project)
+		}
 		return cmd, err
 	}
 	conv := session.Plan(rt, record, r.Path, fresh)
 	// Only a conversation cadrei itself started for this orchestrator is
 	// resumed: a record written by anything else is not.
-	if conv.Resume != "" && conv.Resume != cadreis.GetState(cadreis.OrchestratorID(r.Name)) {
+	if conv.Resume != "" && conv.Resume != cadreis.OrchestratorID(r.Cadrei) {
 		conv = session.Conversation{SessionID: rt.Sessions().NewID(), Note: "a new conversation: its record is not one cadrei wrote"}
 	}
 	cmd, err := launch(conv)
@@ -166,11 +224,43 @@ func runPlain(e *env) int {
 	var renew func() (runtime.Command, error)
 	if conv.Resume != "" {
 		renew = func() (runtime.Command, error) {
-			return launch(session.Conversation{SessionID: rt.Sessions().NewID(), Note: "a new conversation: resuming failed"})
+			conv = session.Conversation{SessionID: rt.Sessions().NewID(), Note: "a new conversation: resuming failed"}
+			return launch(conv)
 		}
 	}
 	if useTmux {
-		return e.startTmux(r, cmd, lockPath, detach, release, renew)
+		// It got going once it writes to its conversation (the seed prompt
+		// keeps the footer busy), or shows its prompt.
+		id := func() string { return conv.SessionID + conv.Resume }
+		mod0, size0, _ := rt.Sessions().Transcript(id(), r.Path)
+		// A login, trust or first-run screen (no footer, nothing written
+		// yet) is going too: it waits for the user. Only screens the
+		// runtime knows count; any other is watched for the whole wait, so
+		// a command that prints a line and ends isn't taken for one.
+		// A screen that waits counts once it has held for waitHeld, with
+		// the pane alive at each look (StartCheck looks first): a command
+		// that prints such a line and ends isn't taken for one.
+		name := orchestrator.SessionName(r.Name)
+		var waiting time.Time
+		ready := func() bool {
+			ops := rt.Sessions()
+			if mod, size, ok := ops.Transcript(id(), r.Path); ok && (!mod.Equal(mod0) || size != size0) {
+				return true
+			}
+			screen := t.Screen(name, "orchestrator")
+			if ops.Ready(screen) {
+				return true
+			}
+			if !ops.Waiting(screen) {
+				waiting = time.Time{}
+				return false
+			}
+			if waiting.IsZero() {
+				waiting = time.Now()
+			}
+			return time.Since(waiting) >= waitHeld
+		}
+		return e.startTmux(r, cmd, lockPath, detach, release, renew, ready)
 	}
 	start := time.Now()
 	var mod0 time.Time
@@ -192,7 +282,7 @@ func runPlain(e *env) int {
 		orchestrator.ClearStale(lockPath)
 		if l := openOrchestrator(t, r.Name, r.Path, lockPath, true); l != nil {
 			g.Release()
-			return e.fail("the orchestrator of %s was opened elsewhere meanwhile; use that one", r.Name)
+			return e.failWith("Your orchestrator was just opened somewhere else. Use that one.")
 		}
 		if cmd, err = renew(); err != nil {
 			g.Release()
@@ -242,24 +332,50 @@ func openOrchestrator(t session.Tmux, cadrei, home, lockPath string, clear bool)
 	return l
 }
 
-// openingNotes says, in one line each, which cadrei opens and why, before
-// Claude Code takes the terminal.
+// openingNotes says, in a line, what is worth saying before Claude Code or
+// tmux takes the terminal: which cadrei opens when there are several, and
+// a cadre from 0.1.x in this folder. A git repository that is no project
+// is for the orchestrator to offer.
 func (e *env) openingNotes(r *cadreis.Resolved) {
 	if r.From != "default" {
 		return
 	}
-	e.say("Opening your default cadrei %s (%s). To open another, run cadrei in one of its projects.", r.Name, display(r.Path))
-	wd, err := paths.Getwd()
-	if err != nil {
-		return
+	if list, _ := cadreis.List(); len(list) > 1 {
+		e.show("  ", "Opening "+r.Name+", your default crew. To open another, run "+cmd("cadrei")+" in one of its projects.")
 	}
-	if look := lookalike(wd); look != "" {
-		e.say("%s looks like a cadre from 0.1.x. To bring it in, tell the orchestrator: bring in my old cadre from %s.", look, look)
-		return
+	if wd, err := paths.Getwd(); err == nil {
+		if look := lookalike(wd); look != "" {
+			e.show("  ", "This folder looks like a cadre from 0.1.x. To bring it in, tell your orchestrator: bring in my old cadre from "+unbroken(display(look)))
+		}
 	}
-	if top, err := exec.Command("git", "-C", wd, "rev-parse", "--show-toplevel").Output(); err == nil && len(top) > 0 {
-		e.say("This folder is not linked to a cadrei; ask the orchestrator to link it.")
+}
+
+// freshNote is what to say when the orchestrator doesn't pick up its last
+// chat, or "".
+func freshNote(note string) string {
+	if note == "a new conversation, as asked" {
+		return "Starting a fresh chat."
 	}
+	if why := freshWhy(note); why != "" {
+		return "Starting a fresh chat. " + why
+	}
+	return ""
+}
+
+// freshWhy says why a chat starts fresh when it could have picked up the
+// last one, or "".
+func freshWhy(note string) string {
+	switch note {
+	case "a new conversation: the last one is gone":
+		return "The last one couldn't be found."
+	case "a new conversation: resuming failed":
+		return "The last one wouldn't reopen."
+	case "a new conversation: its record is not one cadrei wrote":
+		return "The last one wasn't opened by cadrei."
+	case "a new conversation: it works in another folder now":
+		return "It works in another folder now."
+	}
+	return ""
 }
 
 // lookalike returns the folder at or above dir that looks like a 0.1.x
@@ -281,7 +397,7 @@ func lookalike(dir string) string {
 func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) int {
 	cmd := exec.Command(c.Argv[0], c.Argv[1:]...)
 	cmd.Dir = c.Dir
-	cmd.Env = append(withoutMember(os.Environ()), c.Env...)
+	cmd.Env = append(unsetIn(withoutMember(os.Environ()), c.Unset), c.Env...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = e.stdin, e.stdout, e.stderr
 	// The terminal comes back as it was, even if the child dies raw.
 	if f, ok := e.stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
@@ -303,7 +419,7 @@ func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) in
 		close(quiet)
 	}()
 	if err := cmd.Start(); err != nil {
-		return e.fail("could not start the orchestrator: %s", err)
+		return e.failWith("Your orchestrator didn't start: " + strings.TrimSuffix(err.Error(), ".") + ".")
 	}
 	tty := terminalName()
 	lock, lockErr := orchestrator.WriteLock(lockPath, cmd.Process.Pid, orchestrator.Terminal, tty, "")
@@ -331,7 +447,7 @@ func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) in
 	// Said once the orchestrator is gone: while it runs, the terminal is
 	// its own, and its output is still being copied.
 	if lockErr != nil {
-		fmt.Fprintf(e.stderr, "warning: could not record the open orchestrator: %s\n", lockErr)
+		e.warn("", "Couldn't note that your orchestrator was open: "+strings.TrimSuffix(lockErr.Error(), ".")+".")
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
@@ -341,6 +457,22 @@ func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) in
 		return e.fail("%s", err)
 	}
 	return 0
+}
+
+// waitHeld is how long a screen that waits on the user must hold before
+// the orchestrator counts as started.
+const waitHeld = time.Second
+
+// waitForTests, when set, is how long a start check may wait: a test on a
+// busy machine waits long, and ends early as a real start does.
+var waitForTests time.Duration
+
+// startWait is how long a start check may wait.
+func startWait() time.Duration {
+	if waitForTests > 0 {
+		return waitForTests
+	}
+	return upWait()
 }
 
 // withoutMember drops CADREI_MEMBER (and 0.1.x's CADRE_PERSONA): the
@@ -355,31 +487,47 @@ func withoutMember(env []string) []string {
 	return out
 }
 
+// unsetIn drops the named variables from env.
+func unsetIn(env, names []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !contains(names, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // startTmux starts the orchestrator in its tmux session (K.1), or finds
 // the running one, and attaches unless detach is set.
-func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string, detach bool, release func(), renew func() (runtime.Command, error)) int {
+func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string, detach bool, release func(), renew func() (runtime.Command, error), ready func() bool) int {
 	t := session.Default()
 	name := orchestrator.SessionName(r.Name)
 	if t.Has(name) {
 		if t.Option(name, "@cadrei_role") == "orchestrator" && t.Option(name, "@cadrei_home") == r.Path {
 			release()
-			e.say("the orchestrator of %s is already running", r.Name)
 			return e.attachTo(name, detach)
 		}
-		return e.fail("tmux session %s exists and is not this cadrei's orchestrator; rename it (tmux rename-session) or keep using it by hand", name)
+		return e.failWith("There's a tmux session called "+name+" that isn't your orchestrator.", "Rename it with "+cmd("tmux rename-session -t "+name+" <new name>")+", then run "+cmd("cadrei")+" again.")
 	}
-	hint, hooks := t.HintOptions()
+	if !e.recordServer(r.Cadrei, t) {
+		release()
+		return 1
+	}
+	look, windowLook := t.Look(r.Name, "", os.Getenv("NO_COLOR") != "")
 	start := func(c runtime.Command) error {
-		err := t.Start(session.StartSpec{Session: name, Window: "orchestrator", Dir: c.Dir, Env: c.Env, Argv: c.Argv,
-			SessionOptions: append([]session.Option{{Name: "@cadrei_home", Value: r.Path}, {Name: "@cadrei_role", Value: "orchestrator"}}, hint...),
-			SessionHooks:   hooks})
+		// The window stays when its command ends, until the start check,
+		// so a command that ends at once can say why (as a member's does).
+		err := t.Start(session.StartSpec{Session: name, Window: "orchestrator", Dir: c.Dir, Env: c.Env, Unset: c.Unset, Argv: c.Argv,
+			SessionOptions: append([]session.Option{{Name: "@cadrei_home", Value: r.Path}, {Name: "@cadrei_role", Value: "orchestrator"}, {Name: "@cadrei_version", Value: version}}, look...),
+			WindowOptions:  append([]session.Option{{Name: "remain-on-exit", Value: "on"}}, windowLook...)})
 		if err != nil {
 			return err
 		}
-		time.Sleep(upWaitOr(500 * time.Millisecond))
-		if !t.HasWindow(name, "orchestrator") || t.PaneDead(name, "orchestrator") {
-			return fmt.Errorf("the orchestrator failed to start: its command exited at once; run it by hand in %s to see why:\n    %s",
-				c.Dir, session.Line(append(c.Env, c.Argv...)))
+		defer t.UnsetWindowOption(name, "orchestrator", "remain-on-exit")
+		if last, ok := t.StartCheck(name, "orchestrator", startWait(), ready); !ok {
+			return &session.ExitedError{Name: "the orchestrator", Dir: c.Dir, Line: session.Line(append(c.Env, c.Argv...)), Last: last}
 		}
 		return nil
 	}
@@ -392,7 +540,8 @@ func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string,
 		}
 	}
 	if err != nil {
-		return e.fail("%s", err)
+		e.exitedOr(err, "Your orchestrator didn't start", fixOrchestratorModel(r.Path))
+		return 1
 	}
 	// Without the lock, cadrei still finds it by its session (runPlain).
 	pid, err := t.PanePID(name, "orchestrator")
@@ -400,25 +549,32 @@ func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string,
 		_, err = orchestrator.WriteLock(lockPath, pid, orchestrator.Tmux, "", name)
 	}
 	if err != nil {
-		fmt.Fprintf(e.stderr, "warning: could not record the orchestrator in %s (%s); cadrei finds it by its tmux session\n", lockPath, err)
+		e.warn("", "Couldn't note your orchestrator in "+unbroken(display(lockPath))+" ("+err.Error()+"). cadrei finds it by its tmux session instead.")
 	}
 	release()
-	if detach || !e.interactive() {
-		e.say("started the orchestrator of %s; attach with: cadrei attach", r.Name)
-		return 0
-	}
-	return e.attachTo(name, false)
+	return e.attachTo(name, detach)
 }
 
-// attachTo attaches to a session, or only says how when detach is set or
-// there is no terminal.
+// attachTo attaches to the orchestrator's session, or only says how when
+// detach is set or there is no terminal.
 func (e *env) attachTo(name string, detach bool) int {
 	if detach || !e.interactive() {
-		e.say("attach with: cadrei attach")
+		e.note("", markDone, "Your orchestrator is running in tmux. Open it anytime with "+cmd("cadrei"))
 		return 0
 	}
-	if err := session.Default().Attach(name); err != nil {
+	return e.attachOrchestratorSession(name)
+}
+
+// attachOrchestratorSession shows the orchestrator's tmux session. When
+// the user leaves it (and it still runs), cadrei says it keeps going.
+func (e *env) attachOrchestratorSession(name string) int {
+	t := session.Default()
+	switched, err := t.Attach(name)
+	if err != nil {
 		return e.fail("%s", err)
+	}
+	if !switched && t.Has(name) {
+		e.show("  ", "Your orchestrator is still running. Run "+cmd("cadrei")+" to come back.")
 	}
 	return 0
 }
@@ -428,15 +584,12 @@ func (e *env) attachOrchestrator(r *cadreis.Resolved) int {
 	t := session.Default()
 	name := orchestrator.SessionName(r.Name)
 	if !t.Has(name) || t.Option(name, "@cadrei_role") != "orchestrator" || t.Option(name, "@cadrei_home") != r.Path {
-		return e.fail("the orchestrator of %s is not running in tmux; start it with cadrei --tmux", r.Name)
+		return e.failWith("Your orchestrator isn't running in tmux.", "Start it with "+cmd("cadrei --tmux")+", or attach to a team: "+cmd("cadrei attach dev my-app"))
 	}
 	if !e.interactive() {
-		return e.fail("cadrei attach needs a terminal")
+		return e.failWith("Run " + cmd("cadrei attach") + " in a terminal.")
 	}
-	if err := t.Attach(name); err != nil {
-		return e.fail("%s", err)
-	}
-	return 0
+	return e.attachOrchestratorSession(name)
 }
 
 // terminalName is this process's controlling terminal as /dev/<name>, or
@@ -448,15 +601,6 @@ func terminalName() string {
 		return ""
 	}
 	return orchestrator.CleanTTY("/dev/" + name)
-}
-
-// upWaitOr is how long a start is given before it is checked: the test
-// build's setting, else d.
-func upWaitOr(d time.Duration) time.Duration {
-	if w := upWait(); w > 0 {
-		return w
-	}
-	return d
 }
 
 // untouched reports whether a conversation's transcript is missing, or

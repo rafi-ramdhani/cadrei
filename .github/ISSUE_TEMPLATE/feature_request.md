@@ -8,4 +8,4 @@ labels: enhancement
 
 **What you have in mind**
 
-**Could it live in your own cadrei instead?** (a member, a playbook rule, a team)
+**Could it live in your own crew instead?** (a member, a playbook rule, a team)

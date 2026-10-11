@@ -73,3 +73,41 @@ func TestWithin(t *testing.T) {
 		}
 	}
 }
+
+// Review of fix round 5 (sec N6): a folder that isn't there yet still
+// holds another spelling of a path inside it: its first parent that is
+// there is compared by identity, the rest in any case.
+func TestInsideAFolderThatIsntThereYet(t *testing.T) {
+	home := tempDir(t)
+	dir := home + "/.claude/skills"
+	for path, want := range map[string]bool{
+		home + "/.CLAUDE/Skills/x": true, home + "/.claude/skills": true, home + "/.Claude/skills/a/b": true,
+		home + "/.clauder/skills": false, home + "/.claude": false, home + "/other/.claude/skills": false,
+	} {
+		if Inside(path, dir) != want {
+			t.Errorf("Inside(%q) != %v", path, want)
+		}
+	}
+}
+
+// Review of fix round 5 (sec N7): a folder that shows the disk again
+// (macOS's /System/Volumes/Data) holds what it shows.
+func TestHoldsThroughAFolderThatShowsTheDiskAgain(t *testing.T) {
+	root := tempDir(t)
+	os.MkdirAll(root+"/real/home/.cadrei", 0o755)
+	path := root + "/real/home/.cadrei"
+	view := root + "/view"
+	again := filepath.Join(view, path)
+	os.MkdirAll(filepath.Dir(again), 0o755)
+	if err := os.Symlink(path, again); err != nil {
+		t.Fatal(err)
+	}
+	if !Holds(view, path) || !Holds(root+"/real", path) || Holds(root+"/elsewhere", path) {
+		t.Error("Holds")
+	}
+	if _, err := os.Stat("/System/Volumes/Data"); err == nil {
+		if home := Real(Home()); !Holds("/System/Volumes/Data", home) {
+			t.Errorf("/System/Volumes/Data doesn't hold %s", home)
+		}
+	}
+}

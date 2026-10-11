@@ -38,7 +38,7 @@ func (p permissions) Unchanged(cadrei string) bool {
 func (p permissions) Record(cadrei string) { settings.Record(p.GrantsFile(cadrei), hashFile()) }
 
 func (permissions) BuiltIn() string {
-	return "Built in, not listed: deny rules and a soft_deny entry that keep members from changing these grants."
+	return "Built-in limits keep your team away from cadrei's own files."
 }
 
 type store struct{ g *settings.Grants }

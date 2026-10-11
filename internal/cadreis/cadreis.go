@@ -42,6 +42,9 @@ func (c Cadrei) Present() bool {
 var nameRule = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
 
 // reserved names cannot be cadreis: they are ~/.cadrei's own folders.
+// Anything new cadrei keeps in ~/.cadrei, ~/.cadrei-archive, a crew's top
+// folder or members/<team>/ starts with a dot, which no crew, team or role
+// name can, so it never needs another reserved name.
 var reserved = map[string]bool{"config": true, "framework": true}
 
 // CheckName refuses a name that cannot be a cadrei's: it is part of every
@@ -49,10 +52,10 @@ var reserved = map[string]bool{"config": true, "framework": true}
 // framework are ~/.cadrei's own folders.
 func CheckName(name string) error {
 	if !nameRule.MatchString(name) {
-		return fmt.Errorf("a cadrei's name may use letters, digits, - and _ (got %s)", name)
+		return fmt.Errorf("a crew's name can use letters, digits, - and _, so %s won't work", name)
 	}
 	if reserved[strings.ToLower(name)] {
-		return fmt.Errorf("%s is reserved for cadrei's own files; choose another name", name)
+		return fmt.Errorf("%s is kept for cadrei's own files. Pick another name", name)
 	}
 	return nil
 }
@@ -115,13 +118,25 @@ func Clash(name, path string) (Cadrei, bool) {
 	return Cadrei{}, false
 }
 
-// Default returns the default cadrei's name, or "".
+// Default returns the default cadrei's name, or "". When none was chosen
+// (the config is gone), the only cadrei is the default.
 func Default() string {
 	raw, err := os.ReadFile(Config("default"))
 	if err != nil {
+		if list, _ := List(); len(list) == 1 {
+			return list[0].Name
+		}
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// DefaultSet reports whether a default cadrei was chosen on this machine:
+// without it (a reinstall, or a config deleted), the first run plugs the
+// cadreis in ~/.cadrei back in.
+func DefaultSet() bool {
+	_, err := os.Stat(Config("default"))
+	return err == nil
 }
 
 // SetDefault makes the cadrei called name the default.
@@ -139,7 +154,7 @@ func lockConfig() (*fsx.Lock, error) {
 	}
 	l, err := fsx.Acquire(Config(".lock"), 10*time.Second)
 	if errors.Is(err, fsx.ErrBusy) {
-		return nil, fmt.Errorf("another cadrei command is changing %s; try again", ConfigDir())
+		return nil, fmt.Errorf("another cadrei command is changing %s. Try again", Tilde(ConfigDir()))
 	}
 	return l, err
 }

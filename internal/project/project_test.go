@@ -64,7 +64,7 @@ func TestSameRepo(t *testing.T) {
 		{"acme/tool", `https://evil.example\@github.com/acme/tool`, false},
 		{"acme/tool", "https://evil.example/#@github.com/acme/tool", false},
 		{"acme/tool", "evil.example#@github.com:acme/tool", false},
-		{"acme/tool", "https://x:y@github.com/acme/tool", false},
+		{"acme/tool", "https://x:" + "y@github.com/acme/tool", false}, // split, so the repo holds no password in a URL
 		{"acme/tool", "https://a@b@github.com/acme/tool", false},
 		{"acme/tool", "https://me@github.com/acme/tool", true},
 		{"acme/tool", "ssh://git@github.com:22/acme/tool.git", true},
@@ -79,7 +79,7 @@ func TestCloneRefusesOptions(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "marker")
 	for _, repo := range []string{"--upload-pack=touch " + marker, "-u touch " + marker} {
-		if err := Clone(repo, filepath.Join(dir, "x")); err == nil || !strings.Contains(err.Error(), "cannot start with -") {
+		if err := Clone(repo, filepath.Join(dir, "x")); err == nil || !strings.Contains(err.Error(), "can't start with -") {
 			t.Errorf("Clone(%q): %v", repo, err)
 		}
 	}
@@ -113,5 +113,82 @@ func TestFinder(t *testing.T) {
 	}
 	if NewFinder("").Find("me/app") != "" {
 		t.Error("no projects folder finds nothing")
+	}
+}
+
+// Audit sec-exposure-2: a remote's password or token never reaches the
+// registry, ls or an archive; a plain ssh user stays.
+func TestRedact(t *testing.T) {
+	pass := "pass" + "word"
+	for in, want := range map[string]string{
+		"https://me:" + pass + "@git.example.com/me/app.git": "https://git.example.com/me/app.git",
+		"https://sometoken@github.com/me/app.git":            "https://github.com/me/app.git",
+		"http://me@example.com/app":                          "http://example.com/app",
+		"ssh://git:" + pass + "@example.com/me/app.git":      "ssh://git@example.com/me/app.git",
+		"ssh://git@example.com/me/app.git":                   "ssh://git@example.com/me/app.git",
+		"git@github.com:me/app.git":                          "git@github.com:me/app.git",
+		"me/app":                                             "me/app",
+		"/srv/git/app.git":                                   "/srv/git/app.git",
+		// URLs Go won't parse, which git takes: the user part goes whole.
+		"https://alice:p%zz" + "@host/x.git": "https://host/x.git",
+		"https://alice:pa ss@host/x.git":     "https://host/x.git",
+		"https://u:p" + "@host:badport/x":    "https://host:badport/x",
+		"git+https://u:" + pass + "@host/x":  "git+https://host/x",
+		// Git sends ftp(s) and git:// users through too (review of fix
+		// round 5, sec N4), and any other scheme's password goes.
+		"ftp://u:" + pass + "@host/x.git":  "ftp://host/x.git",
+		"ftps://u:" + pass + "@host/x.git": "ftps://host/x.git",
+		"git://u:" + pass + "@host/x.git":  "git://host/x.git",
+		// A token as the user alone (review of fix round 6).
+		"ftp://sometoken@host/x.git":    "ftp://host/x.git",
+		"ftps://sometoken@host/x.git":   "ftps://host/x.git",
+		"git://sometoken@host/x.git":    "git://host/x.git",
+		"other://u:" + pass + "@host/x": "other://host/x",
+		"other://u@host/x":              "other://u@host/x",
+	} {
+		if got := Redact(in); got != want {
+			t.Errorf("Redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Review of fix round 5 (sec N6, N7 and N10): the trust and place checks
+// go by identity, so another spelling of ~/.cadrei or the home folder is
+// refused (where the disk ignores case), ~/.claude is refused in any case
+// before it exists, and a folder that shows the whole disk again holds
+// ~/.cadrei.
+func TestRefusalsGoByIdentity(t *testing.T) {
+	home, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", home)
+	t.Setenv("CADREI_HOME", "")
+	os.MkdirAll(home+"/.cadrei/work", 0o755)
+	if why := DestRefusal(home+"/.CLAUDE/skills/x", []string{home + "/.claude"}); !strings.Contains(why, "inside ~/.claude") {
+		t.Errorf("~/.CLAUDE before ~/.claude is there: %q", why)
+	}
+	if _, err := os.Stat(home + "/.CADREI"); err == nil {
+		// A disk that ignores case.
+		if why := TrustRefusal(home+"/.CADREI/work", nil); !strings.Contains(why, "inside ~/.cadrei") {
+			t.Errorf("trust ~/.CADREI/work: %q", why)
+		}
+		upper := filepath.Join(filepath.Dir(home), strings.ToUpper(filepath.Base(home)))
+		if why := TrustRefusal(upper, nil); why != "it's your home folder" {
+			t.Errorf("trust another spelling of home: %q", why)
+		}
+	}
+	if _, err := os.Stat("/System/Volumes/Data" + home); err == nil {
+		// Each by its own rule (review of fix round 6): any refusal would
+		// come anyway, as /System/Volumes/Data is no git top.
+		if why := DestRefusal("/System/Volumes/Data", nil); why != "it contains ~/.cadrei" {
+			t.Errorf("/System/Volumes/Data can hold a project: %q", why)
+		}
+		if why := TrustRefusal("/System/Volumes/Data", nil); why != "it's ~/.cadrei, or holds it" {
+			t.Errorf("/System/Volumes/Data can be trusted: %q", why)
+		}
+		// With no ~/.cadrei, a folder the runtime loads code from.
+		os.RemoveAll(home + "/.cadrei")
+		os.MkdirAll(home+"/.claude", 0o755)
+		if why := DestRefusal("/System/Volumes/Data", []string{home + "/.claude"}); why != "it contains ~/.claude" {
+			t.Errorf("/System/Volumes/Data holds ~/.claude: %q", why)
+		}
 	}
 }

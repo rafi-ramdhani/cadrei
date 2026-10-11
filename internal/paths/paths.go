@@ -77,23 +77,52 @@ func Within(path, dir string) bool {
 // Inside reports whether path is the folder dir or inside it. Folders are
 // compared by identity (os.SameFile) as well as by spelling, so another
 // spelling of the same folder matches: on macOS's case-insensitive disk,
-// ~/.CADREI/WORK is ~/.cadrei/work.
+// ~/.CADREI/WORK is ~/.cadrei/work. When dir isn't there yet, its first
+// parent that is there is compared by identity, and the rest of it by
+// spelling in any case, as that disk would.
 func Inside(path, dir string) bool {
 	if Within(path, dir) {
 		return true
 	}
-	target, err := os.Stat(dir)
-	if err != nil {
-		return false
+	base, rest := filepath.Clean(dir), []string{}
+	target, err := os.Stat(base)
+	for err != nil {
+		parent := filepath.Dir(base)
+		if parent == base {
+			return false
+		}
+		rest = append([]string{filepath.Base(base)}, rest...)
+		base = parent
+		target, err = os.Stat(base)
 	}
-	for p := path; ; p = filepath.Dir(p) {
-		if st, err := os.Stat(p); err == nil && os.SameFile(st, target) {
-			return true
+	var below []string // path's folders under p
+	for p := filepath.Clean(path); ; p = filepath.Dir(p) {
+		if st, err := os.Stat(p); err == nil && os.SameFile(st, target) && len(below) >= len(rest) {
+			same := true
+			for i := range rest {
+				same = same && strings.EqualFold(below[i], rest[i])
+			}
+			if same {
+				return true
+			}
 		}
 		if p == "/" || p == "." {
 			return false
 		}
+		below = append([]string{filepath.Base(p)}, below...)
 	}
+}
+
+// Holds reports whether the folder dir holds path (or is it): by Inside,
+// or through a folder that shows the whole disk again, as macOS's
+// /System/Volumes/Data shows the home folders.
+func Holds(dir, path string) bool {
+	if Inside(path, dir) {
+		return true
+	}
+	again, err1 := os.Stat(filepath.Join(dir, path))
+	st, err2 := os.Stat(path)
+	return err1 == nil && err2 == nil && os.SameFile(again, st)
 }
 
 // Getwd is the current folder as the kernel has it, not $PWD, which keeps

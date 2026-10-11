@@ -104,7 +104,7 @@ func TestHooks(t *testing.T) {
   "model": "x",
   "hooks": {
     "SessionStart": [
-      {"hooks": [{"type": "command", "command": "bash /old/cadrei/bin/orchestrator-hook.sh"}]},
+      {"hooks": [{"type": "command", "command": "bash /old/cadrei/bin/orchestrator-hook.sh"}, {"type": "command", "command": "echo shared"}]},
       {"hooks": [{"type": "command", "command": "echo mine"}]}
     ],
     "Stop": []
@@ -118,13 +118,18 @@ func TestHooks(t *testing.T) {
 	got, _ := os.ReadFile(p)
 	root, _ := jsonx.Parse(got)
 	groups := root.Get("hooks").Get("SessionStart").Items
-	if len(groups) != 2 {
+	if len(groups) != 3 {
 		t.Fatalf("groups after add: %s", got)
 	}
-	if c, _ := groups[0].Get("hooks").Items[0].Get("command").Text(); c != "echo mine" {
-		t.Errorf("the user's own hook was not kept first: %s", got)
+	// A hook of the user's that shared cadrei's group stays (review of
+	// fix round 6), and so does the user's own group.
+	if c, _ := groups[0].Get("hooks").Items[0].Get("command").Text(); c != "echo shared" || len(groups[0].Get("hooks").Items) != 1 {
+		t.Errorf("the hook that shared cadrei's group was not kept alone: %s", got)
 	}
-	if c, _ := groups[1].Get("hooks").Items[0].Get("command").Text(); c != "/opt/bin/cadrei hook orchestrator" {
+	if c, _ := groups[1].Get("hooks").Items[0].Get("command").Text(); c != "echo mine" {
+		t.Errorf("the user's own hook was not kept: %s", got)
+	}
+	if c, _ := groups[2].Get("hooks").Items[0].Get("command").Text(); c != "/opt/bin/cadrei hook orchestrator" {
 		t.Errorf("the new hook is %q", c)
 	}
 	if code, _ := jsonx.Edit(p, jsonx.Options{}, add); code != jsonx.Unchanged {
@@ -145,10 +150,10 @@ func TestHooks(t *testing.T) {
 func TestUnhookReportsAnotherFrameworksHooks(t *testing.T) {
 	p := writeConfig(t, `{"hooks": {"SessionStart": [{"hooks": [
 		{"command": "bash /mine/bin/orchestrator-hook.sh"},
-		{"command": "bash /elsewhere/my\\ cadrei/bin/orchestrator-hook.sh"}]}]}}`, 0o600)
+		{"command": "bash '/elsewhere/my cadrei/bin/orchestrator-hook.sh'"}]}]}}`, 0o600)
 	ours := func(c string) bool { s, _ := OrchestratorHook(c); return s == "/mine/bin/orchestrator-hook.sh" }
 	code, lines := jsonx.Edit(p, jsonx.Options{}, Unhook(ours, isOrch))
-	want := "removed\tbash /mine/bin/orchestrator-hook.sh,kept\tbash /elsewhere/my\\ cadrei/bin/orchestrator-hook.sh"
+	want := "removed\tbash /mine/bin/orchestrator-hook.sh,kept\tbash '/elsewhere/my cadrei/bin/orchestrator-hook.sh'"
 	if code != jsonx.Changed || strings.Join(lines, ",") != want {
 		t.Errorf("code %d, lines %q", code, lines)
 	}
@@ -173,8 +178,14 @@ func TestOrchestratorHook(t *testing.T) {
 		ok        bool
 	}{
 		{"bash /x/bin/orchestrator-hook.sh", "/x/bin/orchestrator-hook.sh", true},
-		{`bash /x/my\ cadrei/bin/orchestrator-hook.sh`, "/x/my cadrei/bin/orchestrator-hook.sh", true},
-		{`bash '/x/it''s/orchestrator-hook.sh'`, "/x/its/orchestrator-hook.sh", true},
+		{`bash '/x/my cadrei/bin/orchestrator-hook.sh'`, "/x/my cadrei/bin/orchestrator-hook.sh", true},
+		// 0.1.x wrote only `bash <path>`: shell syntax isn't its (review
+		// of fix round 6).
+		{`bash /x/my\ cadrei/bin/orchestrator-hook.sh`, "", false},
+		{`bash '/x/it''s/orchestrator-hook.sh'`, "", false},
+		{"bash $(x)/orchestrator-hook.sh", "", false},
+		{"bash `x`/orchestrator-hook.sh", "", false},
+		{"bash x;/orchestrator-hook.sh", "", false},
 		{"/opt/homebrew/opt/cadrei/bin/cadrei hook orchestrator", "/opt/homebrew/opt/cadrei/bin/cadrei", true},
 		{"bash /x/my-orchestrator-hook.sh", "", false},
 		{"/x/cadrei hook statusline", "", false},

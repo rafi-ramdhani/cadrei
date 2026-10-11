@@ -14,6 +14,7 @@ import (
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/conf"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
+	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/registry"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
@@ -33,11 +34,56 @@ type cadreiView struct {
 	Project string `json:"project,omitempty"` // the linked project it was found from
 	Default bool   `json:"default"`
 	Missing bool   `json:"missing,omitempty"`
+	// The crew's model and effort for its members (7.11), when it sets
+	// them.
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 type memberView struct {
 	Name string `json:"name"` // the session name, the member's messaging address
 	Role string `json:"role"`
+	// What a running member is doing: starting, working, waiting, idle,
+	// unknown or stopped_by_safeguards; since when; and for waiting, what
+	// for (approval or question).
+	State      string     `json:"state,omitempty"`
+	Since      *time.Time `json:"since,omitempty"`
+	WaitingFor string     `json:"waiting_for,omitempty"`
+	// For working or waiting: when its transcript last changed, once that's
+	// 10 minutes or more ago. For idle: its last turn ended in an error.
+	NoActivitySince *time.Time `json:"no_activity_since,omitempty"`
+	TurnError       bool       `json:"turn_error,omitempty"`
+	// The model and effort cadrei passed this member's start, and where
+	// each was set: start, member, machine or crew (7.11.4).
+	Model      string `json:"model,omitempty"`
+	Effort     string `json:"effort,omitempty"`
+	ModelFrom  string `json:"model_from,omitempty"`
+	EffortFrom string `json:"effort_from,omitempty"`
+
+	status memberStatus // the same, for the human screens
+	// The member and window names as tmux has them, before printable:
+	// what the stream reads files by and matches windows with.
+	name, window string
+}
+
+// fill sets a member's JSON state fields from its status.
+func (m *memberView) fill() {
+	m.State, m.WaitingFor = m.status.State, m.status.WaitingFor
+	m.Since, m.NoActivitySince = nil, nil
+	if !m.status.Since.IsZero() {
+		since := m.status.Since
+		m.Since = &since
+	}
+	if !m.status.QuietSince.IsZero() {
+		quiet := m.status.QuietSince
+		m.NoActivitySince = &quiet
+	}
+	m.TurnError = m.status.Error && m.status.State == session.Idle
+}
+
+// choice is the model and effort cadrei passed the member.
+func (m memberView) choice() session.Choice {
+	return session.Choice{Model: session.Setting{Value: m.Model, From: m.ModelFrom}, Effort: session.Setting{Value: m.Effort, From: m.EffortFrom}}
 }
 
 type sessionView struct {
@@ -46,6 +92,7 @@ type sessionView struct {
 	Project string       `json:"project,omitempty"`
 	Legacy  bool         `json:"legacy"` // from before session names carried the cadrei
 	Members []memberView `json:"members"`
+	info    session.Info // the session as tmux has it
 }
 
 // A project's state on this machine: "present"; "not here" (no folder
@@ -79,7 +126,9 @@ type orchestratorView struct {
 }
 
 type cadreiStatus struct {
-	Version      int                     `json:"version,omitempty"` // set on the top-level object
+	Version      int                     `json:"version,omitempty"`               // set on the top-level object
+	OpensIn      string                  `json:"orchestrator_opens_in,omitempty"` // tmux or terminal, on the top-level object
+	Hook         string                  `json:"hook,omitempty"`                  // the every-chat hook: on, off or skipped, on the top-level object
 	Cadrei       cadreiView              `json:"cadrei"`
 	Orchestrator orchestratorView        `json:"orchestrator"`
 	Running      []sessionView           `json:"running"`
@@ -91,6 +140,8 @@ type cadreiStatus struct {
 
 type allStatus struct {
 	Version int            `json:"version"`
+	OpensIn string         `json:"orchestrator_opens_in"`
+	Hook    string         `json:"hook"`
 	Cadreis []cadreiStatus `json:"cadreis"`
 	Legacy  []sessionView  `json:"legacy"`
 	Unknown []sessionView  `json:"unknown"`
@@ -99,6 +150,19 @@ type allStatus struct {
 // problemsOf says what keeps every member of a cadrei from starting: the
 // runtime is missing, or cannot run the cadrei's permission mode.
 func problemsOf(c cadreis.Cadrei) []string {
+	out := problemsOfCrew(c)
+	// They name folders and files, which may hold anything.
+	for i := range out {
+		out[i] = printable(out[i])
+	}
+	return out
+}
+
+// problemsOfCrew is problemsOf, as written.
+func problemsOfCrew(c cadreis.Cadrei) []string {
+	if why := cadreis.NewerFormat(c.Path); why != "" {
+		return []string{why + " " + cadreis.UpgradeFix}
+	}
 	out := append([]string{}, skippedEntries(c)...)
 	out = append(out, unstartable(c)...)
 	rt, err := runtime.Get(runtimeName())
@@ -126,46 +190,149 @@ func skippedEntries(c cadreis.Cadrei) []string {
 	}
 	var out []string
 	for _, name := range reg.Skipped() {
-		out = append(out, fmt.Sprintf("projects.yaml has an entry named %q, which is not a project name (letters, digits, ., - and _); it is left out until it is renamed or removed", name))
+		out = append(out, fmt.Sprintf("projects.yaml has an entry named %q, which can't be a project name (letters, digits, ., - and _). It's left out until you rename or remove it", name))
 	}
 	return out
 }
 
 func viewOf(t session.Tmux, i session.Info) sessionView {
-	v := sessionView{Session: i.Name, Team: i.Team, Project: i.Project, Legacy: i.Legacy(), Members: []memberView{}}
+	recorded := t.WindowMembers(i.Name)
+	var windows []session.Window
+	for _, w := range t.Windows(i.Name) {
+		windows = append(windows, session.Window{Session: i, Name: w, Member: recorded[w]})
+	}
+	return viewFrom(i, windows, time.Now())
+}
+
+// viewFrom is a running team's view from its windows.
+func viewFrom(i session.Info, windows []session.Window, now time.Time) sessionView {
+	v := sessionView{Session: printable(i.Name), Team: printable(i.Team), Project: printable(i.Project), Legacy: i.Legacy(), Members: []memberView{}, info: i}
 	if v.Team == "" {
 		// A 0.1.x session recorded no team: show its key.
-		v.Team = session.Bare(i.Name)
+		v.Team = printable(session.Bare(i.Name))
 	}
-	for _, w := range t.Windows(i.Name) {
-		v.Members = append(v.Members, memberView{Name: session.Bare(i.Name) + "-" + w, Role: w})
+	for _, w := range windows {
+		m := memberView{Name: memberName(i, w), Role: w.Name, name: memberName(i, w), window: w.Name}
+		m.read(i.Home, now)
+		m.Name, m.Role = printable(m.Name), printable(m.Role)
+		v.Members = append(v.Members, m)
 	}
 	return v
 }
 
+// memberName is a window's member: the name recorded on it, else the one
+// up gives it (the session name turns a project's "." into "_", the
+// member's doesn't).
+func memberName(i session.Info, w session.Window) string {
+	switch {
+	case w.Member != "":
+		return w.Member
+	case i.Home != "" && i.Team != "":
+		return session.MemberName(filepath.Base(i.Home), session.Key(i.Team, i.Project), w.Name)
+	}
+	return session.Bare(i.Name) + "-" + w.Name
+}
+
+// read fills a running member's status and model from its crew at home.
+func (m *memberView) read(home string, now time.Time) {
+	m.status = memberStatus{State: session.Unknown}
+	if rt, err := runtime.Get(runtimeName()); err == nil && home != "" {
+		m.status = statusOfMember(rt, home, m.Name, now, true)
+		if rec := session.ReadRecord(session.RecordPath(rt.BuildDir(home), m.Name)); rec != nil {
+			m.Model, m.Effort, m.ModelFrom, m.EffortFrom = rec.Model, rec.Effort, rec.ModelFrom, rec.EffortFrom
+		}
+	}
+	m.fill()
+}
+
+// hookState is the every-chat hook's state for ls --json: on, off, or
+// skipped (the user said no).
+func hookState() string {
+	rt, err := runtime.Get(runtimeName())
+	if err != nil {
+		return hookOff
+	}
+	s, _ := everyChat(rt)
+	return s
+}
+
+// The every-chat hook's states: on, off, or off because the user said no.
+const (
+	hookOn      = "on"
+	hookOff     = "off"
+	hookSkipped = "skipped"
+)
+
+// everyChat is the every-chat hook's state, the one source for ls, the
+// snapshot and cadrei hook.
+func everyChat(rt runtime.Runtime) (string, error) {
+	progs, err := rt.Hooks().Find()
+	switch {
+	case err == nil && len(progs) > 0:
+		return hookOn, nil
+	case cadreis.GetState(cadreis.HookOffer) == hookSkipped:
+		return hookSkipped, err
+	}
+	return hookOff, err
+}
+
 // statusOf gathers one cadrei's status.
 func statusOf(c cadreis.Cadrei, def string, t session.Tmux) cadreiStatus {
-	s := cadreiStatus{Cadrei: cadreiView{Name: c.Name, Path: c.Path, Default: c.Name == def, Missing: !c.Present()},
+	s := cadreiStatus{Cadrei: cadreiView{Name: printable(c.Name), Path: c.Path, Default: c.Name == def, Missing: !c.Present()},
 		Running: []sessionView{}, Projects: []projectView{}, Teams: map[string][]memberView{}, Problems: problemsOf(c)}
 	scope := session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == def, T: t}
 	s.Orchestrator = orchestratorOf(c, t)
+	teamDefault := crewChoice(c.Path, false)
+	s.Cadrei.Model, s.Cadrei.Effort = teamDefault.Model.Value, teamDefault.Effort.Value
 	for _, i := range scope.Running() {
 		s.Running = append(s.Running, viewOf(t, i))
 	}
-	if p := projectsOf(c); p != nil {
+	if p := projectsOf(c, true); p != nil {
 		s.Projects = p
 	}
+	s.Teams = teamsOf(c)
+	return s
+}
+
+// teamsOf is a crew's teams and their members, from its members folder.
+func teamsOf(c cadreis.Cadrei) map[string][]memberView {
+	out := map[string][]memberView{}
 	teams, _ := filepath.Glob(filepath.Join(c.Path, "members", "*"))
 	for _, d := range teams {
 		if st, err := os.Stat(d); err == nil && st.IsDir() {
 			team := filepath.Base(d)
-			s.Teams[team] = []memberView{}
+			shown := printable(team)
+			out[shown] = []memberView{}
 			for _, role := range session.Roles(c.Path, team) {
-				s.Teams[team] = append(s.Teams[team], memberView{Name: session.MemberName(c.Name, team, role), Role: role})
+				out[shown] = append(out[shown], memberView{Name: printable(session.MemberName(c.Name, team, role)), Role: printable(role)})
 			}
 		}
 	}
-	return s
+	return out
+}
+
+// runningOf is only the running teams of statusOf, for the per-prompt
+// team status hook and the snapshot: no orchestrator lock, projects or
+// problems, and one tmux listing whatever the number of teams.
+func runningOf(c cadreis.Cadrei, def string, t session.Tmux) []sessionView {
+	scope := session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == def, T: t}
+	byTeam := map[string][]session.Window{}
+	var teams []session.Info
+	for _, w := range t.AllWindows() {
+		if i := w.Session; scope.Ours(i) && i.Role != "orchestrator" {
+			if _, ok := byTeam[i.Name]; !ok {
+				teams = append(teams, i)
+			}
+			byTeam[i.Name] = append(byTeam[i.Name], w)
+		}
+	}
+	sort.Slice(teams, func(a, b int) bool { return teams[a].Name < teams[b].Name })
+	now := time.Now()
+	var out []sessionView
+	for _, i := range teams {
+		out = append(out, viewFrom(i, byTeam[i.Name], now))
+	}
+	return out
 }
 
 // orchestratorOf says whether a cadrei's orchestrator is open: its lock
@@ -185,95 +352,95 @@ func orchestratorOf(c cadreis.Cadrei, t session.Tmux) orchestratorView {
 }
 
 func runLs(e *env) int {
-	all, asJSON := false, false
-	for _, a := range e.args {
-		switch a {
+	all, asJSON, watch, pinned := false, false, false, false
+	for i := 0; i < len(e.args); i++ {
+		switch a := e.args[i]; a {
 		case "--all":
 			all = true
 		case "--json":
 			asJSON = true
+		case "--watch":
+			watch = true
+		case "--json-version":
+			// A tool pins the version it reads. Only 1 exists; a later
+			// cadrei keeps printing 1 when asked for it.
+			if i+1 >= len(e.args) || e.args[i+1] != "1" {
+				return e.failWith("This cadrei prints version 1 of its JSON only: use --json-version 1.")
+			}
+			pinned = true
+			i++
 		default:
-			return e.fail("usage: cadrei ls [--all] [--json]")
+			return e.failWith("Use " + cmd("cadrei ls") + ", with --all or --json if you like.")
 		}
+	}
+	if pinned && !asJSON {
+		return e.failWith("--json-version only works with --json.")
+	}
+	// Output for programs never asks which crew (7.13.1, T-W7).
+	e.noAsk = asJSON
+	if watch {
+		if !asJSON {
+			return e.failWith("--watch only works with --json. It's for programs that read cadrei's state.", "To look now, run "+cmd("cadrei ls")+".")
+		}
+		return runLsWatch(e, all)
 	}
 	t := session.Default()
 	def := cadreis.Default()
 	list, _ := cadreis.List()
 	if all {
-		st := allStatus{Version: jsonVersion, Cadreis: []cadreiStatus{}, Legacy: []sessionView{}, Unknown: []sessionView{}}
-		known := map[string]bool{}
-		for _, c := range list {
-			known[c.Path] = true
-			if c.Present() {
-				st.Cadreis = append(st.Cadreis, statusOf(c, def, t))
-			}
-		}
-		// A cadrei- session without markers (made by hand, or a start that
-		// died early) is not legacy: it is listed with the unknown ones.
-		unmarked := map[string]bool{}
-		for _, i := range session.All(t, nil) {
-			switch {
-			case i.Legacy():
-				st.Legacy = append(st.Legacy, viewOf(t, i))
-			case i.Home == "":
-				unmarked[i.Name] = true
-				st.Unknown = append(st.Unknown, viewOf(t, i))
-			case !known[i.Home]:
-				st.Unknown = append(st.Unknown, viewOf(t, i))
-			}
-		}
+		st, unmarked := allJSON(t)
 		if asJSON {
 			return e.printJSON(st)
 		}
-		for n, c := range st.Cadreis {
-			if n > 0 {
-				e.say("")
+		// This cadrei's screen, then the others in a line each.
+		var here *cadreiStatus
+		wd, _ := paths.Getwd()
+		if r, err := cadreis.Resolve(wd, nil); err == nil {
+			for i := range st.Cadreis {
+				if st.Cadreis[i].Cadrei.Path == r.Path {
+					here = &st.Cadreis[i]
+					here.Cadrei.From = r.From
+				}
 			}
-			e.printStatus(c)
 		}
-		e.printSessions("legacy sessions (started by cadre 0.1.x; they belong to the default cadrei)", st.Legacy)
+		if here == nil && len(st.Cadreis) > 0 {
+			here = &st.Cadreis[0]
+		}
+		if here != nil {
+			e.printStatus(*here, len(list) > 1)
+		}
+		var others []otherView
+		for _, c := range list {
+			if here != nil && c.Path == here.Cadrei.Path {
+				continue
+			}
+			others = append(others, otherView{Name: c.Name, Path: c.Path, Missing: !c.Present(),
+				Running: len(session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == def, T: t}.Running())})
+		}
+		e.printOthers(others)
+		e.printSessions("Teams from cadre 0.1.x (they belong to your default crew)", st.Legacy)
+		var lost, unmarkedList []sessionView
 		for _, u := range st.Unknown {
-			heading := "sessions of a cadrei no longer known"
 			if unmarked[u.Session] {
-				heading = "sessions without cadrei's markers"
+				unmarkedList = append(unmarkedList, u)
+			} else {
+				lost = append(lost, u)
 			}
-			e.printSessions(heading, []sessionView{u})
 		}
+		e.printSessions("Teams of a crew cadrei doesn't know anymore", lost)
+		e.printSessions("tmux sessions cadrei didn't start", unmarkedList)
 		return 0
 	}
 	r, ok := e.resolve()
 	if !ok {
 		return 1
 	}
-	e.conf(r) // a status screen says when cadrei.conf has lines it ignores
-	st := statusOf(r.Cadrei, r.Default, t)
-	st.Version = jsonVersion
-	st.Cadrei.From, st.Cadrei.Project = r.From, r.Project
-	for _, c := range list {
-		if c.Path == r.Path {
-			continue
-		}
-		o := otherView{Name: c.Name, Path: c.Path, Missing: !c.Present()}
-		o.Running = len(session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == r.Default, T: t}.Running())
-		st.Others = append(st.Others, o)
+	if !asJSON {
+		e.conf(r) // a status screen says when cadrei.conf has lines it ignores
 	}
+	st := crewJSON(r, t)
 	if asJSON {
 		return e.printJSON(st)
-	}
-	e.printStatus(st)
-	if len(st.Others) > 0 {
-		var parts []string
-		for _, o := range st.Others {
-			switch {
-			case o.Missing:
-				parts = append(parts, o.Name+" (folder missing)")
-			case o.Running == 0:
-				parts = append(parts, o.Name+" (none running)")
-			default:
-				parts = append(parts, fmt.Sprintf("%s (%d running)", o.Name, o.Running))
-			}
-		}
-		e.say("other cadreis: %s", strings.Join(parts, ", "))
 	}
 	// Sessions without markers belong to no cadrei, so only ls --all lists
 	// them; this screen points there.
@@ -285,11 +452,60 @@ func runLs(e *env) int {
 	}
 	switch {
 	case unmarked == 1:
-		e.say("1 session without cadrei's markers; see cadrei ls --all")
+		st.Problems = append(st.Problems, "There's 1 tmux session cadrei didn't start. See it with "+cmd("cadrei ls --all"))
 	case unmarked > 1:
-		e.say("%d sessions without cadrei's markers; see cadrei ls --all", unmarked)
+		st.Problems = append(st.Problems, fmt.Sprintf("There are %d tmux sessions cadrei didn't start. See them with %s", unmarked, cmd("cadrei ls --all")))
 	}
+	e.printStatus(st, len(list) > 1)
 	return 0
+}
+
+// crewJSON is cadrei ls --json for the crew r.
+func crewJSON(r *cadreis.Resolved, t session.Tmux) cadreiStatus {
+	st := statusOf(r.Cadrei, r.Default, t)
+	st.Version, st.Hook = jsonVersion, hookState()
+	st.OpensIn, _ = cadreis.OpensIn(r.Cadrei)
+	st.Cadrei.From, st.Cadrei.Project = r.From, r.Project
+	list, _ := cadreis.List()
+	for _, c := range list {
+		if c.Path == r.Path {
+			continue
+		}
+		o := otherView{Name: c.Name, Path: c.Path, Missing: !c.Present()}
+		o.Running = len(session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == r.Default, T: t}.Running())
+		st.Others = append(st.Others, o)
+	}
+	return st
+}
+
+// allJSON is cadrei ls --json --all, and the sessions in it without
+// cadrei's markers.
+func allJSON(t session.Tmux) (allStatus, map[string]bool) {
+	def := cadreis.Default()
+	list, _ := cadreis.List()
+	st := allStatus{Version: jsonVersion, OpensIn: opensInOf(def), Hook: hookState(), Cadreis: []cadreiStatus{}, Legacy: []sessionView{}, Unknown: []sessionView{}}
+	known := map[string]bool{}
+	for _, c := range list {
+		known[c.Path] = true
+		if c.Present() {
+			st.Cadreis = append(st.Cadreis, statusOf(c, def, t))
+		}
+	}
+	// A cadrei- session without markers (made by hand, or a start that
+	// died early) is not legacy: it is listed with the unknown ones.
+	unmarked := map[string]bool{}
+	for _, i := range session.All(t, nil) {
+		switch {
+		case i.Legacy():
+			st.Legacy = append(st.Legacy, viewOf(t, i))
+		case i.Home == "":
+			unmarked[i.Name] = true
+			st.Unknown = append(st.Unknown, viewOf(t, i))
+		case !known[i.Home]:
+			st.Unknown = append(st.Unknown, viewOf(t, i))
+		}
+	}
+	return st, unmarked
 }
 
 func (e *env) printJSON(v any) int {
@@ -300,107 +516,6 @@ func (e *env) printJSON(v any) int {
 		return e.fail("%s", err)
 	}
 	return 0
-}
-
-// printStatus is one cadrei's block of the status screen.
-func (e *env) printStatus(s cadreiStatus) {
-	where := display(s.Cadrei.Path)
-	switch {
-	case s.Cadrei.From == "default":
-		where += ", the default cadrei"
-	case s.Cadrei.From != "":
-		where += ", " + strings.Replace(s.Cadrei.From, "from the current folder", "from this folder", 1)
-		if s.Cadrei.Default {
-			where += "; default"
-		}
-	case s.Cadrei.Default:
-		where += ", default"
-	}
-	e.say("cadrei %s  (%s)", s.Cadrei.Name, where)
-	switch o := s.Orchestrator; {
-	case !o.Running:
-		e.say("orchestrator: not running")
-	case o.Mode == orchestrator.Terminal && o.Since != nil:
-		e.say("orchestrator: open in a terminal since %s", o.Since.Format("15:04"))
-	default:
-		e.say("orchestrator: running in tmux (%s)", o.Session)
-	}
-	if len(s.Running) == 0 {
-		e.say("running: nothing")
-	} else {
-		e.say("running:")
-		legacy := false
-		for _, v := range s.Running {
-			label := v.Team
-			if v.Project != "" {
-				label += " " + v.Project
-			}
-			if v.Legacy {
-				label += " (legacy)"
-				legacy = true
-			}
-			var roles []string
-			for _, p := range v.Members {
-				roles = append(roles, p.Role)
-			}
-			e.say("  %-16s %s", label, strings.Join(roles, "  "))
-		}
-		if legacy {
-			e.say("  legacy sessions keep their old names until restarted")
-		}
-	}
-	defer func() {
-		for _, p := range s.Problems {
-			e.say("problem: %s", p)
-		}
-	}()
-	if len(s.Projects) == 0 {
-		e.say("projects: none")
-		return
-	}
-	var names, gone, absent, drives []string
-	for _, p := range s.Projects {
-		names = append(names, p.Name)
-		switch p.State {
-		case "missing":
-			gone = append(gone, p.Name)
-		case "not here":
-			absent = append(absent, p.Name)
-		case "drive":
-			drives = append(drives, p.Name)
-		}
-	}
-	line := "projects: " + strings.Join(names, ", ")
-	var notes []string
-	if len(absent) > 0 {
-		notes = append(notes, "not on this machine: "+strings.Join(absent, ", "))
-	}
-	if len(gone) > 0 {
-		notes = append(notes, "missing: "+strings.Join(gone, ", "))
-	}
-	if len(drives) > 0 {
-		notes = append(notes, "on a drive that is not connected: "+strings.Join(drives, ", "))
-	}
-	if len(notes) > 0 {
-		line += " (" + strings.Join(notes, "; ") + ")"
-	}
-	e.say("%s", line)
-}
-
-func (e *env) printSessions(heading string, list []sessionView) {
-	if len(list) == 0 {
-		return
-	}
-	e.say("")
-	e.say("%s", heading)
-	sort.Slice(list, func(a, b int) bool { return list[a].Session < list[b].Session })
-	for _, v := range list {
-		var names []string
-		for _, p := range v.Members {
-			names = append(names, p.Name)
-		}
-		e.say("  %s: %s", v.Session, strings.Join(names, " "))
-	}
 }
 
 // unstartable names the teams and members whose names cannot be part of a
@@ -414,14 +529,26 @@ func unstartable(c cadreis.Cadrei) []string {
 			continue
 		}
 		if !session.CheckName(t.Name()) {
-			out = append(out, fmt.Sprintf("team %s cannot start: %s; rename its folder, members/%s", t.Name(), session.NameRule, t.Name()))
+			out = append(out, fmt.Sprintf("The team %s can't start: %s. Rename its folder, members/%s", t.Name(), session.NameRule, t.Name()))
 			continue
 		}
 		for _, role := range session.Roles(c.Path, t.Name()) {
 			if !session.CheckName(role) {
-				out = append(out, fmt.Sprintf("member %s of team %s cannot start: %s; rename its file, members/%s/%s.md", role, t.Name(), session.NameRule, t.Name(), role))
+				out = append(out, fmt.Sprintf("The %s in %s can't start: %s. Rename its file, members/%s/%s.md", role, t.Name(), session.NameRule, t.Name(), role))
 			}
 		}
 	}
 	return out
+}
+
+// opensInOf is where the named cadrei's orchestrator opens. With no such
+// crew (none at all, say) it opens nowhere else than the terminal, as the
+// stream says too: the contract's values are tmux and terminal only.
+func opensInOf(name string) string {
+	c, ok := cadreis.Find(name)
+	if !ok {
+		return cadreis.OpensInTerminal
+	}
+	where, _ := cadreis.OpensIn(c)
+	return where
 }

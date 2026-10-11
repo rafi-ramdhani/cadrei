@@ -1,6 +1,6 @@
 # Playbook
 
-This cadrei's teams and routing rules. The orchestrator reads this file at the start of every session.
+This crew's teams and routing rules. The orchestrator reads this file at the start of every session.
 
 ## Teams
 

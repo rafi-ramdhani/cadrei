@@ -1,0 +1,31 @@
+
+  cadrei, development build
+  A team of Claude Code helpers you lead from one chat.
+  ~
+
+  + Claude Code 2.1.300 (logged in), git and tmux are ready
+
+  Found your crews in ~/.cadrei: life and work.
+
+  Here's the plan
+  - Plug them back in, with life as your default (press d to pick another)
+  - Link cadrei's instructions into Claude Code (~/.claude/skills/cadrei)
+  - Open your orchestrator in this terminal (life's setting)
+
+  Press Enter to plug them back in.
+  Or press p for the plain terminal, n for a new crew, r to restore, q to quit.
+
+  Found your crews in ~/.cadrei: life and work.
+
+  Here's the plan
+  - Plug them back in, with work as your default (press d to pick another)
+  - Link cadrei's instructions into Claude Code (~/.claude/skills/cadrei)
+  - Open your orchestrator in this terminal (work's setting)
+
+  Press Enter to plug them back in.
+  Or press p for the plain terminal, n for a new crew, r to restore, q to quit.
+
+  + Plugged life and work back in (work is your default)
+  + Linked cadrei's instructions into Claude Code
+
+  Opening your orchestrator.

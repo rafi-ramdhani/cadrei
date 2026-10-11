@@ -71,4 +71,4 @@ func (sessions) FromHook(input io.Reader) string {
 
 // SessionHook is the session start hook a member's settings copy carries,
 // so its recorded conversation id follows /clear and /compact.
-func SessionHook(binary string) string { return quote(binary) + " hook session" }
+func SessionHook(binary string) string { return hookCommand(binary, "session") }
