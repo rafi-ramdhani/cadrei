@@ -18,7 +18,7 @@ import (
 // CheckName refuses a project name that could leave its folder.
 func CheckName(name string) error {
 	if !registry.ValidName(name) {
-		return errors.New("a project name may use letters, digits, ., - and _ (no ..)")
+		return errors.New("a project's name can use letters, digits, ., - and _ (but not ..)")
 	}
 	return nil
 }
@@ -29,7 +29,7 @@ func CheckName(name string) error {
 // git) is refused, and every word after the options is passed after --.
 func Clone(repo, dir string) error {
 	if strings.HasPrefix(repo, "-") || strings.HasPrefix(dir, "-") {
-		return fmt.Errorf("could not clone %s: a repo cannot start with -", repo)
+		return fmt.Errorf("couldn't clone %s: a repo can't start with -", Redact(repo))
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err
@@ -44,7 +44,8 @@ func Clone(repo, dir string) error {
 		cmd = exec.Command("git", "clone", "-q", "--", "https://github.com/"+repo+".git", dir)
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("could not clone %s: %s", repo, strings.TrimSpace(string(out)))
+		line, _, _ := strings.Cut(strings.TrimSpace(string(out)), "\n")
+		return fmt.Errorf("couldn't clone %s: %s", Redact(repo), strings.TrimSuffix(strings.TrimPrefix(line, "fatal: "), "."))
 	}
 	return nil
 }
@@ -123,6 +124,58 @@ func plainUser(u *url.Userinfo) bool {
 	return !hasPassword && userRule.MatchString(u.Username())
 }
 
+// Redact takes the secret out of a remote URL before cadrei stores or
+// shows it: all of an http or https URL's user part (a token often goes
+// there, alone or as a password), and an ssh URL's password (its user,
+// like git@, is kept). An scp-style git@host:path has no password and is
+// kept as it is.
+func Redact(repo string) string {
+	u, err := url.Parse(repo)
+	if err != nil {
+		// Git takes URLs Go won't parse (a bare % in a password, say): the
+		// user part goes whole, whatever is in it.
+		return cutUser(repo)
+	}
+	if u.User == nil || u.Host == "" {
+		return repo
+	}
+	_, password := u.User.Password()
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "git+https", "git+http", "ftp", "ftps", "git":
+		u.User = nil
+	case "ssh", "git+ssh", "ssh+git":
+		if !password {
+			return repo
+		}
+		u.User = url.User(u.User.Username())
+	default:
+		// Any other scheme: a password goes, with its user.
+		if !password {
+			return repo
+		}
+		u.User = nil
+	}
+	return u.String()
+}
+
+// cutUser drops what's between a URL's "://" and the last "@" before its
+// path; anything else is kept as it is.
+func cutUser(repo string) string {
+	scheme, rest, ok := strings.Cut(repo, "://")
+	if !ok {
+		return repo
+	}
+	host := rest
+	if i := strings.Index(rest, "/"); i >= 0 {
+		host = rest[:i]
+	}
+	at := strings.LastIndex(host, "@")
+	if at < 0 {
+		return repo
+	}
+	return scheme + "://" + rest[at+1:]
+}
+
 // OwnerRepo reduces a repository spelling (owner/repo, an https or ssh URL,
 // with or without .git) to owner/repo, lower case, for comparing.
 func OwnerRepo(repo string) string {
@@ -160,7 +213,7 @@ type Spec struct {
 // Added says what Add or Link did.
 type Added struct {
 	Dir   string // the project's folder
-	Where string // "cloned to <dir>", "already at <dir>" or "linked at <dir>"
+	Where string // "cloned", "already" or "linked"
 	Notes []string
 }
 
@@ -178,25 +231,25 @@ func Add(c cadreis.Cadrei, s Spec, projectsDir string, protected []string) (Adde
 		return a, err
 	}
 	if reg.Get(s.Name) != nil {
-		return a, fmt.Errorf("project '%s' is already in projects.yaml", s.Name)
+		return a, fmt.Errorf("%s is already a project in this crew", s.Name)
 	}
 	dir := filepath.Join(projectsDir, s.Name)
 	if why := DestRefusal(paths.Real(dir), protected); why != "" {
-		return a, fmt.Errorf("cannot clone into %s: %s", dir, why)
+		return a, fmt.Errorf("can't clone into %s: %s", cadreis.Tilde(dir), why)
 	}
 	if st, err := os.Stat(dir); err == nil && st.IsDir() {
 		if !SameRepo(Origin(dir), s.Repo) {
-			return a, fmt.Errorf("%s exists and is not a clone of %s; link it with cadrei project add %s --path %s, or choose another name", dir, s.Repo, s.Name, dir)
+			return a, fmt.Errorf("%s exists and isn't a clone of %s. Link it with cadrei project add %s --path %s, or pick another name", cadreis.Tilde(dir), Redact(s.Repo), s.Name, cadreis.Tilde(dir))
 		}
-		a.Where = "already at " + dir
+		a.Where = "already"
 	} else {
 		if err := Clone(s.Repo, dir); err != nil {
 			return a, err
 		}
-		a.Where = "cloned to " + dir
+		a.Where = "cloned"
 	}
 	a.Dir = dir
-	reg.Add(s.Name, registry.Field{Key: "repo", Value: s.Repo}, registry.Field{Key: "team", Value: s.Team},
+	reg.Add(s.Name, registry.Field{Key: "repo", Value: Redact(s.Repo)}, registry.Field{Key: "team", Value: s.Team},
 		registry.Field{Key: "about", Value: s.About})
 	if err := reg.Save(c.Registry()); err != nil {
 		return a, err
@@ -204,10 +257,8 @@ func Add(c cadreis.Cadrei, s Spec, projectsDir string, protected []string) (Adde
 	if err := cadreis.SetPlace(c, s.Name, dir); err != nil {
 		return a, err
 	}
-	note, err := cadreis.Commit(c.Path, "Add project "+s.Name, "projects.yaml")
-	if note != "" {
-		a.Notes = append(a.Notes, note)
-	}
+	// Without a git identity the change stays uncommitted, silently (D3).
+	_, err = cadreis.Commit(c.Path, "Add project "+s.Name, "projects.yaml")
 	return a, err
 }
 
@@ -246,28 +297,28 @@ func DestRefusal(dir string, protected []string) string {
 	switch {
 	case dir == "/":
 		return "it is the root folder"
-	case dir == home:
+	case same(dir, home):
 		return "it is your home folder"
-	case paths.Within(dir, root):
+	case paths.Inside(dir, root):
 		return "it is inside ~/.cadrei, where cadrei keeps its own files"
-	case paths.Within(root, dir):
+	case paths.Holds(dir, root):
 		return "it contains ~/.cadrei"
 	}
 	for _, p := range protected {
 		switch {
-		case paths.Within(dir, p):
+		case paths.Inside(dir, p):
 			return "it is inside " + cadreis.Tilde(p)
-		case paths.Within(p, dir):
+		case paths.Holds(dir, p):
 			return "it contains " + cadreis.Tilde(p)
 		}
 	}
 	list, _ := cadreis.List()
 	for _, c := range list {
-		if paths.Within(c.Path, dir) {
-			return "it contains the cadrei " + c.Name
+		if paths.Holds(dir, c.Path) {
+			return "it holds the crew " + c.Name
 		}
-		if paths.Within(dir, c.Path) {
-			return "it is inside the cadrei " + c.Name
+		if paths.Inside(dir, c.Path) {
+			return "it's inside the crew " + c.Name
 		}
 	}
 	return ""
@@ -284,27 +335,27 @@ func Link(c cadreis.Cadrei, s Spec, dir string, protected []string) (Added, erro
 	}
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
-		return a, fmt.Errorf("%s is not a folder", dir)
+		return a, fmt.Errorf("%s isn't a folder", cadreis.Tilde(dir))
 	}
 	phys := paths.Real(dir)
 	if why := LinkRefusal(phys, protected); why != "" {
-		return a, fmt.Errorf("%s cannot be linked: %s", dir, why)
+		return a, fmt.Errorf("%s can't be linked: %s", cadreis.Tilde(dir), why)
 	}
 	reg, err := registry.Load(c.Registry())
 	if err != nil {
 		return a, err
 	}
 	if reg.Get(s.Name) != nil {
-		return a, fmt.Errorf("project '%s' is already in projects.yaml", s.Name)
+		return a, fmt.Errorf("%s is already a project in this crew", s.Name)
 	}
 	for _, e := range reg.Entries() {
 		if d := cadreis.ProjectDir(c, e); d != "" && paths.Real(d) == phys {
-			return a, fmt.Errorf("%s is already linked as %s", dir, e.Name)
+			return a, fmt.Errorf("%s is already linked as %s", cadreis.Tilde(dir), e.Name)
 		}
 	}
 	for _, other := range cadreis.Linking(phys) {
 		if other.Path != c.Path {
-			a.Notes = append(a.Notes, "note: the cadrei "+other.Name+" links this folder too")
+			a.Notes = append(a.Notes, "The crew "+other.Name+" links this folder too.")
 		}
 	}
 	repo := s.Repo
@@ -312,9 +363,9 @@ func Link(c cadreis.Cadrei, s Spec, dir string, protected []string) (Added, erro
 		repo = Origin(phys)
 	}
 	if repo == "" {
-		a.Notes = append(a.Notes, "note: it has no repo, so cadrei project sync cannot clone it on another machine")
+		a.Notes = append(a.Notes, s.Name+" has no GitHub repo, so it won't come along when you restore on another machine.")
 	}
-	reg.Add(s.Name, registry.Field{Key: "repo", Value: repo}, registry.Field{Key: "team", Value: s.Team},
+	reg.Add(s.Name, registry.Field{Key: "repo", Value: Redact(repo)}, registry.Field{Key: "team", Value: s.Team},
 		registry.Field{Key: "about", Value: s.About})
 	if err := reg.Save(c.Registry()); err != nil {
 		return a, err
@@ -322,11 +373,9 @@ func Link(c cadreis.Cadrei, s Spec, dir string, protected []string) (Added, erro
 	if err := cadreis.SetPlace(c, s.Name, phys); err != nil {
 		return a, err
 	}
-	note, err := cadreis.Commit(c.Path, "Add project "+s.Name, "projects.yaml")
-	if note != "" {
-		a.Notes = append(a.Notes, note)
-	}
-	a.Dir, a.Where = phys, "linked at "+phys
+	// Without a git identity the change stays uncommitted, silently (D3).
+	_, err = cadreis.Commit(c.Path, "Add project "+s.Name, "projects.yaml")
+	a.Dir, a.Where = phys, "linked"
 	return a, err
 }
 
@@ -356,7 +405,7 @@ func Sync(c cadreis.Cadrei, projectsDir string, protected []string) ([]SyncResul
 			// Entries hold valid names only; a clone still never goes
 			// anywhere but straight into the projects folder.
 			if filepath.Dir(d) != filepath.Clean(projectsDir) {
-				out = append(out, SyncResult{Name: e.Name, State: "failed", Err: fmt.Errorf("not cloned: %s is not a folder name", e.Name)})
+				out = append(out, SyncResult{Name: e.Name, State: "failed", Err: fmt.Errorf("%s can't be a folder name", e.Name)})
 				continue
 			}
 		}
@@ -372,17 +421,17 @@ func Sync(c cadreis.Cadrei, projectsDir string, protected []string) ([]SyncResul
 		case d == "":
 			r.State = "no folder"
 		case DestRefusal(paths.Real(d), protected) != "":
-			r.State, r.Err = "failed", fmt.Errorf("not cloned into %s: %s", d, DestRefusal(paths.Real(d), protected))
+			r.State, r.Err = "failed", fmt.Errorf("it can't go into %s: %s", cadreis.Tilde(d), DestRefusal(paths.Real(d), protected))
 		case statErr == nil && st.IsDir():
 			if !SameRepo(Origin(d), e.Get("repo")) {
-				r.State, r.Err = "failed", fmt.Errorf("%s exists and is not a clone of %s; link the project's folder with cadrei project link %s <dir>", d, e.Get("repo"), e.Name)
+				r.State, r.Err = "failed", fmt.Errorf("%s exists and isn't a clone of %s. Link the project's folder with cadrei project link %s <folder>", cadreis.Tilde(d), Redact(e.Get("repo")), e.Name)
 				break
 			}
 			r.State = "found"
 		default:
 			parent := filepath.Dir(paths.Real(d))
 			if _, err := os.Stat(parent); err != nil && !paths.Within(parent, paths.Home()) {
-				r.State, r.Err = "failed", fmt.Errorf("its parent folder %s is missing and outside your home folder; create it or link the project elsewhere", parent)
+				r.State, r.Err = "failed", fmt.Errorf("its parent folder %s is missing and outside your home folder. Create it, or link the project somewhere else", parent)
 				break
 			}
 			if err := Clone(e.Get("repo"), d); err != nil {
@@ -412,22 +461,22 @@ func Relink(c cadreis.Cadrei, name, dir string, protected []string) (string, err
 	}
 	e := reg.Get(name)
 	if e == nil {
-		return "", fmt.Errorf("'%s' is not a registered project (see cadrei ls)", name)
+		return "", fmt.Errorf("there's no project called %s in this crew. See your projects with cadrei ls", name)
 	}
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
-		return "", fmt.Errorf("%s is not a folder", dir)
+		return "", fmt.Errorf("%s isn't a folder", cadreis.Tilde(dir))
 	}
 	phys := paths.Real(dir)
 	if why := LinkRefusal(phys, protected); why != "" {
-		return "", fmt.Errorf("%s cannot be linked: %s", dir, why)
+		return "", fmt.Errorf("%s can't be linked: %s", cadreis.Tilde(dir), why)
 	}
 	if repo, origin := e.Get("repo"), Origin(phys); repo != "" && origin != "" && !SameRepo(origin, repo) {
-		return "", fmt.Errorf("%s is a clone of %s, not of %s", dir, origin, repo)
+		return "", fmt.Errorf("%s is a clone of %s, not of %s", cadreis.Tilde(dir), Redact(origin), Redact(repo))
 	}
 	for _, other := range reg.Entries() {
 		if other.Name != name && cadreis.ProjectDir(c, other) != "" && paths.Real(cadreis.ProjectDir(c, other)) == phys {
-			return "", fmt.Errorf("%s is already linked as %s", dir, other.Name)
+			return "", fmt.Errorf("%s is already linked as %s", cadreis.Tilde(dir), other.Name)
 		}
 	}
 	return phys, cadreis.SetPlace(c, name, phys)
@@ -443,7 +492,7 @@ func Unlink(c cadreis.Cadrei, name string) (dir string, notes []string, err erro
 	}
 	e := reg.Get(name)
 	if e == nil {
-		return "", nil, fmt.Errorf("'%s' is not a registered project (see cadrei ls)", name)
+		return "", nil, fmt.Errorf("there's no project called %s in this crew. See your projects with cadrei ls", name)
 	}
 	dir = cadreis.ProjectDir(c, e)
 	reg.Remove(name)
@@ -453,10 +502,8 @@ func Unlink(c cadreis.Cadrei, name string) (dir string, notes []string, err erro
 	if err := cadreis.SetPlace(c, name, ""); err != nil {
 		return "", nil, err
 	}
-	note, err := cadreis.Commit(c.Path, "Remove project "+name, "projects.yaml")
-	if note != "" {
-		notes = append(notes, note)
-	}
+	// Without a git identity the change stays uncommitted, silently (D3).
+	_, err = cadreis.Commit(c.Path, "Remove project "+name, "projects.yaml")
 	return dir, notes, err
 }
 

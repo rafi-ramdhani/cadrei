@@ -1,0 +1,27 @@
+
+  cadrei, development build
+  A team of Claude Code helpers you lead from one chat.
+  ~/code/my-app
+
+  + Claude Code 2.1.300 (logged in), git and tmux are ready
+
+  Here's the plan
+  - Create your crew main in ~/.cadrei/main, with an engineer and a reviewer
+  - Trust it in Claude Code
+    Your orchestrator opens there without Claude Code asking first.
+  - Link cadrei's instructions into Claude Code (~/.claude/skills/cadrei)
+  - Open your orchestrator in tmux (recommended)
+    It keeps going if you close this window. Ctrl-b s switch, Ctrl-b d leave
+
+  ! my-app has its own Claude Code settings (.claude/settings.json), which would
+    run for your team once it's trusted. So it's left out.
+
+  Press Enter to set this up.
+  Or press a to add it, p for the plain terminal, r to restore, q to quit.
+
+  + Created your crew main
+  + Trusted it in Claude Code
+  + Linked cadrei's instructions into Claude Code
+
+  Opening your orchestrator here. Your team still runs in tmux, and you can
+  watch any of them with cadrei attach.

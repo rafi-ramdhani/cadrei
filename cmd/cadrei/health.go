@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -20,7 +19,6 @@ import (
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
-	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
 // A finding of the health check: a problem, and, when cadrei can fix it, the
@@ -31,6 +29,8 @@ type finding struct {
 	yes      bool         // the answer when the user just presses Enter
 	fix      func() error // makes the fix
 	declined func()       // remembers a no, when it should not be asked again
+	failed   bool         // shown with the failed mark, though cadrei goes on
+	screen   bool         // the first run's screen already said it
 }
 
 // ensureFramework keeps ~/.cadrei/framework exactly as this binary
@@ -40,12 +40,12 @@ type finding struct {
 func (e *env) ensureFramework() []finding {
 	restored, err := framework.Sync(cadrei.Assets, version)
 	if err != nil {
-		return []finding{{Problem: runtime.Problem{What: "could not write cadrei's skill to " + display(framework.Dir()) + ": " + err.Error(),
-			Fix: "check that folder's permissions"}}}
+		return []finding{{Problem: runtime.Problem{What: "Couldn't write cadrei's instructions to " + unbroken(display(framework.Dir())) + ": " + strings.TrimSuffix(err.Error(), ".") + ".",
+			Fix: "Check that folder's permissions."}, failed: true}}
 	}
 	if len(restored) > 0 {
-		return []finding{{Problem: runtime.Problem{What: "the cadrei skill was changed outside cadrei (" + strings.Join(restored, ", ") + "); cadrei restored it",
-			Fix: "nothing to do; if a member's session made the change, look at what it was doing"}}}
+		return []finding{{Problem: runtime.Problem{What: "Something changed cadrei's instructions outside cadrei (" + strings.Join(restored, ", ") + "). They're put back now.",
+			Fix: "If a team member did it, check what it was working on."}}}
 	}
 	return nil
 }
@@ -63,24 +63,25 @@ func (e *env) findings(rt runtime.Runtime, full bool) []finding {
 	for _, p := range rt.Health(full, dirs) {
 		out = append(out, finding{Problem: p})
 	}
-	if _, err := exec.LookPath("git"); err != nil {
-		out = append(out, finding{Problem: runtime.Problem{What: "git is not installed", Fatal: true,
-			Fix: "on macOS: xcode-select --install; on Linux: install git with your package manager"}})
+	// The same checks as the first run's screen (tools.go); tmux's version
+	// only in the full check.
+	if c := gitCheck(); c.mark == markFail {
+		out = append(out, finding{Problem: runtime.Problem{What: c.what, Fatal: true, Fix: c.fix}, screen: true})
 	}
-	if _, err := exec.LookPath("tmux"); err != nil {
-		out = append(out, finding{Problem: runtime.Problem{What: "tmux is not installed, so members cannot start",
-			Fix: "brew install tmux"}})
-	} else if full {
-		major, minor, err := session.Default().Version()
-		if err == nil && (major < 3 || (major == 3 && minor < 2)) {
-			out = append(out, finding{Problem: runtime.Problem{What: fmt.Sprintf("tmux %d.%d is too old for members; cadrei needs 3.2 or newer", major, minor),
-				Fix: "brew upgrade tmux"}})
+	if _, err := exec.LookPath("tmux"); err != nil || full {
+		if c := tmuxCheck(); c.mark != markDone {
+			out = append(out, finding{Problem: runtime.Problem{What: c.what, Fix: c.fix}, failed: c.mark == markFail, screen: true})
 		}
 	}
 	if err := e.hookPlaced(framework.Binary()); err != nil {
 		out = append(out, finding{Problem: runtime.Problem{
-			What: "members' conversations are resumed from their start only, not after /clear or /compact: the session hook needs cadrei in a safe place, and " + err.Error(),
-			Fix:  "install cadrei with Homebrew or install.sh and run it from there"}})
+			What: "Team members pick up where they left off only from their start, not after /clear or /compact.",
+			Fix:  "Install cadrei with Homebrew or install.sh to fix this."}, screen: true})
+	}
+	// The full identity row is for cadrei --check only (D3).
+	if e.checking && !hasIdentity(wdOrHome()) {
+		out = append(out, finding{Problem: runtime.Problem{What: "Git has no name or email set, so cadrei can't save its history.",
+			Fix: "Set them with:\n" + cmd(`git config --global user.name "Your Name"`) + "\n" + cmd(`git config --global user.email "you@example.com"`)}})
 	}
 	out = append(out, e.guardFindings()...)
 	out = append(out, skillFindings(rt)...)
@@ -106,15 +107,15 @@ func (e *env) guardFindings() []finding {
 		if placed != nil {
 			if !backup.Installed(c.Path) {
 				out = append(out, finding{Problem: runtime.Problem{
-					What: "the cadrei " + c.Name + " has no check for credentials before a backup push: " + placed.Error(),
-					Fix:  "install cadrei with Homebrew or install.sh and run it from there"}})
+					What: c.Name + " has no check for passwords and keys before a backup.",
+					Fix:  "Install cadrei with Homebrew or install.sh to add it."}, screen: true})
 			}
 			continue
 		}
 		if _, err := backup.Install(c.Path, framework.Binary()); errors.Is(err, backup.ErrForeign) {
 			out = append(out, finding{Problem: runtime.Problem{
-				What: "the cadrei " + c.Name + " has a pre-push git hook of its own, so cadrei's check for credentials before a backup push does not run",
-				Fix:  "add this line to " + display(c.Path) + "/.git/hooks/pre-push: " + framework.Binary() + ` hook pre-push "$@" || exit 1`}})
+				What: c.Name + " has its own git pre-push hook, so cadrei's check for passwords and keys before a backup doesn't run.",
+				Fix:  "Add this line to " + unbroken(display(c.Path)+"/.git/hooks/pre-push") + ": " + cmd(display(framework.Binary())+` hook pre-push "$@" || exit 1`)}})
 		}
 	}
 	return out
@@ -132,19 +133,19 @@ func skillFindings(rt runtime.Runtime) []finding {
 		if cadreis.GetState(cadreis.SkillKept) == "missing" {
 			return nil
 		}
-		return []finding{{Problem: runtime.Problem{What: "the cadrei skill is not linked into " + rt.Title() + " (" + display(ops.Path()) + ")",
-			Fix: "run cadrei in a terminal and answer yes"}, ask: "Link the cadrei skill into " + rt.Title() + "?", yes: true, fix: link, declined: kept("missing")}}
+		return []finding{{Problem: runtime.Problem{What: "cadrei's instructions aren't linked into " + rt.Title() + ".",
+			Fix: "Run " + cmd("cadrei") + " in a terminal and answer yes."}, ask: "Link them now?", yes: true, fix: link, declined: kept("missing")}}
 	case errors.Is(err, runtime.ErrNotLink):
-		return []finding{{Problem: runtime.Problem{What: display(ops.Path()) + " is not a link to cadrei's skill",
-			Fix: "move it aside, then run cadrei again"}}}
+		return []finding{{Problem: runtime.Problem{What: unbroken(display(ops.Path())) + " is a folder, not cadrei's link.",
+			Fix: "Move it somewhere else, then run " + cmd("cadrei") + " again."}}}
 	case err != nil:
-		return []finding{{Problem: runtime.Problem{What: "cannot read " + display(ops.Path()) + ": " + err.Error(), Fix: "check the folder's permissions"}}}
+		return []finding{{Problem: runtime.Problem{What: "Couldn't read " + unbroken(display(ops.Path())) + ": " + strings.TrimSuffix(err.Error(), ".") + ".", Fix: "Check that folder's permissions."}}}
 	case paths.Real(target) != paths.Real(want):
 		if cadreis.GetState(cadreis.SkillKept) == target {
 			return nil
 		}
-		return []finding{{Problem: runtime.Problem{What: "the cadrei skill links to " + display(target) + ", not to this cadrei program's (" + display(want) + ")",
-			Fix: "run cadrei in a terminal and answer yes"}, ask: "Link the skill to this cadrei program?", yes: true, fix: link, declined: kept(target)}}
+		return []finding{{Problem: runtime.Problem{What: "cadrei's instructions link points at another cadrei program (" + unbroken(display(target)) + ").",
+			Fix: "Run " + cmd("cadrei") + " in a terminal and answer yes."}, ask: "Point it at this one?", yes: true, fix: link, declined: kept(target)}}
 	}
 	return nil
 }
@@ -165,9 +166,9 @@ func oldLinkFindings(rt runtime.Runtime) []finding {
 			continue
 		}
 		link := l.link
-		out = append(out, finding{Problem: runtime.Problem{What: cadreis.Tilde(link) + " is a cadre 0.1.x link into its clone at " + display(clone),
-			Fix: "remove the link (the clone stays): rm " + cadreis.Tilde(link)},
-			ask:      "Remove the link " + cadreis.Tilde(link) + "? The clone stays.",
+		out = append(out, finding{Problem: runtime.Problem{What: unbroken(cadreis.Tilde(link)) + " is a leftover link from cadre 0.1.x.",
+			Fix: "Remove it with " + cmd("rm "+cadreis.Tilde(link)) + ". The old folder (" + unbroken(display(clone)) + ") stays."},
+			ask:      "Remove it? The old folder stays.",
 			fix:      func() error { return os.Remove(link) },
 			declined: func() { cadreis.SetState(cadreis.OldLinkKept(link), "yes") }})
 	}
@@ -210,12 +211,16 @@ func (e *env) hookFindings(rt runtime.Runtime) []finding {
 	hooks := rt.Hooks()
 	progs, err := hooks.Find()
 	if err != nil {
-		return []finding{{Problem: runtime.Problem{What: "cannot read the orchestrator hook in " + display(hooks.File()) + ": " + err.Error(),
-			Fix: "fix the file, or remove cadrei's hook from it"}}}
+		return []finding{{Problem: runtime.Problem{What: "Couldn't read the every-chat hook in " + unbroken(display(hooks.File())) + ": " + strings.TrimSuffix(err.Error(), ".") + ".",
+			Fix: "Fix that file, or remove cadrei's hook from it."}}}
 	}
 	bin := framework.Binary()
 	placed := e.hookPlaced(bin)
 	var out []finding
+	if old, err := hooks.Outdated(bin); err == nil && old && placed == nil {
+		out = append(out, finding{Problem: runtime.Problem{What: "The every-chat hook is written in an older form, which can show an error in a chat after cadrei is removed or an older one replaces it.",
+			Fix: "Run " + cmd("cadrei") + " in a terminal and answer yes."}, ask: "Update it?", yes: true, fix: func() error { _, err := hooks.Set(bin); return err }})
+	}
 	for _, p := range progs {
 		if paths.Real(p) == paths.Real(bin) {
 			continue
@@ -224,12 +229,12 @@ func (e *env) hookFindings(rt runtime.Runtime) []finding {
 		if cadreis.GetState(cadreis.HookKept) == pair {
 			continue
 		}
-		f := finding{Problem: runtime.Problem{What: "the orchestrator hook runs " + display(p) + ", not this cadrei program (" + cadreis.Tilde(bin) + ")",
-			Fix: "run cadrei in a terminal and answer yes"}}
+		f := finding{Problem: runtime.Problem{What: "The every-chat hook runs another cadrei program (" + unbroken(display(p)) + ").",
+			Fix: "Run " + cmd("cadrei") + " in a terminal and answer yes."}}
 		if placed != nil {
-			f.Fix = "install cadrei (with Homebrew or install.sh) and run it from there; " + placed.Error()
+			f.Fix = "Install cadrei with Homebrew or install.sh, then run it from there."
 		} else {
-			f.ask = "Point the hook at this cadrei program?"
+			f.ask = "Point it at this one?"
 			f.fix = func() error { _, err := hooks.Set(bin); return err }
 			f.declined = func() { cadreis.SetState(cadreis.HookKept, pair) }
 		}
@@ -249,8 +254,8 @@ func pathFinding() (finding, bool) {
 	if err != nil || paths.Real(first) == paths.Real(exe) {
 		return finding{}, false
 	}
-	return finding{Problem: runtime.Problem{What: "the cadrei first on your PATH is " + display(first) + ", not this one (" + display(exe) + ")",
-		Fix: "remove " + display(first) + ", or put " + display(filepath.Dir(exe)) + " before it in PATH"}}, true
+	return finding{Problem: runtime.Problem{What: "Another cadrei comes first on your PATH (" + unbroken(display(first)) + ").",
+		Fix: "Remove it, or put " + unbroken(display(filepath.Dir(exe))) + " earlier in your PATH."}, screen: true}, true
 }
 
 // health runs the health check, silent unless something is wrong: fast
@@ -263,21 +268,45 @@ func (e *env) health(rt runtime.Runtime, force bool) (found int, fatal bool) {
 	fast := e.findings(rt, false)
 	key := findingsKey(fast)
 	full := force || cadreis.GetState(cadreis.CheckedVersion) != version || (len(fast) > 0 && cadreis.GetState(cadreis.LastFindings) != key)
+	// Right after a first run, its screen ran the full checks: the quick
+	// ones are all that's left (D3), so the runtime isn't asked again.
+	if e.shown && !force {
+		full = false
+	}
 	if full {
 		list = append(list, e.findings(rt, true)...)
 	} else {
 		list = append(list, fast...)
 	}
+	// On open, findings are part of the screen; --check is command output.
+	indent := "  "
+	if force {
+		indent = ""
+	}
+	styled := streamStyled(e.stderr)
+	if e.shown {
+		kept := list[:0]
+		for _, f := range list {
+			if !f.screen {
+				kept = append(kept, f)
+			}
+		}
+		list = kept
+	}
 	for _, f := range list {
-		fmt.Fprintf(e.stderr, "problem: %s\n", f.What)
+		m := markWarn
+		if f.Fatal || f.failed {
+			m = markFail
+		}
+		write(e.stderr, f.What, indent+m.text(styled)+" ", indent+"  ")
 		// Once the input has ended, nothing more is asked, and the end is
 		// not remembered as a no: the fix is printed instead.
 		if f.ask != "" && e.interactive() && !e.eof {
-			if e.yes(f.ask, f.yes) {
+			if e.yes(indent+"  "+f.ask, f.yes) {
 				if err := f.fix(); err != nil {
-					fmt.Fprintf(e.stderr, "  could not fix it: %s\n", err)
+					write(e.stderr, "Couldn't fix it: "+strings.TrimSuffix(err.Error(), ".")+".", indent+markFail.text(styled)+" ", indent+"  ")
 				} else {
-					fmt.Fprintln(e.stderr, "  fixed")
+					write(e.stderr, "Fixed", indent+markDone.text(styled)+" ", indent+"  ")
 				}
 				continue
 			}
@@ -288,7 +317,11 @@ func (e *env) health(rt runtime.Runtime, force bool) (found int, fatal bool) {
 				continue
 			}
 		}
-		fmt.Fprintf(e.stderr, "  fix: %s\n", f.Fix)
+		for _, l := range strings.Split(f.Fix, "\n") {
+			if l != "" {
+				write(e.stderr, l, indent+"  ", indent+"  ")
+			}
+		}
 		fatal = fatal || f.Fatal
 	}
 	cadreis.SetState(cadreis.LastFindings, key)
@@ -332,35 +365,45 @@ func (e *env) yes(question string, def bool) bool {
 	return false
 }
 
-// missingProjects says, as information, which of the cadrei's projects have
-// no folder on this machine.
-func (e *env) missingProjects(r *cadreis.Resolved) {
-	var names []string
-	for _, p := range projectsOf(r.Cadrei) {
-		if !p.Cloned {
-			names = append(names, p.Name)
-		}
-	}
-	if len(names) > 0 {
-		e.say("Not on this machine yet: %s (ask the orchestrator to clone or link them).", strings.Join(names, ", "))
-	}
-}
-
 // runCheck is cadrei --check: the full health check, with its fixes.
 func runCheck(e *env) int {
 	if len(e.args) > 0 {
-		return e.fail("usage: cadrei --check")
+		return e.failWith("Use " + cmd("cadrei --check") + ", with nothing after it.")
 	}
+	e.checking = true
 	rt, err := runtime.Get(runtimeName())
 	if err != nil {
 		return e.fail("%s", err)
 	}
 	found, fatal := e.health(rt, true)
+	if r, err := cadreis.Resolve(wdOrHome(), nil); err == nil {
+		if keys := unknownConf(r.Path); len(keys) > 0 {
+			e.warn("", "cadrei.conf has keys this crew doesn't use: "+strings.Join(keys, ", ")+". They're kept as they are.")
+			found++
+		}
+		styled := streamStyled(e.stderr)
+		// A warning, not a failure: cadrei goes on, and up refuses them.
+		for _, p := range choiceProblems(rt, r.Path) {
+			write(e.stderr, p.what, markWarn.text(styled)+" ", "  ")
+			for _, l := range p.fix {
+				write(e.stderr, l, "  ", "  ")
+			}
+			found++
+		}
+	}
 	if found == 0 {
-		e.say("cadrei %s: everything is in order", version)
+		e.note("", markDone, "Everything looks good. (cadrei "+version+")")
 	}
 	if fatal {
 		return 1
 	}
 	return 0
+}
+
+// wdOrHome is the current folder, or the home folder when it's gone.
+func wdOrHome() string {
+	if wd, err := paths.Getwd(); err == nil {
+		return wd
+	}
+	return paths.Home()
 }

@@ -65,16 +65,22 @@ func must(t *testing.T, args ...string) string {
 func refused(t *testing.T, want string, args ...string) {
 	t.Helper()
 	code, out, errOut := call(args...)
-	if code == 0 || !strings.Contains(errOut, want) {
+	if code == 0 || !strings.Contains(flat(errOut), flat(want)) {
 		t.Errorf("cadrei %v: exit %d, %q %q; want a refusal with %q", args, code, out, errOut, want)
 	}
 }
 
-func TestInitAndUse(t *testing.T) {
+// Acceptance 82 and T9: cadrei new makes a crew and trusts its folder;
+// init is its old name.
+func TestNewAndUse(t *testing.T) {
 	home := sandbox(t)
-	out := must(t, "init", "work")
-	if !strings.Contains(out, "created "+home+"/.cadrei/work") || !strings.Contains(out, "work is the default cadrei") {
-		t.Errorf("init work: %q", out)
+	os.WriteFile(home+"/.claude.json", []byte("{}\n"), 0o600)
+	out := must(t, "new", "work")
+	if out != "+ Created your crew work in ~/.cadrei/work\nwork is your default crew now.\n" {
+		t.Errorf("new work: %q", out)
+	}
+	if s := readFile(t, home+"/.claude.json"); !strings.Contains(s, home+"/.cadrei/work") || !strings.Contains(s, `"hasTrustDialogAccepted":true`) {
+		t.Errorf("the crew isn't trusted: %s", s)
 	}
 	if b, _ := os.ReadFile(home + "/.cadrei/work/README.md"); !strings.HasPrefix(string(b), "# work\n") {
 		t.Error("the template was not written from the embedded assets")
@@ -84,20 +90,30 @@ func TestInitAndUse(t *testing.T) {
 	if len(roles) != 2 || filepath.Base(roles[0]) != "engineer.md" || filepath.Base(roles[1]) != "reviewer.md" {
 		t.Errorf("starter team %v", roles)
 	}
+	before := readFile(t, home+"/.claude.json")
+	refused(t, "already exists", "new", "work")
+	if readFile(t, home+"/.claude.json") != before {
+		t.Error("a crew that exists was trusted again")
+	}
 	out = must(t, "init", "life")
-	if !strings.Contains(out, "default cadrei stays work") {
+	if !strings.Contains(out, "+ Created your crew life in ~/.cadrei/life") || !strings.Contains(out, "Your default crew stays work. Switch with cadrei use life.") {
 		t.Errorf("init life: %q", out)
 	}
-	refused(t, "reserved", "init", "framework")
+	refused(t, "framework is kept for cadrei's own files", "new", "framework")
 	refused(t, "already exists", "init", "work")
-	must(t, "use", "life")
+	if out := must(t, "help", "advanced"); !strings.Contains(out, "\nCrews\n  cadrei new <name> ") || strings.Contains(out, "cadrei init") {
+		t.Errorf("help advanced:\n%s", out)
+	}
+	if out := must(t, "use", "life"); out != "+ life is your default crew now.\n" {
+		t.Errorf("use: %q", out)
+	}
 	if b, _ := os.ReadFile(home + "/.cadrei/config/default"); strings.TrimSpace(string(b)) != "life" {
 		t.Errorf("default %q", b)
 	}
-	refused(t, "no cadrei named nope", "use", "nope")
+	refused(t, "there's no crew called nope in ~/.cadrei. See your crews with cadrei ls --all", "use", "nope")
 	t.Setenv("CADREI_MEMBER", "x")
-	for _, args := range [][]string{{"init", "x"}, {"use", "work"}} {
-		refused(t, "refused for members: members cannot create or switch cadreis", args...)
+	for _, args := range [][]string{{"new", "x"}, {"init", "x"}, {"use", "work"}} {
+		refused(t, "team members can't create or switch crews", args...)
 	}
 }
 
@@ -106,12 +122,12 @@ func TestInitAndUseTakeOnlyAName(t *testing.T) {
 	home := sandbox(t)
 	parent := filepath.Join(home, "Documents")
 	os.MkdirAll(parent, 0o755)
-	refused(t, "usage: cadrei init <name>", "init", "visible", parent)
+	refused(t, "use cadrei new <name>.", "init", "visible", parent)
 	if _, err := os.Stat(parent + "/visible"); err == nil {
 		t.Error("a cadrei was made outside ~/.cadrei")
 	}
 	os.MkdirAll(home+"/elsewhere/other/members", 0o755)
-	refused(t, "no cadrei named", "use", home+"/elsewhere/other")
+	refused(t, "there's no crew called", "use", home+"/elsewhere/other")
 }
 
 func TestProjectPath(t *testing.T) {
@@ -123,7 +139,7 @@ func TestProjectPath(t *testing.T) {
 		t.Errorf("project path: %q", out)
 	}
 	refused(t, "is missing: ~/Developer/gone is gone", "project", "path", "gone")
-	refused(t, "is not a registered project or a folder", "project", "path", "nope")
+	refused(t, "there's no project called nope in this crew, and no folder by that name.", "project", "path", "nope")
 	// A project of the cadrei resolves the cadrei from inside it.
 	t.Chdir(home + "/Developer/app")
 	if out := must(t, "project", "path", "app"); strings.TrimSpace(out) != home+"/Developer/app" {
@@ -167,12 +183,13 @@ func TestA01CadreIsLeftAsItIs(t *testing.T) {
 	before := snapshot(t, old) + snapshot(t, home+"/.config/cadre")
 	// The first run points to the bring-in.
 	ttyForTests = true
-	code, out, errOut := callIn("new\nwork\nn\nn\n")
+	os.RemoveAll(home + "/.cadrei")
+	code, out, errOut := callIn("p\n")
 	ttyForTests = false
-	if code != 0 || !strings.Contains(out, "You have a cadre from 0.1.x at ~/Documents/demo. To bring it in, tell the orchestrator: bring in my old cadre from ~/Documents/demo.") {
+	if code != 0 || !strings.Contains(flat(out), "! You have a cadre from 0.1.x at ~/Documents/demo. To bring it in, tell your orchestrator: bring in my old cadre from ~/Documents/demo") {
 		t.Errorf("first run: %d\n%s%s", code, out, errOut)
 	}
-	if cadreis.Default() != "work" {
+	if cadreis.Default() != "main" {
 		t.Errorf("default %q", cadreis.Default())
 	}
 	for _, args := range [][]string{{"ls"}, {"ls", "--all"}, {"--check"}, {"project", "dir", "~/Code"}} {
@@ -182,14 +199,14 @@ func TestA01CadreIsLeftAsItIs(t *testing.T) {
 	refused(t, hint, "project", "add", "demo", "--path", old)
 	must(t, "project", "add", "app", "--path", old+"/projects/app", "--no-trust")
 	refused(t, hint, "project", "link", "app", old)
-	register(t, home, "work", "app:\n  repo: "+repo+"\n  path: "+old+"\n")
-	if out := must(t, "project", "trust", "app"); !strings.Contains(out, "app: not trusted, "+hint) {
+	register(t, home, "main", "app:\n  repo: "+repo+"\n  path: "+old+"\n")
+	if out := must(t, "project", "trust", "app"); !strings.Contains(flat(out), "! app isn't trusted in Claude Code: "+hint) {
 		t.Errorf("trust: %q", out)
 	}
 	if after := snapshot(t, old) + snapshot(t, home+"/.config/cadre"); after != before {
 		t.Error("the 0.1.x cadre or ~/.config/cadre changed")
 	}
-	if code, _, errOut := call("migrate"); code != 1 || !strings.Contains(errOut, "unknown command 'migrate'") {
+	if code, _, errOut := call("migrate"); code != 1 || !strings.Contains(errOut, "there's no command migrate") {
 		t.Errorf("migrate: %d %q", code, errOut)
 	}
 }
@@ -224,11 +241,10 @@ func TestCutConfigKeysAreNamed(t *testing.T) {
 	must(t, "init", "work")
 	os.WriteFile(home+"/.cadrei/work/cadrei.conf", []byte("PERMISSION_MODE=default\nRUNTIME=codex\nORCHESTRATOR_TMUX=yes\n"), 0o644)
 	_, _, errOut := call("ls")
-	for _, want := range []string{"cadrei.conf sets RUNTIME, which cadrei no longer reads: there is one runtime",
-		"cadrei.conf sets ORCHESTRATOR_TMUX, which cadrei no longer reads: open the orchestrator in tmux with cadrei --tmux"} {
-		if !strings.Contains(errOut, want) {
-			t.Errorf("no %q in %q", want, errOut)
-		}
+	// Acceptance 21: the old tmux key points at the new way.
+	// ORCHESTRATOR_TMUX is read again, as a fallback: no warning.
+	if want := "! cadrei.conf sets RUNTIME, which cadrei doesn't read anymore.\n  There's one runtime, so there's nothing to choose.\n"; errOut != want {
+		t.Errorf("%q, want %q", errOut, want)
 	}
 }
 
@@ -238,13 +254,23 @@ func TestTheOldMemberVariableStillCounts(t *testing.T) {
 	sandbox(t)
 	must(t, "init", "work")
 	t.Setenv("CADRE_PERSONA", "work-dev-engineer")
-	refused(t, "refused for members", "allow", "add", "Bash(true)")
-	refused(t, "refused for members", "init", "other")
-	refused(t, "refused for members", "stop", "--all", "--yes")
+	refused(t, "team members can't change what the team is allowed to do", "allow", "add", "Bash(true)")
+	refused(t, "team members can't", "init", "other")
+	refused(t, "team members can't", "stop", "--all", "--yes")
 	if code, out, _ := call("hook", "orchestrator"); code != 0 || out != "" {
 		t.Errorf("the hook spoke in a 0.1.x member session: %q", out)
 	}
 	if env := withoutMember([]string{"A=1", "CADRE_PERSONA=x", "CADREI_MEMBER=y"}); len(env) != 1 || env[0] != "A=1" {
 		t.Errorf("the orchestrator's environment keeps %v", env)
+	}
+}
+
+// Review round 3, the case clash: a crew whose name differs from another
+// only in case isn't made, on any disk.
+func TestNewRefusesACaseOnlyClash(t *testing.T) {
+	sandbox(t)
+	must(t, "new", "dev")
+	if code, _, _ := call("new", "Dev"); code == 0 {
+		t.Error("Dev was made beside dev")
 	}
 }

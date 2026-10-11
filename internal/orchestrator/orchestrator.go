@@ -137,14 +137,12 @@ func Guard(build string) (*fsx.Lock, error) {
 	return l, err
 }
 
-// Prompt is the orchestrator's prompt: the framework's orchestrator text,
-// which cadrei it leads, and, when cadrei was opened from a linked project,
-// that project (N.4).
-func Prompt(text []byte, cadrei, path, project, projectDir string) []byte {
+// Prompt is the orchestrator's prompt: the framework's orchestrator text
+// and which cadrei it leads. It holds only what doesn't change between
+// runs, since a resumed chat keeps the prompt it started with; the live
+// snapshot (where cadrei was opened from, among the rest) comes from a
+// session start hook.
+func Prompt(text []byte, cadrei, path string) []byte {
 	out := append([]byte{}, text...)
-	out = append(out, fmt.Sprintf("\nYou are the orchestrator of cadrei `%s` (`%s`).\n", cadrei, path)...)
-	if project != "" {
-		out = append(out, fmt.Sprintf("The user opened cadrei from the project `%s` (`%s`).\n", project, projectDir)...)
-	}
-	return out
+	return append(out, fmt.Sprintf("\nYou are the orchestrator of the crew `%s` (`%s`).\n", cadrei, path)...)
 }

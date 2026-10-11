@@ -5,13 +5,15 @@
     "name": "string",
     "path": "string"
   },
+  "hook": "string",
   "orchestrator": {
     "running": "bool"
   },
+  "orchestrator_opens_in": "string",
   "other_cadreis": "array of {\"name\":\"string\",\"path\":\"string\",\"running\":\"number\"}",
   "problems": "array of \"string\"",
   "projects": "array of {\"about\":\"string\",\"cloned\":\"bool\",\"name\":\"string\",\"path\":\"string\",\"repo\":\"string\",\"state\":\"string\",\"team\":\"string\"}",
-  "running": "array of {\"legacy\":\"bool\",\"members\":\"array of {\\\"name\\\":\\\"string\\\",\\\"role\\\":\\\"string\\\"}\",\"session\":\"string\",\"team\":\"string\"}",
+  "running": "array of {\"legacy\":\"bool\",\"members\":\"array of {\\\"name\\\":\\\"string\\\",\\\"role\\\":\\\"string\\\",\\\"since\\\":\\\"string\\\",\\\"state\\\":\\\"string\\\"}\",\"session\":\"string\",\"team\":\"string\"} | {\"legacy\":\"bool\",\"members\":\"array of {\\\"name\\\":\\\"string\\\",\\\"role\\\":\\\"string\\\",\\\"state\\\":\\\"string\\\"}\",\"session\":\"string\",\"team\":\"string\"}",
   "teams": "map of array of \"array of {\\\"name\\\":\\\"string\\\",\\\"role\\\":\\\"string\\\"}\"",
   "version": "number"
 }

@@ -3,9 +3,12 @@
 # release step copies it into the rafi-ramdhani/homebrew-cadrei tap.
 class Cadrei < Formula
   desc "Team of Claude Code helpers you lead from one chat"
-  homepage "https://github.com/rafi-ramdhani/cadrei"
+  homepage "https://cadrei.dev"
+  # Some Homebrew versions read "64" from these URLs, so say it.
   version "@VERSION@"
-  license "MIT"
+  license all_of: ["MIT", :cannot_represent]
+
+  depends_on "tmux"
 
   on_macos do
     on_arm do
@@ -30,8 +33,6 @@ class Cadrei < Formula
     depends_on "git"
   end
 
-  depends_on "tmux"
-
   def install
     bin.install "cadrei"
   end
@@ -41,14 +42,15 @@ class Cadrei < Formula
       cadrei runs Claude Code, which a formula cannot depend on. Install it with:
         brew install --cask claude-code
       Then run: cadrei
-      To remove cadrei later: cadrei uninstall, then brew uninstall cadrei
+      To remove cadrei, run cadrei uninstall: it removes its hooks and links, then the program.
+      To try cadrei fresh and keep your setup, run cadrei uninstall --archive --keep-program.
     EOS
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/cadrei --version")
     ENV["HOME"] = testpath
-    system bin/"cadrei", "init", "demo"
+    system bin/"cadrei", "new", "demo"
     assert_path_exists testpath/".cadrei/demo/playbook.md"
   end
 end

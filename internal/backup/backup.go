@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // marker is the line that makes a pre-push hook cadrei's own.
@@ -48,7 +49,7 @@ func hookText(binary string) string {
 	q := "'" + strings.ReplaceAll(binary, "'", `'\''`) + "'"
 	return "#!/bin/sh\n" + marker + "\n" +
 		"if [ -x " + q + " ]; then exec " + q + " hook pre-push \"$@\"; fi\n" +
-		"printf 'cadrei: this push was stopped: the check for credentials could not run, since %s is missing; run cadrei again, then push\\n' " + q + " >&2\n" +
+		"echo \"cadrei is missing, so this check can't run. Reinstall cadrei, or remove .git/hooks/pre-push.\" >&2\n" +
 		"exit 1\n"
 }
 
@@ -90,6 +91,14 @@ type Finding struct {
 	Why  string
 }
 
+// Local is a cadrei's local folder, relative to the cadrei (the program
+// sets it): this machine's own notes, which git ignores. A push that
+// carries a file from it is refused.
+var Local string
+
+// MachineOnly is the Why of a file from the local folder.
+const MachineOnly = "this machine's own file"
+
 var (
 	// Files that hold credentials by their name.
 	secretNames = map[string]string{
@@ -119,7 +128,33 @@ var (
 		{regexp.MustCompile(`AKIA[0-9A-Z]{16}`), "an AWS access key"},
 		{regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`), "a Slack token"},
 	}
+	// A URL's user part: what's between "://" and the "@" before its host.
+	urlUser = regexp.MustCompile(`[A-Za-z][A-Za-z0-9+.-]*://([^\s/@'"]+)@[^\s/'"<>@]+`)
+	// A placeholder for a value set at run time: <token>, ${TOKEN},
+	// $TOKEN, {{token}}, or a mask such as *** or xxx.
+	placeholder = regexp.MustCompile(`^(<[^<>]*>|\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|\{\{[^{}]*\}\}|\*+|x+|X+)$`)
+	// A user that is a token: long, and of letters and digits both.
+	tokenUser = regexp.MustCompile(`^[A-Za-z0-9_-]{20,}$`)
 )
+
+// urlSecret reports whether data holds a URL with a password, or with a
+// token as its user. A user or password that is a placeholder whole isn't
+// one; one with a placeholder and more is.
+func urlSecret(data []byte) bool {
+	for _, m := range urlUser.FindAllSubmatch(data, -1) {
+		// A token can be the user with an empty or placeholder password
+		// too (https://<token>:x-oauth-basic@, https://<token>:@).
+		user, pass, hasPass := strings.Cut(string(m[1]), ":")
+		if hasPass && pass != "" && !placeholder.MatchString(pass) {
+			return true
+		}
+		if !placeholder.MatchString(user) && tokenUser.MatchString(user) &&
+			strings.ContainsAny(user, "0123456789") && strings.IndexFunc(user, unicode.IsLetter) >= 0 {
+			return true
+		}
+	}
+	return false
+}
 
 // nameWhy says why a file's name marks it as a credential, or "".
 func nameWhy(p string) string {
@@ -159,6 +194,10 @@ func contentWhy(data []byte) string {
 		if t.re.Match(data) {
 			return "holds what looks like " + t.what
 		}
+	}
+	// A user and password in a URL (a project's repo, a clone's origin).
+	if urlSecret(data) {
+		return "holds what looks like a password in a URL"
 	}
 	return ""
 }
@@ -250,6 +289,17 @@ func Scan(repo, remote string, updates []Update) ([]Finding, error) {
 	if len(paths) == 0 {
 		return nil, nil
 	}
+	var local []Finding
+	if Local != "" {
+		for _, list := range paths {
+			for _, p := range list {
+				if strings.HasPrefix(p, Local+"/") {
+					local = append(local, Finding{Path: p, Why: MachineOnly})
+				}
+			}
+		}
+		sort.Slice(local, func(a, b int) bool { return local[a].Path < local[b].Path })
+	}
 	shas := make([]string, 0, len(paths))
 	for sha := range paths {
 		shas = append(shas, sha)
@@ -318,7 +368,7 @@ func Scan(repo, remote string, updates []Update) ([]Finding, error) {
 		return nil, fmt.Errorf("could not read the pushed files: %v", err)
 	}
 	sort.Slice(findings, func(i, j int) bool { return findings[i].Path < findings[j].Path })
-	return findings, nil
+	return append(local, findings...), nil
 }
 
 // Remove takes out cadrei's pre-push hook from a cadrei repository: only a
@@ -348,18 +398,37 @@ var ErrChanged = errors.New("cadrei's pre-push hook holds lines of your own, so 
 // ours reports whether text is exactly the hook cadrei writes, for the
 // binary it names.
 func ours(text string) bool {
+	_, ok := hookBinary(text)
+	return ok
+}
+
+// hookBinary is the program a hook in cadrei's exact form runs, and
+// whether the hook is in that form.
+func hookBinary(text string) (string, bool) {
 	const lead = "if [ -x '"
 	i := strings.Index(text, lead)
 	if i < 0 {
-		return false
+		return "", false
 	}
 	rest := text[i+len(lead):]
 	j := strings.Index(rest, "' ]; then exec ")
 	if j < 0 {
-		return false
+		return "", false
 	}
 	binary := strings.ReplaceAll(rest[:j], `'\''`, "'")
-	return text == hookText(binary)
+	return binary, text == hookText(binary)
+}
+
+// OwnHook reports whether a pre-push hook file is exactly one cadrei
+// writes, for binary: the form alone says nothing about the program it
+// runs, which a hook in a copied repo can name as it likes.
+func OwnHook(file, binary string) bool {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return false
+	}
+	b, ok := hookBinary(string(raw))
+	return ok && b == binary
 }
 
 // Installed reports whether a cadrei repository has cadrei's pre-push hook.

@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": "Add a test for the parser."}, "timestamp": "2026-01-01T10:00:00.000Z"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "(synthetic refusal)"}], "stop_reason": "refusal"}, "timestamp": "2026-01-01T10:00:05.000Z"}

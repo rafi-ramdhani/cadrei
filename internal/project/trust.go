@@ -2,6 +2,7 @@
 package project
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -25,26 +26,26 @@ func TrustRefusal(dir string, protected []string) string {
 	root := paths.Real(cadreis.Root())
 	switch {
 	case dir == "/":
-		return "it is the root folder"
-	case dir == home:
-		return "it is your home folder"
-	case paths.Within(root, dir):
-		return "it is ~/.cadrei or contains it"
-	case paths.Within(dir, root):
-		return "it is inside ~/.cadrei, where cadrei keeps its own files"
+		return "it's the root folder"
+	case same(dir, home):
+		return "it's your home folder"
+	case paths.Holds(dir, root):
+		return "it's ~/.cadrei, or holds it"
+	case paths.Inside(dir, root):
+		return "it's inside ~/.cadrei, where cadrei keeps its own files"
 	}
 	for _, p := range protected {
-		if paths.Within(dir, p) {
-			return "it is inside " + cadreis.Tilde(p)
+		if paths.Inside(dir, p) {
+			return "it's inside " + cadreis.Tilde(p)
 		}
 	}
 	list, _ := cadreis.List()
 	for _, c := range list {
-		if paths.Within(c.Path, dir) {
-			return "it is the cadrei folder of " + c.Name + " or contains it"
+		if paths.Holds(dir, c.Path) {
+			return "it's the folder of the crew " + c.Name + ", or holds it"
 		}
-		if paths.Within(dir, filepath.Join(c.Path, "teams")) {
-			return "it is a team folder"
+		if paths.Inside(dir, filepath.Join(c.Path, "teams")) {
+			return "it's a team folder"
 		}
 	}
 	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
@@ -55,13 +56,22 @@ func TrustRefusal(dir string, protected []string) string {
 }
 
 // Trust marks folders as trusted in the runtime, refusing the ones
-// TrustRefusal names. It returns a result per folder and, when the
+// TrustRefusal names, and every one in a team member's session: only the
+// user trusts folders. It returns a result per folder and, when the
 // runtime's config was left alone, a note for the user.
 func Trust(rt runtime.Runtime, folders []runtime.Folder) ([]runtime.TrustResult, string) {
 	var results []runtime.TrustResult
 	var ok []runtime.Folder
 	protected := rt.Trust().Protected()
+	_, member := os.LookupEnv("CADREI_MEMBER")
+	if _, persona := os.LookupEnv("CADRE_PERSONA"); persona {
+		member = true
+	}
 	for _, f := range folders {
+		if member {
+			results = append(results, runtime.TrustResult{Name: f.Name, State: "refused", Reason: "team members can't trust folders"})
+			continue
+		}
 		if why := TrustRefusal(paths.Real(f.Dir), protected); why != "" {
 			results = append(results, runtime.TrustResult{Name: f.Name, State: "refused", Reason: why})
 			continue
@@ -72,15 +82,20 @@ func Trust(rt runtime.Runtime, folders []runtime.Folder) ([]runtime.TrustResult,
 	return append(results, marked...), note
 }
 
-// Line is how cadrei reports one trust result in runtime title's settings.
-func Line(r runtime.TrustResult, title string) string {
+// Line is how cadrei reports one trust result in runtime title's
+// settings, and whether it went well.
+func Line(r runtime.TrustResult, title string) (string, bool) {
 	switch r.State {
 	case "trusted":
-		return "  " + r.Name + ": trusted in " + title
+		return r.Name + " is trusted in " + title, true
 	case "already":
-		return "  " + r.Name + ": already trusted in " + title
+		return r.Name + " was already trusted in " + title, true
 	case "refused":
-		return "  " + r.Name + ": not trusted, " + r.Reason
+		return r.Name + " isn't trusted in " + title + ": " + r.Reason + ".", false
 	}
-	return "  " + r.Name + ": not trusted (see below)"
+	return title + " will ask to trust " + r.Name + " the first time it opens there.", false
 }
+
+// same reports whether a and b are the same folder, however each is
+// spelled: on a case-insensitive disk, ~/.CLAUDE is ~/.claude.
+func same(a, b string) bool { return paths.Inside(a, b) && paths.Inside(b, a) }

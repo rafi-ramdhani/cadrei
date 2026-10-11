@@ -66,6 +66,28 @@ func TestCellarPathBecomesOpt(t *testing.T) {
 	if cellar.MatchString("/usr/local/bin/cadrei") {
 		t.Error("a plain path matched")
 	}
+	// A prerelease tag is a release; a pseudo-version, a snapshot or a
+	// dirty tree is from source (review of fix round 5, bugs 6d).
+	for v, want := range map[string]string{"0.3.0-rc.1": "release", "0.2.1": "release", "0.2.1-0.20261010120000-abcdef123456": "dev",
+		"0.2.1+dirty": "dev", "0.2.0-3-gabc-dirty": "dev", "0.2.2-snapshot": "dev",
+		// Hand-made stamps (review of fix round 6).
+		"0.2.1-SNAPSHOT-abc": "dev", "abc1234": "dev", "0.2.1-dev": "dev", "0.2.1-next": "dev", "0.2.1-g1234567": "dev",
+		"0.3.0-rc.2": "release", "0.2.10": "release"} {
+		if got := Kind(v); got != want {
+			t.Errorf("Kind(%s) = %s, want %s", v, got, want)
+		}
+	}
+	for main, want := range map[string]string{"": "dev", "(devel)": "dev", "v0.2.1": "0.2.1", "v0.3.0-rc.1": "0.3.0-rc.1",
+		"v0.2.2-0.20261010120000-abcdef123456": "dev", "v0.2.2-0.20261010120000-abcdef123456+dirty": "dev"} {
+		if got := ModuleVersion(main, false); got != want {
+			t.Errorf("ModuleVersion(%q) = %s, want %s", main, got, want)
+		}
+	}
+	// go build in a checkout at a tag records the tag, and the commit: a
+	// build from source.
+	if got := ModuleVersion("v0.2.5", true); got != "dev" {
+		t.Errorf("a checkout's build at a tag: %s", got)
+	}
 	if Kind("dev") != "dev" || Kind("0.2.0-3-gabc") != "dev" || Kind("0.2.0") != "release" {
 		t.Error("Kind")
 	}

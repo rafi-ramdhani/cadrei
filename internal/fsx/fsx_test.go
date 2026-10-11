@@ -132,33 +132,29 @@ func TestDirLockFallback(t *testing.T) {
 	}
 }
 
-func TestCopyTreeAndVerify(t *testing.T) {
+// CopyTree copies folders, files (modes and times kept) and links, and
+// SameTree finds a copy that differs (audit qual-maint-4: one pair, used by
+// Move).
+func TestCopyTreeAndSameTree(t *testing.T) {
 	src := filepath.Join(t.TempDir(), "src")
-	write := func(rel, body string, perm os.FileMode) {
-		t.Helper()
-		p := filepath.Join(src, rel)
-		os.MkdirAll(filepath.Dir(p), 0o755)
-		if err := os.WriteFile(p, []byte(body), perm); err != nil {
-			t.Fatal(err)
-		}
-	}
-	write("playbook.md", "play", 0o644)
-	write(".claude/member-settings.json", "{}", 0o600)
-	write("teams/dev/notes.md", "n", 0o644)
-	write("projects/app/README", "skip me", 0o644)
-	os.MkdirAll(filepath.Join(src, "empty"), 0o755)
+	os.MkdirAll(filepath.Join(src, ".claude"), 0o755)
+	os.MkdirAll(filepath.Join(src, "teams/dev"), 0o755)
+	os.WriteFile(filepath.Join(src, "playbook.md"), []byte("play"), 0o644)
+	os.WriteFile(filepath.Join(src, ".claude/member-settings.json"), []byte("{}"), 0o600)
+	os.WriteFile(filepath.Join(src, "teams/dev/notes.md"), []byte("n"), 0o644)
 	os.Symlink("../elsewhere", filepath.Join(src, "link"))
-	skip := func(rel string) bool { return rel == "projects" }
-
-	dst := filepath.Join(t.TempDir(), "dst")
-	if err := CopyTree(src, dst, skip); err != nil {
+	old := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	os.Chtimes(filepath.Join(src, "playbook.md"), old, old)
+	if err := unix.Mkfifo(filepath.Join(src, "fifo"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyTree(src, dst, skip); err != nil {
-		t.Fatalf("VerifyTree after CopyTree: %v", err)
+
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := CopyTree(src, dst); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dst, "projects")); err == nil {
-		t.Error("a skipped folder was copied")
+	if err := SameTree(src, dst); err != nil {
+		t.Fatalf("SameTree after CopyTree: %v", err)
 	}
 	if got, _ := os.Readlink(filepath.Join(dst, "link")); got != "../elsewhere" {
 		t.Errorf("symlink target %q", got)
@@ -166,23 +162,30 @@ func TestCopyTreeAndVerify(t *testing.T) {
 	if st, _ := os.Stat(filepath.Join(dst, ".claude/member-settings.json")); st.Mode().Perm() != 0o600 {
 		t.Errorf("mode not kept: %v", st.Mode().Perm())
 	}
-	if err := CopyTree(src, dst, skip); err == nil {
+	if st, _ := os.Stat(filepath.Join(dst, "playbook.md")); !st.ModTime().Equal(old) {
+		t.Errorf("time not kept: %v", st.ModTime())
+	}
+	if _, err := os.Lstat(filepath.Join(dst, "fifo")); err == nil {
+		t.Error("a FIFO was copied")
+	}
+	if err := CopyTree(src, dst); err == nil {
 		t.Error("CopyTree over an existing folder succeeded")
 	}
 
 	os.WriteFile(filepath.Join(dst, "playbook.md"), []byte("changed!"), 0o644)
-	if err := VerifyTree(src, dst, skip); err == nil || !strings.Contains(err.Error(), "playbook.md") {
+	if err := SameTree(src, dst); err == nil || !strings.Contains(err.Error(), "playbook.md") {
 		t.Errorf("a changed size was not found: %v", err)
 	}
 	os.WriteFile(filepath.Join(dst, "playbook.md"), []byte("play"), 0o644)
-	os.WriteFile(filepath.Join(dst, "extra"), nil, 0o644)
-	if err := VerifyTree(src, dst, skip); err == nil || !strings.Contains(err.Error(), "extra") {
-		t.Errorf("an extra file was not found: %v", err)
+	os.Chtimes(filepath.Join(dst, "playbook.md"), old, old)
+	os.Remove(filepath.Join(dst, "link"))
+	os.Symlink("../other", filepath.Join(dst, "link"))
+	if err := SameTree(src, dst); err == nil || !strings.Contains(err.Error(), "link") {
+		t.Errorf("a changed link was not found: %v", err)
 	}
-	os.Remove(filepath.Join(dst, "extra"))
-	os.Remove(filepath.Join(dst, "teams/dev/notes.md"))
-	if err := VerifyTree(src, dst, skip); err == nil || !strings.Contains(err.Error(), "lacks") {
-		t.Errorf("a missing file was not found: %v", err)
+	os.Remove(filepath.Join(dst, "link"))
+	if err := SameTree(src, dst); err == nil {
+		t.Error("a missing link was not found")
 	}
 }
 
@@ -240,5 +243,41 @@ func TestLockRefusesLinks(t *testing.T) {
 	l.Release()
 	if st, _ := os.Stat(p); st.Size() != 0 {
 		t.Errorf("the lock file was written: %d bytes", st.Size())
+	}
+}
+
+// Review of fix round 4 (maint): CopyTree flushes every file and folder
+// it makes, and WriteFileNoSync flushes nothing.
+func TestCopyTreeFlushesEverything(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "src")
+	os.MkdirAll(filepath.Join(src, "a/b"), 0o755)
+	for _, f := range []string{"x", "a/y", "a/b/z"} {
+		os.WriteFile(filepath.Join(src, f), []byte("x"), 0o644)
+	}
+	before := Syncs()
+	if err := CopyTree(src, filepath.Join(t.TempDir(), "dst")); err != nil {
+		t.Fatal(err)
+	}
+	if n := Syncs() - before; n != 6 { // 3 files, 3 folders
+		t.Errorf("%d flushes, want 6", n)
+	}
+	before = Syncs()
+	WriteFileNoSync(filepath.Join(t.TempDir(), "f"), []byte("x"), 0o600)
+	if Syncs() != before {
+		t.Error("WriteFileNoSync flushed")
+	}
+}
+
+// Review of fix round 5 (tests N4c): a folder the disk can't flush (some
+// network and FAT ones say EINVAL or ENOTSUP) isn't an error, since its
+// files were flushed one by one; any other failure is.
+func TestAFolderThatCantBeFlushedIsntAnError(t *testing.T) {
+	dir := t.TempDir()
+	t.Cleanup(func() { flush = (*os.File).Sync })
+	for errno, fails := range map[unix.Errno]bool{unix.EINVAL: false, unix.ENOTSUP: false, unix.EIO: true} {
+		flush = func(f *os.File) error { return &os.PathError{Op: "sync", Path: f.Name(), Err: errno} }
+		if err := SyncDir(dir); (err != nil) != fails {
+			t.Errorf("%v: %v", errno, err)
+		}
 	}
 }

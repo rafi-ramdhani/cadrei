@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -37,7 +38,7 @@ func WriteFile(path string, data []byte, perm fs.FileMode) error {
 	if _, err := tmp.Write(data); err != nil {
 		return err
 	}
-	if err := tmp.Sync(); err != nil {
+	if err := syncFile(tmp); err != nil {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
@@ -213,45 +214,56 @@ func (l *Lock) Release() error {
 }
 
 // CopyTree copies the folder src to dst, which must not exist: folders,
-// regular files (with their modes) and symlinks (with their targets, not
-// followed). skip, when set, leaves out a path relative to src and
-// everything under it. Other file types are an error.
-func CopyTree(src, dst string, skip func(rel string) bool) error {
+// links as links (not followed), and files with their modes and
+// modification times. Sockets and the like aren't copied. Every file and
+// folder of the copy is flushed to disk before it returns, so a caller
+// may remove src once SameTree agrees.
+func CopyTree(src, dst string) error {
 	if _, err := os.Lstat(dst); err == nil {
 		return fmt.Errorf("%s already exists", dst)
 	}
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+	var dirs []string
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(src, path)
-		if rel != "." && skip != nil && skip(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
+		rel, _ := filepath.Rel(src, p)
 		to := filepath.Join(dst, rel)
-		info, err := d.Info()
+		info, err := os.Lstat(p)
 		if err != nil {
 			return err
 		}
 		switch {
-		case d.Type()&fs.ModeSymlink != 0:
-			target, err := os.Readlink(path)
+		case info.Mode()&fs.ModeSymlink != 0:
+			target, err := os.Readlink(p)
 			if err != nil {
 				return err
 			}
 			return os.Symlink(target, to)
-		case d.IsDir():
-			return os.Mkdir(to, info.Mode().Perm()|0o700)
-		case d.Type().IsRegular():
-			return copyFile(path, to, info.Mode().Perm())
+		case info.IsDir():
+			dirs = append(dirs, to)
+			return os.MkdirAll(to, info.Mode().Perm()|0o700)
+		case info.Mode().IsRegular():
+			if err := copyFile(p, to, info.Mode().Perm()); err != nil {
+				return err
+			}
+			return os.Chtimes(to, info.ModTime(), info.ModTime())
 		}
-		return fmt.Errorf("%s is not a file, folder or symlink", path)
+		return nil // sockets and the like aren't copied
 	})
+	if err != nil {
+		return err
+	}
+	// The folders last, deepest first, so each names what's in it.
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := syncDir(dirs[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
+// copyFile copies a file's bytes and flushes them to disk.
 func copyFile(from, to string, perm fs.FileMode) error {
 	in, err := os.Open(from)
 	if err != nil {
@@ -266,80 +278,113 @@ func copyFile(from, to string, perm fs.FileMode) error {
 		out.Close()
 		return err
 	}
-	if err := out.Sync(); err != nil {
+	if err := syncFile(out); err != nil {
 		out.Close()
 		return err
 	}
 	return out.Close()
 }
 
-// An entry of a tree listing: what VerifyTree compares.
-type entry struct {
-	kind   string // "dir", "file" or "link"
-	size   int64
-	perm   fs.FileMode
-	target string
+// syncDir flushes a folder's entries to disk. A filesystem that can't
+// flush a folder (some network and FAT ones say so) isn't an error: the
+// files in it were flushed one by one.
+func syncDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syncFile(f); err != nil && !errors.Is(err, unix.EINVAL) && !errors.Is(err, unix.ENOTSUP) {
+		return err
+	}
+	return nil
 }
 
-func list(root string, skip func(rel string) bool) (map[string]entry, error) {
-	out := map[string]entry{}
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+// syncs counts the flushes, for tests.
+var syncs atomic.Int64
+
+// Syncs is how many files and folders were flushed to disk so far.
+func Syncs() int64 { return syncs.Load() }
+
+// syncFile flushes a file or folder to disk (F_FULLFSYNC on macOS).
+func syncFile(f *os.File) error {
+	syncs.Add(1)
+	return flush(f)
+}
+
+// flush is (*os.File).Sync; a test makes it fail as a disk would.
+var flush = (*os.File).Sync
+
+// SyncDir flushes a folder's entries to disk: after a rename into it,
+// say, before the only other copy goes.
+func SyncDir(dir string) error { return syncDir(dir) }
+
+// SameTree checks that dst holds every file, folder and link of src, each
+// file with its size and modification time (within what the disk keeps,
+// SameTime), each link with its target. Sockets and the like, which
+// CopyTree skips, are skipped here too.
+func SameTree(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(root, path)
-		if rel != "." && skip != nil && skip(rel) {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
+		a, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if !a.Mode().IsRegular() && !a.IsDir() && a.Mode()&fs.ModeSymlink == 0 {
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return err
+		rel, _ := filepath.Rel(src, p)
+		b, err := os.Lstat(filepath.Join(dst, rel))
+		if err != nil || a.Mode().Type() != b.Mode().Type() ||
+			(a.Mode().IsRegular() && (a.Size() != b.Size() || !SameTime(a.ModTime(), b.ModTime()))) {
+			return fmt.Errorf("the copy of %s doesn't match", p)
 		}
-		e := entry{perm: info.Mode().Perm()}
-		switch {
-		case d.Type()&fs.ModeSymlink != 0:
-			e.kind, e.perm = "link", 0
-			if e.target, err = os.Readlink(path); err != nil {
-				return err
+		if a.Mode()&fs.ModeSymlink != 0 {
+			at, _ := os.Readlink(p)
+			if bt, _ := os.Readlink(filepath.Join(dst, rel)); at != bt {
+				return fmt.Errorf("the copy of %s doesn't match", p)
 			}
-		case d.IsDir():
-			e.kind, e.perm = "dir", 0
-		default:
-			e.kind, e.size = "file", info.Size()
 		}
-		out[rel] = e
 		return nil
 	})
-	return out, err
 }
 
-// VerifyTree checks that dst holds the same tree as src (with the same
-// skip): the same paths, kinds, file sizes and modes, and symlink targets.
-func VerifyTree(src, dst string, skip func(rel string) bool) error {
-	a, err := list(src, skip)
+// SameTime reports whether two modification times are the same as far as
+// both disks can tell: HFS+ keeps whole seconds, exFAT 10 ms and FAT 2 s,
+// so a copy's time can be rounded by up to 2 seconds.
+func SameTime(a, b time.Time) bool {
+	d := a.Sub(b)
+	return d > -2*time.Second && d < 2*time.Second
+}
+
+// WriteFileNoSync is WriteFile without the sync: still atomic (a temp file
+// and a rename), for data that's cheap to lose in a crash.
+func WriteFileNoSync(path string, data []byte, perm fs.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".cadrei-")
 	if err != nil {
 		return err
 	}
-	b, err := list(dst, nil)
-	if err != nil {
+	name := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		os.Remove(name)
 		return err
 	}
-	for rel, e := range a {
-		got, ok := b[rel]
-		if !ok {
-			return fmt.Errorf("the copy lacks %s", rel)
-		}
-		if got != e {
-			return fmt.Errorf("the copy of %s differs (%+v, want %+v)", rel, got, e)
-		}
+	if err := tmp.Chmod(perm); err != nil {
+		return fail(err)
 	}
-	for rel := range b {
-		if _, ok := a[rel]; !ok {
-			return fmt.Errorf("the copy has an extra %s", rel)
-		}
+	if _, err := tmp.Write(data); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name)
+		return err
 	}
 	return nil
 }

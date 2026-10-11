@@ -13,8 +13,37 @@ import (
 )
 
 // ProjectsDir is the folder new clones go to (config/projects-dir), with ~
-// expanded, or "" when it was never set.
-func ProjectsDir() string { return expandHome(firstLine(Config("projects-dir"))) }
+// expanded, or "" when it was never set. With the setting gone (a reinstall,
+// or ~/.cadrei/config deleted), it is rebuilt from the crews' places: the
+// folder most of the projects share, if more than half do.
+func ProjectsDir() string {
+	if d := expandHome(firstLine(Config("projects-dir"))); d != "" {
+		return d
+	}
+	return sharedParent()
+}
+
+// sharedParent is the parent folder more than half of every crew's projects
+// are in, or "".
+func sharedParent() string {
+	list, _ := List()
+	count := map[string]int{}
+	total := 0
+	for _, c := range list {
+		for _, p := range Places(c) {
+			if p = expandHome(p); filepath.IsAbs(p) {
+				count[filepath.Dir(filepath.Clean(p))]++
+				total++
+			}
+		}
+	}
+	for dir, n := range count {
+		if n*2 > total {
+			return dir
+		}
+	}
+	return ""
+}
 
 // Registry is a cadrei's projects.yaml.
 func (c Cadrei) Registry() string { return filepath.Join(c.Path, "projects.yaml") }
@@ -28,7 +57,11 @@ type Resolved struct {
 }
 
 // ErrNoCadrei is returned when nothing resolves.
-var ErrNoCadrei = errors.New("no cadrei here and no default cadrei; run cadrei init <name>, or cadrei use <name>")
+var ErrNoCadrei = errors.New("there's no crew here, and no default crew. Run cadrei new <name>, or cadrei use <name>")
+
+// ErrNoDefault is returned when several cadreis exist and none is the
+// default (the config is gone): cadrei doesn't guess.
+var ErrNoDefault = errors.New("pick a default crew first: run cadrei")
 
 // Asker picks one of several cadreis that link the same project; it is nil
 // when there is no terminal to ask on.
@@ -91,6 +124,9 @@ func Resolve(cwd string, ask Asker) (*Resolved, error) {
 			}
 		}
 	}
+	if def == "" && len(list) > 1 {
+		return nil, ErrNoDefault
+	}
 	return nil, ErrNoCadrei
 }
 
@@ -98,7 +134,7 @@ func Resolve(cwd string, ask Asker) (*Resolved, error) {
 func checked(r *Resolved, list []Cadrei) (*Resolved, error) {
 	for _, c := range list {
 		if c.Path != r.Path && strings.EqualFold(c.Name, r.Name) && c.Present() {
-			return nil, fmt.Errorf("cadreis at %s and %s share the name %s; rename one of the folders", r.Path, c.Path, r.Name)
+			return nil, fmt.Errorf("the crews at %s and %s share the name %s. Rename one of the folders", Tilde(r.Path), Tilde(c.Path), r.Name)
 		}
 	}
 	return r, nil
@@ -162,7 +198,7 @@ func byProject(cwd string, list []Cadrei, ask Asker) (*Resolved, error) {
 	}
 	project := cadreis[0].project
 	if ask == nil {
-		return nil, fmt.Errorf("%s is linked by %s; run from ~/.cadrei/<name>, or set CADREI_HOME", project, andList(names))
+		return nil, fmt.Errorf("%s is in more than one crew (%s). Run this from the crew's folder, ~/.cadrei/<name>", project, andList(names))
 	}
 	pick, err := ask(project, names)
 	if err != nil {
@@ -173,7 +209,7 @@ func byProject(cwd string, list []Cadrei, ask Asker) (*Resolved, error) {
 			return &Resolved{Cadrei: l.cadrei, From: "from the project " + l.project, Project: l.project}, nil
 		}
 	}
-	return nil, fmt.Errorf("%s is not one of %s", pick, andList(names))
+	return nil, fmt.Errorf("%s isn't one of %s", pick, andList(names))
 }
 
 // andList writes "a", "a and b", "a, b and c".

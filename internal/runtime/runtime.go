@@ -53,6 +53,18 @@ type LaunchSpec struct {
 	Mode       string // cadrei's PERMISSION_MODE
 	PromptFile string // instructions to add to the session's own
 	Grants     string // the runtime's grants artifact (from Permissions().Prepare), or ""
+	// Settings is a settings file of cadrei's own for a session with no
+	// grants (the orchestrator's, with its snapshot hook), or "".
+	Settings string
+	// Allowed are commands the session runs without asking, each exactly
+	// as written (the orchestrator's read-only cadrei commands).
+	Allowed []string
+	// Prompt is the session's first message, sent as the user's would be
+	// (the orchestrator's seed), or "".
+	Prompt string
+	// Model and Effort are the session's model and effort level (7.11), or
+	// "" for the runtime's own default.
+	Model, Effort string
 	// SessionID starts a new conversation with this id (cadrei chose it, to
 	// resume it later); Resume continues the conversation with this id.
 	// At most one is set, and only for a runtime with those capabilities.
@@ -64,7 +76,10 @@ type LaunchSpec struct {
 type Command struct {
 	Argv []string
 	Env  []string // KEY=value, added to cadrei's environment
-	Dir  string
+	// Unset names variables of cadrei's environment the command starts
+	// without: the marks of the session cadrei itself may run in.
+	Unset []string
+	Dir   string
 }
 
 // Install is a runtime found on this machine.
@@ -91,6 +106,7 @@ type TrustResult struct {
 // a member's session hooks run (to keep its conversation id current).
 type Places struct {
 	Root    string
+	Archive string // the archive folder's physical path (~/.cadrei-archive)
 	Cadreis []string
 	Binary  string
 }
@@ -164,6 +180,11 @@ type TrustOps interface {
 	// there once dir is trusted (settings, hooks, commands, instructions),
 	// as paths relative to dir, in a fixed order.
 	Loaded(dir string) []string
+	// Risky lists what can run commands or add tools for every member
+	// once dir is trusted (settings with hooks, MCP servers, and skills,
+	// agents or commands at any depth), as paths relative to dir: a
+	// folder that has any is never trusted by a bare yes.
+	Risky(dir string) []string
 }
 
 // Problem is one finding of the health check (M.4): what is wrong and the
@@ -211,9 +232,38 @@ type HookOps interface {
 	// Remove takes out the orchestrator hooks that run binary, and leaves
 	// every other hook. It reports whether it removed any.
 	Remove(binary string) (bool, error)
+	// Outdated reports whether the hook for binary is written in an older
+	// form, which Set rewrites.
+	Outdated(binary string) (bool, error)
 	// Output is what the hook prints to give a new session text.
 	Output(text string) []byte
+	// SnapshotSettings writes, in dir, the orchestrator's settings file:
+	// a session start hook that runs `<binary> hook snapshot`, so the
+	// orchestrator gets a fresh snapshot on startup and on resume. It
+	// returns the file, for LaunchSpec.Settings.
+	SnapshotSettings(dir, binary string) (string, error)
 }
+
+// StateEvent is one of a member's hook events, as cadrei's member states
+// read it.
+type StateEvent struct {
+	Name       string // one of the Ev names, or "" for an event that changes nothing
+	Question   bool   // a permission request that is a question to the user
+	Session    string // the conversation id
+	Transcript string // the conversation's transcript
+}
+
+// State event names.
+const (
+	EvPrompt       = "prompt"        // a prompt arrived: working
+	EvToolUse      = "tool"          // a tool runs: working
+	EvPermission   = "permission"    // it asks the user: waiting
+	EvStop         = "stop"          // its turn ended: idle
+	EvStopFailure  = "stop-failure"  // its turn ended on an error: idle
+	EvStart        = "start"         // its session started: idle
+	EvIdleReminder = "idle-reminder" // the runtime reminds the user it is idle
+	EvEnd          = "end"           // its session ended
+)
 
 // SessionOps are a runtime's conversations, for resuming them.
 type SessionOps interface {
@@ -230,18 +280,111 @@ type SessionOps interface {
 	// FromHook reads the conversation id from what a session start hook
 	// receives, or "".
 	FromHook(input io.Reader) string
+	// StateEvent reads what a member's hook receives.
+	StateEvent(input io.Reader) StateEvent
+	// TranscriptFile is the conversation's transcript, or "".
+	TranscriptFile(id, dir string) string
+	// UnansweredPrompt reports whether the last prompt in a transcript is
+	// text, with no reply after it.
+	UnansweredPrompt(transcript, text string) bool
+	// SafeguardStop reports whether the runtime's safeguards stopped the
+	// last reply in a transcript, with no normal reply since, and when.
+	// It reads only the end of the file; anything it can't read is no stop.
+	SafeguardStop(transcript string) (at time.Time, stopped bool)
+	// Ready reports whether a session's screen shows its prompt, waiting
+	// for input: it got going.
+	Ready(screen string) bool
+	// Waiting reports whether a session's screen is one the runtime shows
+	// before its prompt and waits on the user (a login, trust or first-run
+	// screen): it got going. Only screens it knows count, so a command that
+	// printed a line and is about to end isn't taken for one.
+	Waiting(screen string) bool
+	// ShellCommand reads what a member's guard hook receives before a
+	// tool runs: the command line when the tool runs one in a shell, with
+	// shell set. An error says the input couldn't be read, which the
+	// guard counts as a command it can't let run.
+	ShellCommand(input io.Reader) (command string, shell bool, err error)
+	// Sent reads what the orchestrator's notify hook receives after a
+	// message it sent: the message's target, whether it asked to hear when
+	// that session goes idle, and whether a subagent sent it. ok is false
+	// for input that isn't one sent message.
+	Sent(input io.Reader) (s Sent, ok bool)
+	// SentContext is the notify hook's answer: text added to the
+	// orchestrator's context after the send.
+	SentContext(text string) []byte
 }
+
+// Sent is a message the orchestrator sent, as its notify hook reads it.
+type Sent struct {
+	To       string // the target as written, a name or an address
+	Notify   bool   // it asked to hear when the target goes idle
+	Subagent bool   // a subagent sent it, not the main conversation
+}
+
+// Probe is what the first run checks about the runtime.
+type Probe struct {
+	Installed bool   // its command is on PATH
+	Runs      bool   // it answers --version
+	Version   string // as it says it
+	Login     string // "yes", "no", or "unknown" (too old to ask, or no answer in time)
+}
+
+// Says is what the checks say about the runtime, called title: that it
+// isn't installed, won't start, or how its login stands. The first run's
+// screen and the full health check both say it this way.
+func (p Probe) Says(title string) string {
+	switch {
+	case !p.Installed:
+		return title + " isn't installed."
+	case !p.Runs:
+		return title + " is installed but won't start."
+	case p.Login == LoggedIn:
+		return title + " " + p.Version + ", logged in"
+	case p.Login == LoggedOut:
+		return title + " " + p.Version + ", not logged in yet. It'll ask you when it opens."
+	}
+	return title + " " + p.Version + ". Couldn't check your login. If it asks, log in."
+}
+
+// InstallHelp is how to install the runtime: its Homebrew commands and its
+// web page.
+type InstallHelp struct{ Install, Reinstall, URL string }
+
+// Login states.
+const (
+	LoggedIn    = "yes"
+	LoggedOut   = "no"
+	LoginUnsure = "unknown"
+)
 
 // Runtime is an agent CLI cadrei can run sessions with.
 type Runtime interface {
 	Name() string
 	Title() string // the product's name, for messages: "Claude Code"
+	Model() string // the model's name, whose safeguards can stop a reply: "Claude"
+	// ModelHint says what a model name looks like, for an error: "an alias
+	// such as ..., or a full name such as ...".
+	ModelHint() string
+	// SessionVars are the variables the runtime sets about its own session
+	// for the programs it runs. A session cadrei starts from inside one
+	// (the orchestrator's cadrei up) must not take them as its own, and no
+	// tmux server may keep them.
+	SessionVars() []string
+	// SetupVars are the variables that point the runtime at a setup of
+	// its own, whatever HOME is (its config folder): a development build
+	// refuses one outside a temporary folder.
+	SetupVars() []string
 	Caps() Capabilities
 	Detect() (Install, error)
 	// Health is the runtime's part of the health check: it is installed,
 	// and, when full, it runs and is logged in; and nothing in the cadreis'
 	// folders changes what their sessions load.
 	Health(full bool, cadreis []string) []Problem
+	// Probe runs the runtime to say whether it works, its version and
+	// whether the user is logged in.
+	Probe() Probe
+	// Help is how to install or reinstall it.
+	Help() InstallHelp
 	// Launch builds the command for a session; the caller runs it.
 	Launch(LaunchSpec) (Command, error)
 	// BuildDir is where cadrei writes a cadrei's generated prompts and

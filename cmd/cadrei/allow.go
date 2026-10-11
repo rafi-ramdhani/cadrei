@@ -32,7 +32,7 @@ func ago(t time.Time) string {
 
 func runAllowList(e *env) int {
 	if len(e.args) > 1 || (len(e.args) == 1 && e.args[0] != "list") {
-		return e.fail("usage: cadrei allow [list]")
+		return e.failWith("Use " + cmd("cadrei allow") + ", or " + cmd("cadrei allow list") + ".")
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -44,22 +44,21 @@ func runAllowList(e *env) int {
 	}
 	perms := rt.Permissions()
 	file := perms.GrantsFile(r.Path)
-	if _, err := os.Stat(file); err != nil {
-		e.say("Grants for members: none yet (%s is created by the first cadrei up or cadrei allow add)", file)
-		return 0
+	var list []runtime.Grant
+	if _, err := os.Stat(file); err == nil {
+		store, err := perms.Open(r.Path, false)
+		if err != nil {
+			e.warn("", "Your team starts without "+unbroken(display(file))+", because "+strings.TrimSuffix(err.Error(), ".")+".")
+			return 1
+		}
+		if !perms.Unchanged(r.Path) {
+			e.warn("", unbroken(display(file))+" was changed outside cadrei allow.", "See what changed with "+cmd("git -C "+display(r.Path)+" log -p -- "+relTo(r.Path, file)))
+		}
+		list = store.List()
 	}
-	store, err := perms.Open(r.Path, false)
-	if err != nil {
-		fmt.Fprintf(e.stderr, "warning: members start without %s because %s\n", file, err)
-		return 1
-	}
-	if !perms.Unchanged(r.Path) {
-		fmt.Fprintf(e.stderr, "warning: %s was changed outside cadrei allow (see git -C %s diff and log -p)\n", file, r.Path)
-	}
-	e.say("Grants for members (%s):", file)
-	list := store.List()
+	e.say("%s", render(bold("What your team can do without asking"), streamStyled(e.stdout)))
 	if len(list) == 0 {
-		e.say("  none yet")
+		e.say("  Nothing extra yet.")
 	}
 	for i, g := range list {
 		var marks []string
@@ -76,7 +75,7 @@ func runAllowList(e *env) int {
 		e.say("  %d. %-4s  %s%s", i+1, g.Kind, g.Entry, mark)
 	}
 	if b := perms.BuiltIn(); b != "" {
-		e.say("%s", b)
+		e.say("%s", render(dim(b), streamStyled(e.stdout)))
 	}
 	return 0
 }
@@ -90,7 +89,7 @@ func allowLock(build, file string) (*fsx.Lock, error) {
 	}
 	l, err := fsx.Acquire(filepath.Join(build, "allow.lock"), 10*time.Second)
 	if errors.Is(err, fsx.ErrBusy) {
-		return nil, fmt.Errorf("another cadrei allow is changing %s; try again", file)
+		return nil, fmt.Errorf("another cadrei allow is changing %s. Try again", display(file))
 	}
 	return l, err
 }
@@ -100,7 +99,7 @@ func runAllowRemove(e *env) int { return allowChange(e, "remove") }
 
 func allowChange(e *env, op string) int {
 	if inMember() {
-		return e.fail("refused for members: members cannot change permissions; report the blocked action to the orchestrator instead")
+		return e.failWith("Team members can't change what the team is allowed to do.", "Tell your orchestrator what was blocked instead.")
 	}
 	kind, once := "rule", false
 	var args []string
@@ -112,16 +111,16 @@ func allowChange(e *env, op string) int {
 			kind = "auto"
 		default:
 			if strings.HasPrefix(a, "--") {
-				return e.fail("unknown option %s (see cadrei help advanced)", a)
+				return e.failWith("There's no option "+a+" for "+cmd("cadrei allow "+op)+".", "See the options with "+cmd("cadrei help advanced"))
 			}
 			args = append(args, a)
 		}
 	}
 	switch {
 	case op == "add" && len(args) != 1:
-		return e.fail("usage: cadrei allow add [--once] <rule> | cadrei allow add [--once] --auto \"<sentence>\"")
+		return e.failWith("Allow what? For example:", cmd("cadrei allow add \"Bash(npm test)\""), cmd("cadrei allow add --auto \"running the test suite\""))
 	case op == "remove" && (kind == "auto" || (once && len(args) != 0) || (!once && len(args) != 1)):
-		return e.fail("usage: cadrei allow remove <rule | number> | cadrei allow remove --once")
+		return e.failWith("Remove what? For example:", cmd("cadrei allow remove 2"), cmd("cadrei allow remove --once"))
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -136,11 +135,10 @@ func allowChange(e *env, op string) int {
 	_, existed := os.Stat(file)
 	// Create the file if needed; it is read again under the lock below.
 	if _, err := perms.Open(r.Path, true); err != nil {
-		return e.fail("%s cannot be changed because %s; restore it with git -C %s checkout -- %s", file, err, r.Path, relTo(r.Path, file))
+		return e.failWith(unbroken(display(file))+" can't be changed: "+strings.TrimSuffix(err.Error(), ".")+".",
+			"Restore it with "+cmd("git -C "+display(r.Path)+" checkout -- "+relTo(r.Path, file)))
 	}
-	if existed != nil {
-		e.say("  created %s (grants for members; change it with cadrei allow)", file)
-	}
+	_ = existed
 	lock, err := allowLock(rt.BuildDir(r.Path), file)
 	if err != nil {
 		return e.fail("%s", err)
@@ -149,10 +147,10 @@ func allowChange(e *env, op string) int {
 	// Read under the lock: another cadrei allow may have just written.
 	store, err := perms.Open(r.Path, false)
 	if err != nil {
-		return e.fail("%s cannot be changed because %s", file, err)
+		return e.failWith(unbroken(display(file)) + " can't be changed: " + strings.TrimSuffix(err.Error(), ".") + ".")
 	}
 	if !perms.Unchanged(r.Path) {
-		fmt.Fprintf(e.stderr, "warning: %s was changed outside cadrei allow (see git -C %s diff and log -p); this change keeps those edits\n", file, r.Path)
+		e.warn("", unbroken(display(file))+" was changed outside cadrei allow. This change keeps those edits.", "See what changed with "+cmd("git -C "+display(r.Path)+" log -p -- "+relTo(r.Path, file)))
 	}
 	var msg string
 	if op == "add" {
@@ -163,7 +161,7 @@ func allowChange(e *env, op string) int {
 		}
 		switch err := store.Add(kind, entry, once); {
 		case errors.Is(err, runtime.ErrGranted):
-			e.say("  %s is already granted; nothing changed", entry)
+			e.show("", entry+" is already allowed. Nothing was changed.")
 			return 0
 		case err != nil:
 			return e.fail("%s", err)
@@ -172,17 +170,14 @@ func allowChange(e *env, op string) int {
 		if once {
 			msg = "Allow for members once: " + entry
 		}
-		if warning != "" {
-			e.say("%s", warning)
-		}
-		what := "rule"
-		if kind == "auto" {
-			what = "--auto entry"
-		}
 		if once {
-			what = "one-time " + what
+			e.note("", markDone, "Allowed once: "+entry)
+		} else {
+			e.note("", markDone, "Allowed: "+entry)
 		}
-		e.say("  added %s: %s", what, entry)
+		if warning != "" {
+			e.note("", markWarn, sentence(strings.TrimPrefix(warning, "warning: ")))
+		}
 	} else {
 		target := "--once"
 		if !once {
@@ -191,7 +186,7 @@ func allowChange(e *env, op string) int {
 		removed, stale, err := store.Remove(target)
 		switch {
 		case errors.Is(err, runtime.ErrNoOnce):
-			e.say("  there are no one-time grants; nothing changed")
+			e.show("", "There's nothing allowed just once. Nothing was changed.")
 			return 0
 		case err != nil:
 			return e.fail("%s", err)
@@ -205,16 +200,15 @@ func allowChange(e *env, op string) int {
 			msg = "Remove grant for members: " + removed[0]
 		}
 		for _, x := range removed {
-			e.say("  removed: %s", x)
+			e.note("", markDone, "Removed: "+x)
 		}
 		for _, x := range stale {
-			e.say("  already gone: %s", x)
+			e.show("", x+" was already gone.")
 		}
 	}
 	perms.Record(r.Path)
-	if note, _ := cadreis.Commit(r.Path, msg, store.Files()...); note != "" {
-		e.say("%s", note)
-	}
+	// Without a git identity it stays uncommitted, silently (D3).
+	cadreis.Commit(r.Path, msg, store.Files()...)
 	e.restartNote(r)
 	return 0
 }
@@ -245,13 +239,13 @@ func (e *env) restartNote(r *cadreis.Resolved) {
 	s := scope(r)
 	list := s.Running()
 	if len(list) == 0 {
-		e.say("Members started from now on get this change.")
+		e.show("", "Team members you start from now on get this change.")
 		return
 	}
-	e.say("Running members will not see this change until restarted (each has the copy it started with):")
+	e.show("", "Team members already running keep what they started with until they restart:")
 	e.showSessions(s.T, list, nil)
-	// The commands carry the cadrei, since the user may run them anywhere.
-	pin := "CADREI_HOME=" + session.Quote(r.Path) + " "
+	// The commands carry the crew, since the user may run them anywhere.
+	pin := "CADREI_HOME=" + shellPath(r.Path) + " "
 	e.say("Restart one with:")
 	generic := false
 	for _, i := range list {
@@ -275,4 +269,16 @@ func (e *env) restartNote(r *cadreis.Resolved) {
 		e.say("  %scadrei stop <team> [project] && %scadrei up <team> [project]", pin, pin)
 		e.say("  (a 0.1.x session cadre-<team>-<project> is team <team>, project <project>)")
 	}
+}
+
+// shellPath writes a folder for a shell command: with ~ when that's safe to
+// type unquoted, else quoted in full.
+func shellPath(p string) string {
+	d := display(p)
+	for _, r := range d {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("~/._-", r)) {
+			return session.Quote(p)
+		}
+	}
+	return d
 }

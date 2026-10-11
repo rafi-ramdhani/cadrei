@@ -23,11 +23,19 @@ const (
 	// LastFindings identifies the fast health findings of the last run, so
 	// the full check runs again only when one is new.
 	LastFindings = "last_findings"
+	// HookOffer is "skipped" once the user said no to the every-chat hook,
+	// so the orchestrator doesn't offer it again.
+	HookOffer = "hook_offer"
+	// IdentityWarned is set once the first run said git has no identity.
+	IdentityWarned = "identity_warned"
+	// FirstTaskPending is set by the first run and cleared by the first
+	// cadrei up that starts a member: until then the orchestrator greets
+	// as on a first run.
+	FirstTaskPending = "first_task_pending"
 )
 
-// OrchestratorID is the key of the last conversation id cadrei issued to a
-// cadrei's orchestrator: it resumes only that one.
-func OrchestratorID(cadrei string) string { return "orchestrator_id:" + cadrei }
+// oldOrchestratorKey is where 0.2.0 kept a cadrei's orchestrator id.
+func oldOrchestratorKey(cadrei string) string { return "orchestrator_id:" + cadrei }
 
 // OldLinkKept is the key that remembers the user kept a 0.1.x link when
 // asked to remove it.
@@ -35,6 +43,15 @@ func OldLinkKept(link string) string { return "old_link_kept:" + link }
 
 // GetState returns a remembered value, or "".
 func GetState(key string) string { return readState()[key] }
+
+// StateKeys lists the keys in the state file.
+func StateKeys() []string {
+	var out []string
+	for k := range readState() {
+		out = append(out, k)
+	}
+	return out
+}
 
 func readState() map[string]string {
 	m := map[string]string{}

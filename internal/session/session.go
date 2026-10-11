@@ -179,7 +179,7 @@ func (s Scope) CheckSession(team, project string) error {
 		return errors.New(m)
 	}
 	if home := s.T.Option(name, "@cadrei_home"); home != s.Path {
-		return fmt.Errorf("tmux session %s belongs to cadrei %s (%s), not cadrei %s (%s); rename a team or one of the cadrei folders", name, filepath.Base(home), home, s.Name, s.Path)
+		return fmt.Errorf("tmux session %s belongs to the crew %s (%s), not the crew %s (%s); rename a team or one of the crew folders", name, filepath.Base(home), home, s.Name, s.Path)
 	}
 	t, p := s.T.Option(name, "@cadrei_team"), s.T.Option(name, "@cadrei_project")
 	if t != team || p != project {
@@ -197,9 +197,9 @@ func (s Scope) CheckSession(team, project string) error {
 // (another cadrei, team, project or role whose names join the same way),
 // since a name must reach one session only.
 func (s Scope) CheckMember(session, window, member string) error {
-	for _, p := range s.T.Members() {
-		if p.Name == member && !(p.Session == session && p.Window == window) {
-			return fmt.Errorf("the session name %s is already used by window %s of tmux session %s; rename a team, role or cadrei folder so the names differ", member, p.Window, p.Session)
+	for _, w := range s.T.AllWindows() {
+		if w.Member == member && !(w.Session.Name == session && w.Name == window) {
+			return fmt.Errorf("the session name %s is already used by window %s of tmux session %s; rename a team, role or cadrei folder so the names differ", member, w.Name, w.Session.Name)
 		}
 	}
 	return nil
@@ -210,20 +210,25 @@ func (s Scope) CheckMember(session, window, member string) error {
 func Group(i Info, known map[string]string) string {
 	switch {
 	case i.Legacy():
-		return "legacy sessions (started by cadre 0.1.x)"
+		return "Started by cadre 0.1.x"
 	case i.Home == "":
-		return "sessions without cadrei's markers"
+		return "Not started by cadrei"
 	case known[i.Home] != "":
-		return "cadrei " + known[i.Home]
+		return known[i.Home]
 	}
-	return "unknown cadrei at " + i.Home
+	return "A crew cadrei doesn't know (" + i.Home + ")"
 }
 
 // All lists every member session on the server, sorted by group and name,
 // with known mapping a cadrei's path to its name.
 func All(t Tmux, known map[string]string) []Info {
+	return Members(t.Sessions(), known)
+}
+
+// Members is All for a list already read.
+func Members(list []Info, known map[string]string) []Info {
 	var out []Info
-	for _, i := range t.Sessions() {
+	for _, i := range list {
 		if i.Role != "orchestrator" {
 			out = append(out, i)
 		}

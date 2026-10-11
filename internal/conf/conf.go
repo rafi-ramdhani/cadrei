@@ -52,3 +52,43 @@ func unquote(v string) (string, bool) {
 	}
 	return v, plain.MatchString(v)
 }
+
+// Set returns data with KEY=value: the first line that sets key is
+// replaced, and later ones that set it too are dropped (Parse lets the last
+// one win, so a second one would undo the change), or the line is added at
+// the end. Every other line, comments and keys cadrei doesn't know
+// included, stays as it is.
+func Set(data, key, value string) string {
+	lines := strings.Split(data, "\n")
+	out, set := lines[:0:0], false
+	for _, raw := range lines {
+		if m := assignment.FindStringSubmatch(strings.TrimSpace(raw)); m != nil && m[1] == key {
+			if !set {
+				out = append(out, key+"="+value)
+				set = true
+			}
+			continue
+		}
+		out = append(out, raw)
+	}
+	if set {
+		return strings.Join(out, "\n")
+	}
+	if data != "" && !strings.HasSuffix(data, "\n") {
+		data += "\n"
+	}
+	return data + key + "=" + value + "\n"
+}
+
+// Unset removes every line that assigns key, keeping the rest as written.
+func Unset(data, key string) string {
+	lines := strings.Split(data, "\n")
+	out := lines[:0]
+	for _, raw := range lines {
+		if m := assignment.FindStringSubmatch(strings.TrimSpace(raw)); m != nil && m[1] == key {
+			continue
+		}
+		out = append(out, raw)
+	}
+	return strings.Join(out, "\n")
+}

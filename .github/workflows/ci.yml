@@ -28,7 +28,7 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global init.defaultBranch main
       - name: Lint
-        run: shellcheck -x bin/cadre bin/orchestrator-hook.sh install.sh packaging/homebrew/formula.sh tests/smoke.sh tests/bridge.sh
+        run: shellcheck -x bin/cadre bin/orchestrator-hook.sh install.sh packaging/homebrew/formula.sh tests/smoke.sh tests/bridge.sh tests/skips.sh
       # 0.1.x installs point into a clone of this repository; a pull must
       # leave them quiet and pointing to the new install.
       - name: The bridge for 0.1.x installs
@@ -68,10 +68,23 @@ jobs:
       - name: Staticcheck
         if: matrix.go == 'go.mod'
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
+      # Verbose, so tests/skips.sh can fail on a test that skipped where it
+      # shouldn't: such a test tests nothing, and no other step would say.
       - name: Test
-        run: go test -race ./...
+        run: |
+          set -o pipefail
+          go test -race -v ./... 2>&1 | tee test.log
+          tests/skips.sh race < test.log
       - name: Test with the test-only parts (-tags cadreitest)
-        run: go test -race -tags cadreitest ./...
+        run: |
+          set -o pipefail
+          go test -race -v -tags cadreitest ./... 2>&1 | tee test-tag.log
+          tests/skips.sh race < test-tag.log
+      # The tests that time cadrei skip under -race, whose program isn't the
+      # real one: run them once without it (criteria 46, 52, 118 and 124).
+      - name: Timing tests
+        if: runner.os == 'macOS' && matrix.go == 'go.mod'
+        run: go test -count=1 -run 'Budget|Timings|TimesForReal|IdlesCheaply|WakesTwice|SurvivesAnOldProgram|LoginCheckHangs|OpensSoon|IsReady|ReaderLeaves' ./cmd/cadrei/
       - name: Smoke test against the Go binary
         run: tests/smoke.sh
       - name: Windows build (the binary refuses to run there)

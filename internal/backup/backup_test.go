@@ -77,7 +77,9 @@ func TestScan(t *testing.T) {
 	git(t, dir, "remote", "add", "origin", remote)
 	git(t, dir, "push", "-q", "origin", "main")
 	// A secret added then removed is still in the history that is pushed.
-	commit(t, dir, map[string]string{"teams/dev/notes.md": "key: sk-ant-api03-AbCdEfGhIjKlMnOpQrSt\n"})
+	// Shaped like a key only at run time, so this file holds no
+	// secret-shaped string for scanners (or the pre-push check) to find.
+	commit(t, dir, map[string]string{"teams/dev/notes.md": "key: " + "sk-ant-" + "api03-" + strings.Repeat("a", 20) + "\n"})
 	os.Remove(filepath.Join(dir, "teams/dev/notes.md"))
 	head := commit(t, dir, map[string]string{
 		"teams/dev/.env.local":   "X=1\n",
@@ -86,7 +88,10 @@ func TestScan(t *testing.T) {
 		"teams/dev/id_ed25519":   "key\n",
 		"teams/dev/ok.md":        "fine, and ghp_ is only a prefix here\n",
 		"teams/dev/gh.txt":       "token ghp_" + strings.Repeat("a", 36) + "\n",
-		"teams/dev/key.txt":      "-----BEGIN OPENSSH PRIVATE KEY-----\n",
+		"teams/dev/key.txt":      "-----BEGIN " + "OPENSSH PRIVATE" + " KEY-----\n", // a key header only at run time
+		// A password in a URL only at run time; a placeholder isn't one.
+		"projects.yaml":    "app:\n  repo: https://alice:" + "hunter2" + "x@git.example.com/alice/app.git\n",
+		"teams/dev/how.md": "Clone with https://user:<token>@git.example.com/x.git or https://${USER}:${TOKEN}@host/x\n",
 	})
 	got, err := Scan(dir, "origin", []Update{{"refs/heads/main", head, "refs/heads/main", "0000"}})
 	if err != nil {
@@ -95,6 +100,7 @@ func TestScan(t *testing.T) {
 	want := map[string]string{
 		"teams/dev/.env.local": "environment file", "teams/dev/big.bin": "over the", "teams/dev/gh.txt": "GitHub token",
 		"teams/dev/id_ed25519": "private key", "teams/dev/key.txt": "private key", "teams/dev/notes.md": "Anthropic API key",
+		"projects.yaml": "password in a URL",
 	}
 	if len(got) != len(want) {
 		t.Errorf("findings %+v", got)
@@ -244,7 +250,35 @@ func TestTheHookStopsAPushWhenCadreiIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := exec.Command("git", "-C", dir, "push", "-q", "backup", "main").CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "the check for credentials could not run, since") || !strings.Contains(string(out), "gone/cadrei is missing") {
+	if err == nil || !strings.Contains(string(out), "cadrei is missing, so this check can't run. Reinstall cadrei, or remove .git/hooks/pre-push.") {
 		t.Errorf("push: %v %s", err, out)
+	}
+}
+
+// Review of fix round 5 (sec-exposure-2): a password holding any
+// character, or one with a placeholder and more, counts; so does a token
+// used as the user. A placeholder whole doesn't, nor does a plain user.
+// Every value is made at run time, so this file holds no URL with a
+// password in it.
+func TestURLSecret(t *testing.T) {
+	url := func(user string) string { return "clone https://" + user + "@git.example.com/me/app.git\n" }
+	for _, user := range []string{
+		"u:" + "pa$$w0rd", "u:" + "pa*ss", "u:" + "a{b}c", "u:" + "a<b", "u:" + "${TOKEN}" + "real", "u:" + "real${X}",
+		strings.Repeat("ab12", 10), "glpat-" + strings.Repeat("x1", 10),
+		// A token as the user, with an empty or placeholder password.
+		strings.Repeat("ab12", 10) + ":", strings.Repeat("ab12", 10) + ":xxx", strings.Repeat("ab12", 10) + ":${PASS}",
+	} {
+		if !urlSecret([]byte(url(user))) {
+			t.Errorf("missed %q", user)
+		}
+	}
+	for _, user := range []string{"u:<token>", "${USER}:${TOKEN}", "u:$TOKEN", "u:{{token}}", "u:***", "u:xxxx", "git", "me", "u:",
+		"<token>", "${TOKEN}", strings.Repeat("a", 30), "first.last"} {
+		if urlSecret([]byte(url(user))) {
+			t.Errorf("%q counted", user)
+		}
+	}
+	if urlSecret([]byte("git@github.com:me/app.git and ssh://git@example.com/x\n")) {
+		t.Error("a plain ssh user counted")
 	}
 }

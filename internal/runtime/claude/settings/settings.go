@@ -11,13 +11,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/gitx"
 	"github.com/rafi-ramdhani/cadrei/internal/jsonx"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 )
@@ -26,6 +26,9 @@ import (
 // editing it or running cadrei allow. The fixed entries name the file by a
 // pattern, not its path, so they stay valid when the cadrei is cloned. Edit
 // rules also cover the Write tool; Claude Code ignores Write(path) rules.
+// Frozen: every cadrei version requires these exact entries in a tracked
+// file, so a crew written by one version is valid for every other. New
+// limits go in FixedDeny, which only the build copy holds.
 var Protect = []string{"Edit(//**/.claude/member-settings.json)", "Bash(cadrei allow:*)"}
 
 // cadreiDeny keeps members off cadrei's own files under ~/.cadrei (N.7).
@@ -38,20 +41,28 @@ var Protect = []string{"Edit(//**/.claude/member-settings.json)", "Bash(cadrei a
 var cadreiDeny = []string{"Edit(//**/.cadrei/config/**)", "Edit(//**/.cadrei/framework/**)",
 	"Edit(//**/.cadrei/*/.claude/**)", "Edit(//**/.cadrei/*/cadrei.conf)", "Edit(//**/.cadrei/*/members/**)",
 	"Edit(//**/.cadrei/*/playbook.md)", "Edit(//**/.cadrei/*/protocol.md)", "Edit(//**/.cadrei/*/projects.yaml)",
-	"Edit(//**/.cadrei/*/.git/**)"}
+	"Edit(//**/.cadrei/*/.git/**)",
+	// Claude Code loads these into the orchestrator; the template has none.
+	"Edit(//**/.cadrei/*/CLAUDE.md)", "Edit(//**/.cadrei/*/CLAUDE.local.md)", "Edit(//**/.cadrei/*/.mcp.json)",
+	// Archived setups: the user's to bring back, never a member's to read.
+	"Read(//**/.cadrei-archive/**)", "Edit(//**/.cadrei-archive/**)"}
 
 // FixedDeny is added to every member's copy: Protect, the commands that
-// register or switch cadreis, and cadrei's own files.
-var FixedDeny = append(append(append([]string{}, Protect...), "Bash(cadrei use:*)", "Bash(cadrei cadreis:*)", "Bash(cadrei init:*)"), cadreiDeny...)
+// make or switch crews, the ones that move, delete or bring back
+// every crew, and cadrei's own files.
+var FixedDeny = append(append(append([]string{}, Protect...), "Bash(cadrei use:*)", "Bash(cadrei cadreis:*)", "Bash(cadrei init:*)", "Bash(cadrei new:*)",
+	"Bash(cadrei uninstall:*)", "Bash(cadrei restore:*)"), cadreiDeny...)
 
-// FixedSoft is the autoMode.soft_deny entry a file must hold.
+// FixedSoft is the autoMode.soft_deny entry a file must hold. Frozen, as
+// Protect is: change CadreiSoft, which only the build copy holds, instead.
 const FixedSoft = "Changing member permissions (editing a cadrei's .claude/member-settings.json " +
 	"or running cadrei allow) is only done by the user through the orchestrator"
 
 // CadreiSoft is added to every copy's autoMode.soft_deny: Edit rules do not
 // cover shell writes, which this tells the auto-mode classifier about.
 const CadreiSoft = "Changing cadrei's own files under ~/.cadrei (settings, members, playbook, registry, " +
-	"cadrei.conf, build files), other than team folders, is only done by the user through the orchestrator"
+	"cadrei.conf, build files), other than team folders, and reading or changing archived setups under " +
+	"~/.cadrei-archive, is only done by the user through the orchestrator"
 
 // legacy entries are dropped from the copy: Claude Code ignores Write(path)
 // rules and warns about them at startup.
@@ -187,22 +198,40 @@ func contains(list []string, s string) bool {
 // //**/.cadrei globs: ~/.cadrei as resolved, and every known cadrei.
 type Places struct {
 	Root    string
+	Archive string // ~/.cadrei-archive's physical path, which a linked ~/.cadrei doesn't give
 	Cadreis []string
 	// SessionHook is the command a member's session runs when it starts
 	// (cadrei hook session), to keep its recorded conversation id current
 	// across /clear and /compact; "" for none.
 	SessionHook string
+	// StateHook is the command a member's session runs on each of
+	// StateEvents (cadrei hook state), so cadrei ls can say what it is
+	// doing; "" for none.
+	StateHook   string
+	StateEvents []string
+	// GuardHook is the command a member's session runs before each Bash
+	// call (cadrei hook guard), which blocks cadrei's uninstall and
+	// restore in any form. Never in the orchestrator's settings.
+	GuardHook string
 }
+
+// toolEvents are the hook events that take a tool matcher.
+var toolEvents = map[string]bool{"PreToolUse": true, "PostToolUse": true, "PermissionRequest": true, "Notification": true}
 
 // deny returns the N.7 rules spelled with these folders.
 func (p Places) deny() []string {
 	var out []string
 	if p.Root != "" {
 		root := escapeGlob(p.Root)
-		out = append(out, "Edit(/"+root+"/config/**)", "Edit(/"+root+"/framework/**)")
+		archive := p.Archive
+		if archive == "" {
+			archive = filepath.Join(filepath.Dir(p.Root), ".cadrei-archive")
+		}
+		archive = escapeGlob(archive)
+		out = append(out, "Edit(/"+root+"/config/**)", "Edit(/"+root+"/framework/**)", "Read(/"+archive+"/**)", "Edit(/"+archive+"/**)")
 	}
 	for _, c := range p.Cadreis {
-		for _, f := range []string{"/.claude/**", "/cadrei.conf", "/members/**", "/playbook.md", "/protocol.md", "/projects.yaml", "/.git/**"} {
+		for _, f := range []string{"/.claude/**", "/cadrei.conf", "/members/**", "/playbook.md", "/protocol.md", "/projects.yaml", "/.git/**", "/CLAUDE.md", "/CLAUDE.local.md", "/.mcp.json"} {
 			out = append(out, "Edit(/"+escapeGlob(c)+f+")")
 		}
 	}
@@ -298,10 +327,36 @@ func write(root *jsonx.Value, dir string, places Places) (string, error) {
 		soft = append(soft, CadreiSoft)
 	}
 	mode.Set("soft_deny", strs(soft...))
+	hooks := jsonx.NewObject()
 	if places.SessionHook != "" {
 		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(places.SessionHook), "timeout", jsonx.Literal("10"))
 		group := jsonx.NewObject("hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
-		out.Set("hooks", jsonx.NewObject("SessionStart", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}}))
+		hooks.Set("SessionStart", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}})
+	}
+	if places.StateHook != "" {
+		// Synchronous, so states are written in order; a short time
+		// limit, since the hook runs on every tool call.
+		for _, ev := range places.StateEvents {
+			hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(places.StateHook), "timeout", jsonx.Literal("5"))
+			group := jsonx.NewObject("hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
+			if toolEvents[ev] {
+				group = jsonx.NewObject("matcher", jsonx.String(""), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
+			}
+			hooks.Set(ev, &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}})
+		}
+	}
+	if places.GuardHook != "" {
+		// First among the PreToolUse groups, and fails closed.
+		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(places.GuardHook), "timeout", jsonx.Literal("10"))
+		group := jsonx.NewObject("matcher", jsonx.String("Bash"), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
+		groups := []*jsonx.Value{group}
+		if pre := hooks.Get("PreToolUse"); pre != nil {
+			groups = append(groups, pre.Items...)
+		}
+		hooks.Set("PreToolUse", &jsonx.Value{Kind: jsonx.Array, Items: groups})
+	}
+	if len(hooks.Members) > 0 {
+		out.Set("hooks", hooks)
 	}
 	text := jsonx.Format(out, "  ")
 	sum := sha256.Sum256(text)
@@ -407,7 +462,7 @@ var commitSubjects = []string{"Add the member settings file", "Allow for members
 // grant pulled from another machine) is accepted and re-recorded.
 func FromCadrei(cadrei string) bool {
 	git := func(args ...string) ([]byte, error) {
-		return exec.Command("git", append([]string{"-C", cadrei}, args...)...).Output()
+		return gitx.Reading(cadrei, args...).Output()
 	}
 	if _, err := git("rev-parse", "--git-dir"); err != nil {
 		return false
@@ -431,11 +486,35 @@ func FromCadrei(cadrei string) bool {
 	return false
 }
 
+// Committed reports whether the cadrei's settings file is in its HEAD
+// commit (a detached HEAD counts).
+func Committed(cadrei string) bool {
+	return gitx.Reading(cadrei, "cat-file", "-e", "HEAD:"+Rel).Run() == nil
+}
+
+// FirstUse reports whether the file has no record on this machine and no
+// commit to check it against, so it can only be taken as it is.
+func FirstUse(cadrei, path, hashFile string) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	state, err := Verify(path, hashFile)
+	return err == nil && state == Unknown && !Committed(cadrei)
+}
+
 // ChangedOutside reports whether the file was changed outside cadrei allow:
 // its hash is unknown or differs, and it is not what cadrei last committed.
 // A file cadrei committed is re-recorded and accepted.
 func ChangedOutside(cadrei, path, hashFile string) bool {
-	if state, err := Verify(path, hashFile); err == nil && state == Same {
+	state, err := Verify(path, hashFile)
+	if err == nil && state == Same {
+		return false
+	}
+	// No record on this machine and nothing committed to compare with
+	// (no commits yet, or a file never committed): taken as it is, as on
+	// first use. cadrei --check says so (FirstUse).
+	if err == nil && state == Unknown && !Committed(cadrei) {
+		Record(path, hashFile)
 		return false
 	}
 	if FromCadrei(cadrei) {

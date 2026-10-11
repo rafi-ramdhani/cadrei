@@ -1,0 +1,21 @@
+cadrei
+
+The code and text in this repository are under the MIT license (see LICENSE),
+with one exception that keeps its own terms:
+
+Brand art: Copyright (c) 2026 Rafi Ramdhani Azis. All rights reserved.
+It is not covered by the MIT license. The brand art is the cadrei logo and
+lockups, the characters and the lead's expressions, and the terminal glyph art
+of the lead that cadrei draws beside its first lines. In this repository that
+is:
+
+  mascot/lead.pixels
+  mascot/truecolor.txt
+  mascot/256.txt
+  docs/brand/ (the README's header art, crew art and demo)
+  any other logo or character art under docs/
+
+The same art is embedded in the cadrei program, which draws it in its output.
+
+The code that draws and generates the art (internal/mascot and mascot/gen)
+stays under the MIT license, like the rest of the code.

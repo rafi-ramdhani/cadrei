@@ -1,0 +1,215 @@
+package claude
+
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/rafi-ramdhani/cadrei/internal/runtime"
+)
+
+// fixtures are the synthetic transcripts the spec describes (7.7).
+const fixtures = "../../../cmd/cadrei/testdata/transcripts"
+
+// Acceptance 37 and 42: the matcher flags a stop with no normal reply
+// after it, whatever model the notice names, and reads only the end of a
+// long transcript, past a bad last line.
+func TestSafeguardStop(t *testing.T) {
+	for name, want := range map[string]bool{"safeguard-stuck.jsonl": true, "safeguard-refused-twice.jsonl": true, "partial.jsonl": true, "refusal-no-notice.jsonl": true,
+		"safeguard-recovered.jsonl": false, "quoted.jsonl": false} {
+		raw, err := os.ReadFile(filepath.Join(fixtures, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, model := range []string{"Test Model's", "Other Model's"} {
+			path := filepath.Join(t.TempDir(), name)
+			os.WriteFile(path, bytes.ReplaceAll(raw, []byte("Test Model's"), []byte(model)), 0o600)
+			at, got := sessions{}.SafeguardStop(path)
+			if got != want {
+				t.Errorf("%s with %s: stopped %v, want %v", name, model, got, want)
+			}
+			if got && at.Format("15:04:05") != "10:00:05" {
+				t.Errorf("%s: stopped at %v", name, at)
+			}
+		}
+	}
+	// A stop further back than the last 256 KB is not read.
+	raw, _ := os.ReadFile(filepath.Join(fixtures, "safeguard-stuck.jsonl"))
+	pad := strings.Repeat(`{"type":"progress","data":"`+strings.Repeat("x", 400)+`"}`+"\n", 700)
+	path := filepath.Join(t.TempDir(), "old-stop.jsonl")
+	os.WriteFile(path, append(raw, pad...), 0o600)
+	if _, got := (sessions{}).SafeguardStop(path); got {
+		t.Error("a stop before the last 256 KB was read")
+	}
+	if _, got := (sessions{}).SafeguardStop(filepath.Join(t.TempDir(), "none.jsonl")); got {
+		t.Error("a missing transcript was flagged")
+	}
+}
+
+func TestStateEvent(t *testing.T) {
+	id := "00000000-0000-4000-8000-000000000001"
+	for in, want := range map[string]runtime.StateEvent{
+		`{"hook_event_name":"UserPromptSubmit","session_id":"` + id + `","transcript_path":"/t/x.jsonl"}`: {Name: runtime.EvPrompt, Session: id, Transcript: "/t/x.jsonl"},
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`:                                             {Name: runtime.EvToolUse},
+		`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`:                                      {Name: runtime.EvPermission},
+		`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`:                           {Name: runtime.EvPermission, Question: true},
+		`{"hook_event_name":"Notification","notification_type":"permission_prompt"}`:                      {},
+		`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`:                            {Name: runtime.EvIdleReminder},
+		`{"hook_event_name":"StopFailure","error":"rate_limit"}`:                                          {Name: runtime.EvStopFailure},
+		`{"hook_event_name":"SessionEnd","session_id":"not-an-id","transcript_path":"relative"}`:          {Name: runtime.EvEnd},
+		`not json`: {},
+	} {
+		if got := (sessions{}).StateEvent(strings.NewReader(in)); got != want {
+			t.Errorf("%s: %+v, want %+v", in, got, want)
+		}
+	}
+}
+
+// Audit perf-start-4: the footer's shortcuts hint gives way to a mode or
+// the voice hint; each counts as ready, and a screen still starting
+// doesn't.
+func TestReadyKnowsEveryFooter(t *testing.T) {
+	for _, screen := range []string{"> \n  ? for shortcuts", "> \n  ⏵⏵ accept edits on (shift+tab to cycle)", "> \n  ⏸ plan mode on", "> \n  hold space to speak"} {
+		if !(sessions{}).Ready(screen) {
+			t.Errorf("not ready: %q", screen)
+		}
+	}
+	if (sessions{}).Ready("Welcome to Claude Code\n  Loading...") {
+		t.Error("a starting screen is ready")
+	}
+}
+
+// Review of fix round 5 (S3 regression): the screens before the prompt
+// that wait on the user count as going; any other line doesn't, so a
+// command that prints and ends isn't taken for one.
+func TestWaitingKnowsTheFirstScreens(t *testing.T) {
+	for _, screen := range []string{
+		" Let's get started.\n Choose the text style that looks best with your terminal\n ❯ ✔ Dark mode",
+		" Select login method:\n ❯ 1. Claude account with subscription",
+		" Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ 1. Yes, I trust this folder",
+		" Do you trust the files in this folder?",
+		// Each mark alone (review of fix round 6), the trust screen's
+		// question wrapped in a narrow pane.
+		" Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n (Like your own code)",
+		" Accessing workspace:\n Quick safety check:\n Is this a project you\n ❯ 1. Yes, I trust this folder",
+		"╭────╮\n│ Do you trust the files in this folder? │",
+	} {
+		if !(sessions{}).Waiting(screen) {
+			t.Errorf("not waiting: %q", screen)
+		}
+	}
+	for _, screen := range []string{"Welcome to Claude Code\n  Loading...", "No conversation found with session ID: x", "Error: something went wrong", "",
+		// A mark inside other text isn't the screen.
+		"Error: Do you trust the files in this folder? check failed", "> Your last message: Select login method: SSO"} {
+		if (sessions{}).Waiting(screen) {
+			t.Errorf("waiting: %q", screen)
+		}
+	}
+}
+
+// The guard's hook command fails closed: with the program gone, or one
+// that fails or refuses, the call is blocked (Claude Code blocks on 2).
+func TestTheGuardsCommandFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	for name, script := range map[string]string{"ok": "exit 0", "fails": "exit 1", "refuses": "exit 2"} {
+		cmd := exec.Command("/bin/sh", "-c", `printf '%s' "$2" > "$1" && chmod 755 "$1"`, "sh", dir+"/"+name, "#!/bin/sh\n"+script+"\n")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for bin, want := range map[string]int{dir + "/ok": 0, dir + "/fails": 2, dir + "/refuses": 2, dir + "/gone": 2} {
+		err := exec.Command("/bin/sh", "-c", GuardHook(bin)).Run()
+		code := 0
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		}
+		if code != want {
+			t.Errorf("%s: exit %d", bin, code)
+		}
+	}
+}
+
+// ShellCommand reads Claude Code's PreToolUse input: Bash's command, no
+// command for another tool, and an error for anything it can't read.
+func TestShellCommandReadsTheBashCall(t *testing.T) {
+	ops := sessions{}
+	if c, shell, err := ops.ShellCommand(strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`)); c != "ls -la" || !shell || err != nil {
+		t.Errorf("Bash: %q %v %v", c, shell, err)
+	}
+	if _, shell, err := ops.ShellCommand(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/x"}}`)); shell || err != nil {
+		t.Errorf("Read: %v %v", shell, err)
+	}
+	for _, in := range []string{"", "[]", `{"tool_input":{"command":"ls"}}`, `{"tool_name":"Bash"}`, `{"tool_name":"Bash","tool_input":{"command":3}}`, strings.Repeat(" ", guardLimit+1)} {
+		if _, _, err := ops.ShellCommand(strings.NewReader(in)); err == nil {
+			t.Errorf("read %.40q", in)
+		}
+	}
+}
+
+// The orchestrator's settings run cadrei hook notify after each SendMessage
+// call, guarded, with a short time limit; with a program that's gone or
+// doesn't know the word, the call ends with exit 0 and nothing on stdout.
+func TestTheNotifyHookIsTheOrchestratorsAndStaysQuiet(t *testing.T) {
+	dir := t.TempDir()
+	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Hooks map[string][]struct {
+			Matcher string
+			Hooks   []struct {
+				Command string
+				Timeout int
+			}
+		}
+	}
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	post := s.Hooks["PostToolUse"]
+	if len(post) != 1 || post[0].Matcher != "SendMessage" || len(post[0].Hooks) != 1 || post[0].Hooks[0].Command != NotifyHook("/opt/cadrei/bin/cadrei") ||
+		post[0].Hooks[0].Timeout != 5 || !strings.HasSuffix(NotifyHook("x"), " hook notify 2>/dev/null; exit 0") {
+		t.Errorf("PostToolUse: %+v", post)
+	}
+	// An older cadrei says it doesn't know the word on stderr and fails.
+	old := filepath.Join(dir, "cadrei")
+	cmd := exec.Command("/bin/sh", "-c", `printf '%s' "$2" > "$1" && chmod 755 "$1"`, "sh", old, "#!/bin/sh\necho \"cadrei: unknown command 'hook notify'\" >&2\nexit 1\n")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, bin := range []string{old, filepath.Join(dir, "gone")} {
+		out, err := exec.Command("/bin/sh", "-c", NotifyHook(bin)).Output()
+		if err != nil || len(out) != 0 {
+			t.Errorf("%s: %v, stdout %q", bin, err, out)
+		}
+	}
+}
+
+// Sent reads Claude Code's PostToolUse input for SendMessage: its target,
+// its notify_when_idle, and a subagent's agent_id.
+func TestSentReadsASendMessageCall(t *testing.T) {
+	ops := sessions{}
+	for in, want := range map[string]runtime.Sent{
+		`{"tool_name":"SendMessage","tool_input":{"to":"work-dev-engineer","message":"x"}}`:                 {To: "work-dev-engineer"},
+		`{"tool_name":"SendMessage","tool_input":{"to":"work-dev-engineer","notify_when_idle":true}}`:       {To: "work-dev-engineer", Notify: true},
+		`{"tool_name":"SendMessage","agent_id":"a1","tool_input":{"to":"work-dev-engineer","message":"x"}}`: {To: "work-dev-engineer", Subagent: true},
+	} {
+		if got, ok := ops.Sent(strings.NewReader(in)); !ok || got != want {
+			t.Errorf("%s: %+v %v", in, got, ok)
+		}
+	}
+	for _, in := range []string{"", "{x", `{"tool_name":"Bash","tool_input":{"command":"ls"}}`, `{"tool_name":"SendMessage","tool_input":{"message":"x"}}`} {
+		if _, ok := ops.Sent(strings.NewReader(in)); ok {
+			t.Errorf("read %q", in)
+		}
+	}
+	if got := string(ops.SentContext("x")); got != `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"x"}}`+"\n" {
+		t.Errorf("SentContext: %s", got)
+	}
+}

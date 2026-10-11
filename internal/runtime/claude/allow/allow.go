@@ -217,8 +217,8 @@ func (c *Checker) command(rule, spec string) string {
 	}
 	if base == "cadrei" {
 		switch normText(rest[0]) {
-		case "use", "cadreis", "init":
-			refuse("refused: %s lets a member register or switch cadreis, which only the user does", rule)
+		case "use", "cadreis", "init", "new":
+			refuse("refused: %s lets a member make or switch crews, which only the user does", rule)
 		}
 	}
 	sub := ""
@@ -384,6 +384,14 @@ func (c *Checker) path(rule, tool, spec string) string {
 			}
 		}
 	}
+	// Archived setups are the user's: a rule that names them is refused
+	// (the fixed denies keep members out of them whatever else is granted).
+	archive := c.Home + "/.cadrei-archive"
+	for _, f := range forms {
+		if fixed := strings.TrimRight(fixedPart(f), "/"); named(".cadrei-archive") || fixed == archive || strings.HasPrefix(fixed, archive+"/") || fixed == paths.Real(archive) {
+			refuse("refused: %s reaches ~/.cadrei-archive, your archived setups, which members never get", rule)
+		}
+	}
 	if tool == "Read" {
 		for _, t := range []string{c.Home + "/.ssh/", c.Home + "/.aws/", c.Home + "/.gnupg/", c.Home + "/.config/gh/"} {
 			if hit(t) {
@@ -428,7 +436,7 @@ func (c *Checker) path(rule, tool, spec string) string {
 	}
 	for _, cadrei := range c.Cadreis {
 		if cadrei != c.Cadrei && hit(cadrei+"/teams/") {
-			return fmt.Sprintf("warning: %s reaches the team folders of the cadrei at %s; this cadrei's members would change that cadrei's work", rule, cadrei)
+			return fmt.Sprintf("warning: %s reaches the team folders of the crew at %s; this crew's members would change that crew's work", rule, cadrei)
 		}
 	}
 	return ""
@@ -497,7 +505,7 @@ func (c *Checker) commandWord(rule, w string) {
 		parts := strings.Split(w, "/")
 		for _, p := range parts[1:] {
 			if name := c.ownName(p); name != "" {
-				refuse("refused: %s reaches %s in whatever folder %s names, and a cadrei's %s is its own file; only the user changes those, through the orchestrator", rule, name, parts[0], name)
+				refuse("refused: %s reaches %s in whatever folder %s names, and a crew's %s is its own file; only the user changes those, through the orchestrator", rule, name, parts[0], name)
 			}
 		}
 		return
@@ -529,7 +537,7 @@ func (c *Checker) commandWord(rule, w string) {
 				if k >= 2 {
 					for _, p := range parts[i+k : min(len(parts), i+2*k-1)] {
 						if name := c.ownName(p); name != "" {
-							refuse("refused: %s climbs out to %s, a cadrei's own file; only the user changes those, through the orchestrator", rule, name)
+							refuse("refused: %s climbs out to %s, a crew's own file; only the user changes those, through the orchestrator", rule, name)
 						}
 					}
 				}

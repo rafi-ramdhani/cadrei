@@ -9,6 +9,12 @@ import "embed"
 // The template is embedded with all: so its dot files (.gitignore,
 // teams/.gitkeep) come along. orchestrator.md is the one source of the
 // orchestrator's instructions, for its prompt and for the hook (K.3).
+// mascot's .txt files are the mascot's half-block art (7.12) as the
+// escape codes that draw it, one file for truecolor and one for 256
+// colors, every row the same width, drawn from the brand's lead.pixels
+// (kept beside them, not embedded) by go generate, with its transparent
+// pixels left to the terminal's background.
 //
-//go:embed skills/cadrei/SKILL.md protocol.md orchestrator.md all:template
+//go:generate go run ./mascot/gen
+//go:embed skills/cadrei/SKILL.md protocol.md orchestrator.md all:template mascot/*.txt
 var Assets embed.FS

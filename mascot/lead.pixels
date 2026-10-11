@@ -1,0 +1,16 @@
+# The cadrei lead, Sturdy build, as a tiny terminal mascot.
+# One character per pixel; two pixel rows make one terminal row (half blocks). "." is transparent.
+# A green headset band and ear cups around a clay monitor, a dark screen with ivory eyes and smile,
+# the green status bar along the bottom of the screen, and two legs.
+#
+# G = #3D9F60  256:71  headset and status bar (tmux green, the status bar's own color)
+# C = #C2603E  256:173 clay body and legs
+# S = #2A2522  256:235 screen
+# W = #FAF8F4  256:255 eyes and smile (ivory, the brand paper)
+#
+.GGGGGGGGGG.
+G.CCCCCCCC.G
+GCSWSSSSWSCG
+.CSSSWWSSSC.
+.CGGGGGGGGC.
+..CC....CC..

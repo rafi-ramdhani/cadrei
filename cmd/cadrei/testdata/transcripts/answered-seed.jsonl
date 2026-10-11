@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": "(cadrei opened this chat)"}, "timestamp": "2026-01-01T10:00:00.000Z"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Welcome back. Your team is ready. What's next?"}], "stop_reason": "end_turn"}, "timestamp": "2026-01-01T10:00:03.000Z"}

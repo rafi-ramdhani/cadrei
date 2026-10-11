@@ -300,6 +300,16 @@ Targets from section N (N.7):
 `cadrei.conf` is no longer shell code (N.1), but the refusal stays as a
 second layer, as N.7 says.
 
+## Migrations
+
+0.2.0 to 0.2.1 had one migration, `cadreis.MoveIn`, written on its own. Before the second one, migrations follow these rules:
+
+- An ordered list of steps, each with an id that never changes, and each idempotent: running it again after it finished, or after it stopped halfway, does nothing more.
+- A step that changes anything tracked in a crew is keyed by the crew's `FORMAT`: it runs when the crew's format is below its own, and writes the new `FORMAT` in the same commit as its change, so an older cadrei then only reads that crew. A step that changes only this machine (`~/.cadrei/config`, a crew's `.claude/local`) is recorded by its id in `~/.cadrei/config/state.json`.
+- Each says once what it did, the way `MoveIn` does, and never asks.
+- Each has its downgrade story written next to it: what an older version sees afterwards, and that it refuses rather than misreads (the crew format, `localVersion`, `ManifestVersion`).
+- A step never deletes what it can't put back: it keeps the old copy (as `places.0.2.0.json` does) until a later release removes it on purpose.
+
 ## Testing
 
 - **Unit tests, table-driven.** `testdata/allow/*.txt` holds every rule and

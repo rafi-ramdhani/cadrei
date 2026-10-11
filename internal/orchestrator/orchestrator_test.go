@@ -65,12 +65,8 @@ func mustRead(t *testing.T, p string) string {
 }
 
 func TestPrompt(t *testing.T) {
-	p := string(Prompt([]byte("TEXT\n"), "work", "/h/.cadrei/work", "", ""))
-	if p != "TEXT\n\nYou are the orchestrator of cadrei `work` (`/h/.cadrei/work`).\n" {
-		t.Errorf("%q", p)
-	}
-	p = string(Prompt([]byte("TEXT\n"), "work", "/w", "app", "/d/app"))
-	if !strings.HasSuffix(p, "The user opened cadrei from the project `app` (`/d/app`).\n") {
+	p := string(Prompt([]byte("TEXT\n"), "work", "/h/.cadrei/work"))
+	if p != "TEXT\n\nYou are the orchestrator of the crew `work` (`/h/.cadrei/work`).\n" {
 		t.Errorf("%q", p)
 	}
 }

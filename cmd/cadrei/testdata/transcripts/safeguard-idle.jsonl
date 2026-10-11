@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": "Add a test for the parser."}, "timestamp": "2026-01-01T10:00:00.000Z", "sessionId": "00000000-0000-4000-8000-000000000001"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "(synthetic refusal)"}], "stop_reason": "refusal"}, "timestamp": "2026-01-01T10:00:05.000Z"}
+{"type": "system", "subtype": "informational", "level": "notice", "content": "Test Model's safeguards stopped the response above · continuing once with that noted", "timestamp": "NOTICE_TIME"}
+{"type": "user", "isMeta": true, "message": {"role": "user", "content": "(synthetic note added by the client)"}, "timestamp": "NOTICE_TIME"}

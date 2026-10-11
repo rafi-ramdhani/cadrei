@@ -1,0 +1,2 @@
+{"type": "user", "message": {"role": "user", "content": "What does 'safeguards stopped the response' mean?"}, "timestamp": "2026-01-01T10:00:00.000Z"}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "When the safeguards stopped the response, the client shows a notice."}], "stop_reason": "end_turn"}, "timestamp": "2026-01-01T10:00:03.000Z"}

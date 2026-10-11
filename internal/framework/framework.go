@@ -114,6 +114,19 @@ func Sync(assets fs.FS, version string) (restored []string, err error) {
 // cellar matches a Homebrew keg's binary: <prefix>/Cellar/cadrei/<version>/bin/cadrei.
 var cellar = regexp.MustCompile(`^(.*)/Cellar/cadrei/[^/]+/bin/cadrei$`)
 
+// BrewPrefix is the Homebrew prefix this binary was installed under, from
+// its real path (links resolved) in a keg, or "" for any other install.
+func BrewPrefix() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if m := cellar.FindStringSubmatch(paths.Real(exe)); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // Binary is the path cadrei persists wherever it names itself (hooks,
 // restart commands): for a Homebrew install, <prefix>/opt/cadrei/bin/cadrei,
 // which survives brew upgrade, never the Cellar path; otherwise the
@@ -166,19 +179,39 @@ func owned(p string) error {
 	}
 }
 
+// devVersion matches a version built from source, in any case: dev, a
+// snapshot (0.2.2-snapshot, 0.2.1-SNAPSHOT-abc), a -dev or -next one, a
+// git describe one (0.2.0-3-gabc, 0.2.1-gabc1234, or a bare commit
+// abc1234 from a clone with no tags), Go's pseudo-version for a commit that
+// isn't a tag (0.2.1-0.20261010120000-abcdef123456), or a dirty tree. A
+// prerelease tag (0.3.0-rc.1) is a release.
+var devVersion = regexp.MustCompile(`(?i)^dev$|-snapshot|dirty|-(dev|next)([.-]|$)|-[0-9]+-g[0-9a-f]+|-g[0-9a-f]{7,}|^[0-9a-f]{7,40}$|[0-9]{14}-[0-9a-f]{12}`)
+
 // Kind says how this binary was installed: "homebrew" (in a Homebrew
-// keg), "dev" (built from source: version dev, or one with a commit or
-// -dirty suffix), or "release" (a release binary, from install.sh or by
-// hand).
+// keg), "dev" (built from source, devVersion), or "release" (a release
+// binary, from install.sh, go install of a tag, or by hand).
 func Kind(version string) string {
 	exe, _ := os.Executable()
 	switch {
 	case cellar.MatchString(paths.Real(exe)):
 		return "homebrew"
-	case version == "dev" || strings.Contains(version, "-"):
+	case devVersion.MatchString(version):
 		return "dev"
 	}
 	return "release"
+}
+
+// ModuleVersion is the version for a build with none stamped: Go's own
+// record of the module's version when it is a tag (go install ...@v0.2.1),
+// or dev. A build from a checkout (checkout: Go recorded its commit) is
+// dev, at a tag too, as a pseudo-version, often dirty, always was: only a
+// release's own stamp, or go install's, makes a release.
+func ModuleVersion(main string, checkout bool) string {
+	v := strings.TrimPrefix(main, "v")
+	if checkout || v == "" || v == "(devel)" || devVersion.MatchString(v) {
+		return "dev"
+	}
+	return v
 }
 
 // placeOf says why a file or folder with this mode, owner and group lets

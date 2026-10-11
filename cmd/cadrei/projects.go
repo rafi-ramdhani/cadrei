@@ -24,7 +24,7 @@ func (e *env) projectsDir(protected []string) (string, bool) {
 	}
 	suggest := cadreis.Tilde(cadreis.SuggestProjectsDir())
 	if !e.interactive() {
-		e.fail("the projects folder is not set; set it with cadrei project dir <folder> (suggested: %s)", suggest)
+		e.failWith("Your projects folder isn't set yet.", "Set it with "+cmd("cadrei project dir <folder>")+", for example "+cmd("cadrei project dir "+suggest))
 		return "", false
 	}
 	answer := e.ask(fmt.Sprintf("Where do you keep your projects? [%s] ", suggest))
@@ -44,12 +44,12 @@ func (e *env) setProjectsDir(answer string, protected []string) (string, bool) {
 		dir, _ = filepath.Abs(dir)
 	}
 	if why := project.DestRefusal(paths.Real(dir), protected); why != "" {
-		e.fail("%s cannot hold projects: %s", dir, why)
+		e.failWith(unbroken(display(dir)) + " can't hold projects: " + strings.TrimSuffix(why, ".") + ".")
 		return "", false
 	}
 	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		if !paths.Within(paths.Real(dir), paths.Home()) {
-			e.fail("%s does not exist; create it first, or choose a folder under your home folder", dir)
+			e.failWith(unbroken(display(dir))+" doesn't exist.", "Create it first, or pick a folder in your home folder.")
 			return "", false
 		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -61,7 +61,7 @@ func (e *env) setProjectsDir(answer string, protected []string) (string, bool) {
 		e.fail("%s", err)
 		return "", false
 	}
-	e.say("new clones go to %s (change it with cadrei project dir <folder>)", cadreis.Tilde(paths.Real(dir)))
+	e.note("", markDone, "New clones go to "+unbroken(cadreis.Tilde(paths.Real(dir))))
 	return paths.Real(dir), true
 }
 
@@ -71,7 +71,7 @@ func runProjectDir(e *env) int {
 		if d := cadreis.ProjectsDir(); d != "" {
 			e.say("%s", cadreis.Tilde(d))
 		} else {
-			e.say("not set (suggested: %s); set it with cadrei project dir <folder>", cadreis.Tilde(cadreis.SuggestProjectsDir()))
+			e.show("", "Your projects folder isn't set yet. Set it with "+cmd("cadrei project dir <folder>")+", for example "+cmd("cadrei project dir "+cadreis.Tilde(cadreis.SuggestProjectsDir())))
 		}
 		return 0
 	case 1:
@@ -88,10 +88,11 @@ func runProjectDir(e *env) int {
 		}
 		return 0
 	}
-	return e.fail("usage: cadrei project dir [<folder>]")
+	return e.failWith("Use " + cmd("cadrei project dir [<folder>]") + ".")
 }
 
-const addUsage = "usage: cadrei project add <name> <owner/repo> [team] [about] [--no-trust] | cadrei project add <name> --path <dir> [--repo <repo>] [team] [about] [--no-trust]"
+// addExamples are the two ways to add a project, for its errors.
+var addExamples = []string{cmd("cadrei project add blog you/blog"), cmd("cadrei project add app --path ~/code/app")}
 
 func runProjectAdd(e *env) int {
 	var pos []string
@@ -109,7 +110,7 @@ func runProjectAdd(e *env) int {
 			}
 			i++
 		case strings.HasPrefix(a, "-"):
-			return e.fail("unknown option %s (%s)", a, addUsage)
+			return e.failWith("There's no option "+a+" for "+cmd("cadrei project add")+". For example:", addExamples...)
 		default:
 			pos = append(pos, a)
 		}
@@ -124,7 +125,7 @@ func runProjectAdd(e *env) int {
 		s.Name, s.Repo = pos[0], pos[1]
 		pos = pos[2:]
 	default:
-		return e.fail("%s", addUsage)
+		return e.failWith("Add which project? For example:", addExamples...)
 	}
 	if len(pos) > 0 {
 		s.Team = pos[0]
@@ -163,28 +164,35 @@ func runProjectAdd(e *env) int {
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	for _, n := range added.Notes {
-		e.say("%s", n)
-	}
-	head := fmt.Sprintf("  %s added, %s", s.Name, added.Where)
+	where := unbroken(display(added.Dir))
+	head := map[string]string{"cloned": "Cloned " + s.Name + " into " + where, "already": "Added " + s.Name + ", already at " + where,
+		"linked": "Added " + s.Name + " from " + where}[added.Where]
+	risky := rt.Trust().Risky(added.Dir)
 	switch {
 	case !trust:
-		e.say("%s", head)
+		e.note("", markDone, head)
+	case len(risky) > 0:
+		// Its own settings would run for the team once it's trusted:
+		// only an explicit cadrei project trust does that.
+		e.note("", markDone, head)
+		e.note("", markWarn, untrustedRisky(rt, s.Name, risky))
 	default:
 		results, note := project.Trust(rt, []runtime.Folder{{Name: s.Name, Dir: added.Dir}})
-		res := results[0]
-		switch res.State {
+		switch res := results[0]; res.State {
 		case "trusted":
-			e.say("%s and trusted in %s (--no-trust skips this)", head, rt.Title())
+			e.note("", markDone, head+", and trusted it in "+rt.Title())
 		case "already":
-			e.say("%s; its folder was already trusted in %s", head, rt.Title())
-		case "refused":
-			e.say("%s; not trusted in %s, %s", head, rt.Title(), res.Reason)
+			e.note("", markDone, head+". It was already trusted in "+rt.Title()+".")
 		default:
-			e.say("%s", head)
-			e.say("%s", strings.Replace(note, "the folder", added.Dir, 1))
+			e.note("", markDone, head)
+			line, _ := project.Line(res, rt.Title())
+			e.note("", markWarn, line)
+			if note != "" {
+				e.show("  ", note)
+			}
 		}
 	}
+	e.notes(added.Notes)
 	return 0
 }
 
@@ -194,7 +202,7 @@ func runProjectSync(e *env) int {
 	case len(e.args) == 1 && e.args[0] == "--no-trust":
 		trust = false
 	case len(e.args) != 0:
-		return e.fail("usage: cadrei project sync [--no-trust]")
+		return e.failWith("Use " + cmd("cadrei project sync [--no-trust]") + ".")
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -211,37 +219,39 @@ func runProjectSync(e *env) int {
 		}
 	}
 	for _, w := range skippedEntries(r.Cadrei) {
-		fmt.Fprintf(e.stderr, "warning: %s\n", w)
+		e.warn("", strings.TrimSuffix(w, ".")+".")
 	}
 	results, err := project.Sync(r.Cadrei, dir, rt.Trust().Protected())
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	var cloned []runtime.Folder
+	var cloned []project.SyncResult
 	code := 0
 	for _, res := range results {
 		switch res.State {
 		case "present":
-			e.say("  %s: present", res.Name)
-		case "cloned":
-			e.say("  %s: cloned to %s", res.Name, res.Dir)
-			cloned = append(cloned, runtime.Folder{Name: res.Name, Dir: res.Dir})
-		case "found":
-			e.say("  %s: already at %s", res.Name, res.Dir)
-			cloned = append(cloned, runtime.Folder{Name: res.Name, Dir: res.Dir})
+			e.note("  ", markDone, res.Name+" is on this machine")
+		case "cloned", "found":
+			cloned = append(cloned, res)
 		case "drive":
-			e.say("  %s: on a drive that is not connected (%s); connect the drive", res.Name, display(res.Dir))
+			e.note("  ", markWarn, res.Name+" is on a drive that isn't connected ("+unbroken(display(res.Dir))+"). Connect the drive.")
 		case "no repo":
-			e.say("  %s: not on this machine, and no repo to clone; link its folder with cadrei project link %s <dir>", res.Name, res.Name)
+			e.note("  ", markWarn, res.Name+" isn't on this machine, and has no repo to clone. Link its folder with "+cmd("cadrei project link "+res.Name+" <folder>"))
 		case "no folder":
-			e.say("  %s: no folder (set the projects folder with cadrei project dir <folder>)", res.Name)
+			e.note("  ", markWarn, res.Name+" has nowhere to go. Set your projects folder with "+cmd("cadrei project dir <folder>"))
 		default:
-			e.say("  %s: not cloned: %s", res.Name, res.Err)
+			e.note("  ", markWarn, "Couldn't clone "+res.Name+": "+strings.TrimSuffix(fmt.Sprint(res.Err), ".")+".")
 			code = 1
 		}
 	}
-	if trust && len(cloned) > 0 {
-		e.trustReport(rt, cloned)
+	if trust {
+		// Only the clean ones are trusted: a clone with its own settings
+		// would run them for every member.
+		e.cloneResults(rt, cloned)
+	} else {
+		for _, res := range cloned {
+			e.note("  ", markDone, cloneLine(res))
+		}
 	}
 	return code
 }
@@ -272,15 +282,15 @@ func runProjectLink(e *env) int {
 		case a == "--no-trust":
 			trust = false
 		case strings.HasPrefix(a, "-"):
-			return e.fail("usage: cadrei project link <name> <dir> [--no-trust]")
+			return e.failWith("Use " + cmd("cadrei project link <name> <folder> [--no-trust]") + ".")
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 2 {
-		return e.fail("usage: cadrei project link <name> <dir> [--no-trust]")
+		return e.failWith("Use " + cmd("cadrei project link <name> <folder> [--no-trust]") + ".")
 	}
-	if e.member("link folders to the cadrei") {
+	if e.member("link folders to the crew") {
 		return 1
 	}
 	r, ok := e.resolve()
@@ -295,11 +305,19 @@ func runProjectLink(e *env) int {
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	e.say("  %s is at %s on this machine", pos[0], dir)
-	if trust {
+	e.note("", markDone, pos[0]+" is at "+unbroken(display(dir))+" on this machine")
+	if risky := rt.Trust().Risky(dir); trust && len(risky) > 0 {
+		e.note("", markWarn, untrustedRisky(rt, pos[0], risky))
+	} else if trust {
 		e.trustReport(rt, []runtime.Folder{{Name: pos[0], Dir: dir}})
 	}
 	return 0
+}
+
+// untrustedRisky says a project wasn't trusted because it has settings of
+// its own that would run for the team.
+func untrustedRisky(rt runtime.Runtime, name string, risky []string) string {
+	return name + " has its own " + rt.Title() + " settings (" + strings.Join(risky, ", ") + "), which would run for your team once it's trusted. So it isn't trusted yet. If you trust where it came from, run " + cmd("cadrei project trust "+name)
 }
 
 // runProjectUnlink is cadrei project unlink <name> [--untrust]: the project
@@ -312,13 +330,13 @@ func runProjectUnlink(e *env) int {
 		case a == "--untrust":
 			untrust = true
 		case strings.HasPrefix(a, "-"):
-			return e.fail("usage: cadrei project unlink <name> [--untrust]")
+			return e.failWith("Use " + cmd("cadrei project unlink <name> [--untrust]") + ".")
 		default:
 			pos = append(pos, a)
 		}
 	}
 	if len(pos) != 1 {
-		return e.fail("usage: cadrei project unlink <name> [--untrust]")
+		return e.failWith("Use " + cmd("cadrei project unlink <name> [--untrust]") + ".")
 	}
 	if e.member("unlink projects") {
 		return 1
@@ -335,24 +353,36 @@ func runProjectUnlink(e *env) int {
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	for _, n := range notes {
-		e.say("%s", n)
-	}
+	e.notes(notes)
 	if dir != "" {
-		e.say("  %s unlinked; its folder %s is kept", pos[0], display(dir))
+		e.note("", markDone, "Removed "+pos[0]+" from this crew. Its folder "+unbroken(display(dir))+" stays.")
 	} else {
-		e.say("  %s unlinked", pos[0])
+		e.note("", markDone, "Removed "+pos[0]+" from this crew")
 	}
 	if untrust && dir != "" {
 		results, note := rt.Trust().Unmark([]runtime.Folder{{Name: pos[0], Dir: dir}})
 		for _, res := range results {
-			e.say("  %s: %s in %s", res.Name, res.State, rt.Title())
+			e.show("  ", res.Name+": "+res.State+" in "+rt.Title())
 		}
 		if note != "" {
-			e.say("%s", note)
+			e.show("  ", note)
 		}
 	}
 	return 0
+}
+
+// untrustedByMember says that a member's projects aren't trusted, and the
+// commands the user runs to trust them: project trust takes one name.
+func untrustedByMember(names []string, title string) string {
+	verb := " isn't"
+	if len(names) > 1 {
+		verb = " aren't"
+	}
+	var runs []string
+	for _, n := range names {
+		runs = append(runs, cmd("cadrei project trust "+n))
+	}
+	return andList(names) + verb + " trusted in " + title + ": team members can't trust folders. Ask the user to run " + strings.Join(runs, ", then ") + "."
 }
 
 // trustReport trusts folders and prints a line each, then any note.
@@ -360,22 +390,26 @@ func (e *env) trustReport(rt runtime.Runtime, folders []runtime.Folder) {
 	if inMember() {
 		var names []string
 		for _, f := range folders {
-			e.say("  %s: not trusted (see below)", f.Name)
 			names = append(names, f.Name)
 		}
-		e.say("refused for members: members cannot trust folders in %s; run cadrei project trust %s from the orchestrator", rt.Title(), strings.Join(names, " "))
+		e.note("", markWarn, untrustedByMember(names, rt.Title()))
 		return
 	}
 	results, note := project.Trust(rt, folders)
 	for _, f := range folders {
 		for _, res := range results {
 			if res.Name == f.Name {
-				e.say("%s", project.Line(res, rt.Title()))
+				line, ok := project.Line(res, rt.Title())
+				if ok {
+					e.note("", markDone, line)
+				} else {
+					e.note("", markWarn, line)
+				}
 			}
 		}
 	}
 	if note != "" {
-		e.say("%s", note)
+		e.show("  ", note)
 	}
 }
 
@@ -384,7 +418,7 @@ func runProjectTrust(e *env) int {
 		return 1
 	}
 	if len(e.args) != 1 || (strings.HasPrefix(e.args[0], "-") && e.args[0] != "--all") {
-		return e.fail("usage: cadrei project trust <name> | --all")
+		return e.failWith("Use " + cmd("cadrei project trust <name>") + ", or " + cmd("cadrei project trust --all") + ".")
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -403,7 +437,7 @@ func runProjectTrust(e *env) int {
 		for _, entry := range reg.Entries() {
 			d := cadreis.ProjectDir(r.Cadrei, entry)
 			if st, err := os.Stat(d); d == "" || err != nil || !st.IsDir() {
-				e.say("  %s: not on this machine, skipped (run cadrei project sync)", entry.Name)
+				e.note("", markWarn, entry.Name+" isn't on this machine, so it was skipped. Get it with "+cmd("cadrei project sync"))
 				continue
 			}
 			folders = append(folders, runtime.Folder{Name: entry.Name, Dir: d})
@@ -411,11 +445,11 @@ func runProjectTrust(e *env) int {
 	} else {
 		entry := reg.Get(e.args[0])
 		if entry == nil {
-			return e.fail("'%s' is not a registered project (only registered projects are trusted; see cadrei ls)", e.args[0])
+			return e.failWith("There's no project called "+e.args[0]+" in this crew.", "See your projects with "+cmd("cadrei ls"))
 		}
 		d := cadreis.ProjectDir(r.Cadrei, entry)
 		if st, err := os.Stat(d); d == "" || err != nil || !st.IsDir() {
-			return e.fail("project '%s' is not at %s (run cadrei project sync)", e.args[0], d)
+			return e.failWith(e.args[0]+" isn't on this machine.", "Get it with "+cmd("cadrei project sync"))
 		}
 		folders = []runtime.Folder{{Name: entry.Name, Dir: d}}
 	}

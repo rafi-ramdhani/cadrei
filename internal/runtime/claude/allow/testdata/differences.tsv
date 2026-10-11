@@ -25,7 +25,7 @@ R	Edit(~/.cadrei/work/playbook.md)	refuse	{HOME}/.cadrei/<cadrei>/playbook.md	N.
 R	Edit(~/.cadrei/*/cadrei.conf)	refuse	cadrei.conf	N.7
 R	Edit(~/.cadrei/w*/.git/config)	refuse	{HOME}/.cadrei/<cadrei>/.git	N.7
 R	Edit(~/.cadrei/work/teams/dev/notes.md)	accept		N.7: team folders stay writable
-R	Edit(//{OTHER}/teams/**)	warn	team folders of the cadrei at {OTHER}	N.7: another cadrei's team folders are warned about
+R	Edit(//{OTHER}/teams/**)	warn	team folders of the crew at {OTHER}	N.7: another cadrei's team folders are warned about
 R	Edit(//{CADREI}/teams/**)	warn	contains *	this cadrei's own team folders: only the generic warning
 R	Bash(echo ';;' x)	accept		quoted punctuation is an argument; bash's shlex dropped the quotes and read it as an operator
 R	Bash(find . -exec rm {} ';')	accept		the same: a quoted ; ends -exec, it chains nothing

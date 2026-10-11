@@ -1,0 +1,11 @@
+work  ~/.cadrei/work · default
+
+Orchestrator  not running · open it with cadrei
+Teams
+  dev                                              cadrei attach dev
+    . engineer   starting
+    . reviewer   starting
+Projects
+  blog   not on this machine · ask your orchestrator to clone it
+Other crews
+  life  ~/.cadrei/life  0 running
