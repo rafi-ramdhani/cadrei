@@ -141,6 +141,17 @@ type tmuxRule struct{}
 
 func (tmuxRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
 	k, ok := programAt(words, p, "tmux")
+	if !ok && !takesData(wordName(words[p]), words[p+1:]) {
+		// tmux after a program that runs the rest (arch, flock, script,
+		// ssh): tmux, then one of its flags or commands. man tmux and brew
+		// install tmux run nothing.
+		for j := p + 1; j+1 < len(words); j++ {
+			if wordName(words[j]) == "tmux" && tmuxNext(words[j+1].bare) {
+				k, ok = j, true
+				break
+			}
+		}
+	}
 	switch {
 	case !ok:
 		return false
@@ -178,21 +189,39 @@ func programAt(words []shWord, p int, name string) (int, bool) {
 // runners run a program named in their arguments.
 var runners = setOf("xargs", "find", "parallel", "fd")
 
+// tmuxNext reports whether a word after tmux makes it a command: one of
+// tmux's own flags, or one of its commands.
+func tmuxNext(word string) bool {
+	if len(word) > 1 && word[0] == '-' {
+		return strings.Trim(word[1:], "2CDLNSTVcfhluv") == ""
+	}
+	_, ok := tmuxCommand(word)
+	return ok
+}
+
 // calls: code another program runs (python's -c, a heredoc to node) that
-// runs a program, and holds tmux in a command's shape: tmux, its flags,
-// then a command outside the read-only list. An argument that's only text
-// (a search pattern, a message, a make variable) runs nothing, so tmux in
-// it is only words.
-func (tmuxRule) calls(text string) bool { return shellsOut(text) && tmuxShape(bluntWords(text)) }
+// names tmux with a command outside the read-only list. An argument of a
+// program that takes text (a search pattern, a message, a make variable)
+// counts only when it's code that runs a program, too.
+func (r tmuxRule) calls(text string, data bool) bool {
+	if data && !shellsOut(text) {
+		return false
+	}
+	return r.mentions(text)
+}
 
 // mentions: text that becomes a shell's code, or that a program which is
 // itself an expansion may run: tmux with a command outside the read-only
-// list, in full or by its alias, in the next words.
+// list, in full or by its alias, in the next words or after a ; that
+// follows a read-only one; or tmux, and a format that runs a job.
 func (tmuxRule) mentions(text string) bool {
-	words := bluntWords(text)
+	words := splitWords(text)
 	for i, w := range words {
 		if w != "tmux" {
 			continue
+		}
+		if strings.Contains(text, "#(") || reformats.MatchString(text) || tmuxChain(words[i+1:]) {
+			return true
 		}
 		for _, v := range words[i+1 : min(i+7, len(words))] {
 			if name, ok := tmuxExact(v); ok && !tmuxReadOnly[name] {
@@ -205,30 +234,45 @@ func (tmuxRule) mentions(text string) bool {
 
 func (r tmuxRule) blunt(text string) bool { return r.mentions(text) }
 
-// tmuxShape reports whether words hold tmux as a command: tmux, its flags
-// (each maybe with a value), then a command outside the read-only list.
-func tmuxShape(words []string) bool {
-	for i, w := range words {
-		if w != "tmux" {
-			continue
+// tmuxChain reads words as tmux's arguments, as far as they look like
+// them: its flags, then commands split by ; words. It reports whether one
+// of the commands isn't read-only, or is display-message without -p or
+// with -I.
+func tmuxChain(words []string) bool {
+	k := 0
+	for ; k < len(words) && strings.HasPrefix(words[k], "-"); k++ {
+		f := words[k][1:]
+		if strings.Contains(f, "c") {
+			return true // -c or -C, in lower case
 		}
-		flag := false
-		for _, v := range words[i+1 : min(i+6, len(words))] {
-			if strings.HasPrefix(v, "-") {
-				flag = true
-				continue
+		if f != "" && strings.ContainsAny(f[len(f)-1:], "flst") {
+			k++ // its value
+		}
+	}
+	for k < len(words) {
+		name, ok := tmuxCommand(words[k])
+		if !ok {
+			return false
+		}
+		if !tmuxReadOnly[name] {
+			return true
+		}
+		printing, n := false, 0
+		for k++; k < len(words) && words[k] != ";"; k++ {
+			if n++; n > 12 || words[k] == "tmux" {
+				return false
 			}
-			if name, ok := tmuxExact(v); ok {
-				if !tmuxReadOnly[name] {
+			if f, ok := strings.CutPrefix(words[k], "-"); ok {
+				printing = printing || strings.Contains(f, "p")
+				if name == "display-message" && strings.Contains(f, "i") {
 					return true
 				}
-				break
 			}
-			if !flag {
-				break
-			}
-			flag = false // a flag's value
 		}
+		if name == "display-message" && !printing {
+			return true
+		}
+		k++
 	}
 	return false
 }
@@ -250,8 +294,10 @@ func tmuxWrites(args []shWord) bool {
 	// commands; -f, -L, -S and -T take a value.
 	// A format's #( starts a shell job in the tmux server, as run-shell
 	// does, outside the session's own processes: in any argument.
+	// The E: and T: modifiers expand a value as a format again, so a value
+	// the session set (its pane's title) can hold one.
 	for _, a := range args {
-		if strings.Contains(a.text, "#(") {
+		if strings.Contains(a.text, "#(") || reformats.MatchString(a.text) {
 			return true
 		}
 	}
@@ -321,6 +367,10 @@ flags:
 	}
 	return false
 }
+
+// reformats is a tmux format with the E: or T: modifier, alone or among
+// others split by ; (#{E:pane_title}, #{=10;T:x}).
+var reformats = regexp.MustCompile(`#\{(?:[^:}]*;)?[ET][;:]`)
 
 // tmuxReadOnly are the tmux commands cadrei sessions may run: they only
 // read (display-message only with -p, which prints).
@@ -408,7 +458,7 @@ func (keystrokeRule) runs(c *shCommand, words []shWord, p int, fed bool, line *l
 	return false
 }
 
-func (keystrokeRule) calls(text string) bool { return pressesAt(text) }
+func (keystrokeRule) calls(text string, data bool) bool { return pressesAt(text) }
 
 func (keystrokeRule) mentions(text string) bool { return pressesAt(text) }
 

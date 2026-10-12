@@ -25,8 +25,9 @@ type guardRule interface {
 	// wrapper, runs it; fed is whether what pipes into it mentions it.
 	runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool
 	// calls reports whether code another program runs (an argument, a
-	// heredoc) runs it.
-	calls(text string) bool
+	// heredoc) runs it. With data, the text is an argument of a program
+	// that takes text, not code (takesData).
+	calls(text string, data bool) bool
 	// mentions reports whether text that may become code (fed to a shell,
 	// or behind a program that is an expansion) names it.
 	mentions(text string) bool
@@ -137,14 +138,23 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 	if rule.runs(c, words, p, fed, line) {
 		return true
 	}
-	// Code in an argument or on stdin.
+	// Code in an argument or on stdin. What's on stdin may be code, even
+	// for a program that takes text.
+	data := takesData(name, words[p+1:])
 	for _, w := range words {
-		if rule.calls(w.text) {
+		if rule.calls(w.text, data) {
 			return true
 		}
 	}
 	for _, in := range c.input {
-		if rule.calls(in) {
+		if rule.calls(in, false) {
+			return true
+		}
+	}
+	// A shell that another program runs (find -exec, xargs, flock, ssh):
+	// its -c code is a shell's.
+	for k := p + 1; k < len(words); k++ {
+		if shellPrograms[wordName(words[k])] && codeFlag(words[k+1:]) && shellRuns(rule, c, words[k+1:], fed, line, depth) {
 			return true
 		}
 	}
@@ -201,6 +211,54 @@ func shellRuns(rule guardRule, c *shCommand, args []shWord, fed bool, line *line
 	return feeds(rule, c, fed)
 }
 
+// codeFlag reports whether a shell's options, the words before its first
+// other one, take code to run (-c, -lc).
+func codeFlag(args []shWord) bool {
+	for _, a := range args {
+		if !strings.HasPrefix(a.bare, "-") && !strings.HasPrefix(a.bare, "+") {
+			return false
+		}
+		if !strings.HasPrefix(a.bare, "--") && strings.Contains(a.bare[1:], "c") {
+			return true
+		}
+	}
+	return false
+}
+
+// takesData reports whether a program's arguments are text it doesn't run:
+// a search pattern, a request's body, a make variable, the arguments of a
+// script file an interpreter runs, or an awk program that runs nothing.
+// Any other program's arguments may be code: python's -c, perl's -e, sed's
+// script, ssh's command.
+func takesData(name string, args []shWord) bool {
+	switch {
+	case dataPrograms[name]:
+		return true
+	case name == "make" || name == "gmake":
+		for _, a := range args {
+			// --eval's text is a makefile's.
+			if a.bare == "-E" || strings.HasPrefix(a.bare, "--eval") {
+				return false
+			}
+		}
+		return true
+	case awks[name]:
+		// awk runs a program only by system(), which shellsOut finds, by a
+		// pipe (|, |&), or by a library it loads.
+		for _, a := range args {
+			t := strings.ToLower(a.text)
+			if a.expands || strings.Contains(t, "|") || strings.Contains(t, "@load") || a.bare == "-l" || strings.HasPrefix(a.bare, "--load") {
+				return false
+			}
+		}
+		return true
+	case scriptRunners[name] || strings.HasPrefix(name, "python"):
+		// python3 post.py --text "...": the script, then its own words.
+		return len(args) > 0 && !args[0].expands && !strings.HasPrefix(args[0].bare, "-")
+	}
+	return false
+}
+
 // feeds reports whether a command's stdin mentions what rule looks for:
 // fed, from what pipes into it, or its heredocs.
 func feeds(rule guardRule, c *shCommand, fed bool) bool {
@@ -211,9 +269,9 @@ func feeds(rule guardRule, c *shCommand, fed bool) bool {
 }
 
 // cadreiRule looks for cadrei's program running one of subs.
-// With code, an argument or a heredoc counts only when it's code that runs
-// a program (shellsOut): "cadrei answer" in a search pattern or a message
-// runs nothing.
+// With code, an argument of a program that takes text (takesData) counts
+// only when it's code that runs a program (shellsOut): "cadrei answer" in
+// a search pattern or a message runs nothing.
 type cadreiRule struct {
 	subs map[string]bool
 	code bool
@@ -259,6 +317,13 @@ func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *li
 var (
 	programs = map[string]bool{"cadrei": true, "cadre": true}
 	shells   = setOf("sh", "bash", "zsh", "dash", "ksh", "mksh", "yash", "fish", "csh", "tcsh", "busybox", "eval", "source", ".")
+	// shellPrograms are the shells another program can run.
+	shellPrograms = setOf("sh", "bash", "zsh", "dash", "ksh", "mksh", "yash", "fish", "csh", "tcsh")
+	// dataPrograms take text, not code: a search pattern, a request's body.
+	dataPrograms = setOf("rg", "ag", "ack", "curl", "wget", "http", "https", "xh")
+	awks         = setOf("awk", "gawk", "mawk", "nawk")
+	// scriptRunners run a script file named by their first argument.
+	scriptRunners = setOf("node", "ruby", "perl", "php", "lua", "rscript", "julia")
 	// runsAnother: programs that run the command after them.
 	runsAnother = setOf("env", "command", "builtin", "exec", "nohup", "time", "nice", "sudo", "doas", "timeout", "stdbuf", "caffeinate", "setsid", "unbuffer", "watch", "chronic")
 	shKeywords  = setOf("if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac", "select", "function", "{", "}", "!", "[[", "]]")
@@ -333,17 +398,26 @@ var expansion = regexp.MustCompile(`\$\{[^}]*\}|\$\([^)]*\)|\$[a-z_][a-z0-9_]*|\
 
 // guardWord is a word of a command line, as far as the blunt reading
 // reads one.
-var guardWord = regexp.MustCompile(`[a-z0-9_.\-/]+`)
+var (
+	guardWord = regexp.MustCompile(`[a-z0-9_.\-/]+`)
+	// guardSplit is a word, or a ; as tmux splits its commands by.
+	guardSplit = regexp.MustCompile(`[a-z0-9_.\-/]+|;`)
+)
 
 // bluntWords are text's words, read the blunt way: lower case, quotes and
 // backslashes taken out, and read again with each expansion taken out, as
 // an empty one expands (unin${x}stall runs uninstall). Each is its last
 // path part.
-func bluntWords(text string) []string {
+func bluntWords(text string) []string { return readWords(text, guardWord) }
+
+// splitWords are bluntWords, with each ; a word of its own.
+func splitWords(text string) []string { return readWords(text, guardSplit) }
+
+func readWords(text string, word *regexp.Regexp) []string {
 	text = strings.ToLower(text)
 	text = strings.NewReplacer(`"`, "", `'`, "", `\`, "").Replace(text)
 	text += "\n" + expansion.ReplaceAllString(text, "")
-	words := guardWord.FindAllString(text, -1)
+	words := word.FindAllString(text, -1)
 	for i, w := range words {
 		words[i] = w[strings.LastIndex(w, "/")+1:]
 	}
@@ -383,8 +457,8 @@ func (r cadreiRule) mentions(text string) bool {
 // calls reports whether code another program runs (python's -c, a heredoc
 // to node) has cadrei, then one of the commands within the next three
 // words: "cadrei uninstall", or ["cadrei", "restore"].
-func (r cadreiRule) calls(text string) bool {
-	if r.code && !shellsOut(text) {
+func (r cadreiRule) calls(text string, data bool) bool {
+	if r.code && data && !shellsOut(text) {
 		return false
 	}
 	words := bluntWords(text)

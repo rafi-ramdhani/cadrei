@@ -161,6 +161,57 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		{`tmux display-message -I -t x`, typingRefused, typingRefused},
 		{`tmux display-message -pI x`, typingRefused, typingRefused},
 		{`tmux display-message -p -I -t x`, typingRefused, typingRefused},
+		// Re-review of 0.2.2 (H2): a shell that a runner or a wrapper the
+		// guard doesn't know runs, and code an interpreter runs, whatever
+		// way it runs a program.
+		{`find . -name x -exec sh -c 'tmux send-keys -t x 1' \;`, typingRefused, typingRefused},
+		{`echo x | xargs sh -c 'tmux send-keys -t "$0" 1'`, typingRefused, typingRefused},
+		{`find . -name x -exec sh -c 'cadrei answer 7f3 yes' \;`, memberAnswerRefused, strictRefused},
+		{`echo 7f3 | xargs -I{} bash -c 'cadrei answer {} yes'`, memberAnswerRefused, strictRefused},
+		{`arch -arm64 sh -c 'tmux send-keys -t x 1'`, typingRefused, typingRefused},
+		{`flock /tmp/l sh -c 'cadrei answer 7f3 yes'`, memberAnswerRefused, strictRefused},
+		{`flock /tmp/l sh -c 'x=answer; cadrei $x 7f3 yes'`, memberAnswerRefused, strictRefused},
+		{`script -q /dev/null sh -c 'x=send-keys; tmux $x -t x 1'`, typingRefused, typingRefused},
+		{`ssh localhost 'tmux send-keys -t x 1'`, typingRefused, typingRefused},
+		{`perl -e 'open(my $f, "|-", "tmux", "send-keys", "-t", "x", "1")'`, typingRefused, typingRefused},
+		{`perl -e 'open(F, "| cadrei answer 7f3 yes")'`, memberAnswerRefused, strictRefused},
+		{`awk 'BEGIN { print "1" | "tmux send-keys -t x" }'`, typingRefused, typingRefused},
+		{`awk 'BEGIN { "cadrei answer 7f3 yes" | getline }'`, memberAnswerRefused, strictRefused},
+		{`awk 'BEGIN { system("tmux send-keys -t x 1") }'`, typingRefused, typingRefused},
+		{`gawk '@load "x"; BEGIN { print "tmux send-keys -t x 1" }'`, typingRefused, typingRefused},
+		{`gawk -l x 'BEGIN { print "tmux send-keys -t x 1" }'`, typingRefused, typingRefused},
+		{`awk "BEGIN { print \"tmux send-keys -t x 1\" } $more"`, typingRefused, typingRefused},
+		{`osascript -e 'do shell script "tmux send-keys -t x 1"'`, typingRefused, typingRefused},
+		{`osascript -e 'do shell script "cadrei answer 7f3 yes"'`, memberAnswerRefused, strictRefused},
+		{`php -r 'passthru("tmux send-keys -t x 1");'`, typingRefused, typingRefused},
+		{`ruby -e 'open("|tmux send-keys -t x 1")'`, typingRefused, typingRefused},
+		{`vim -c '!tmux send-keys -t x 1' -c q`, typingRefused, typingRefused},
+		{`python3 -c "import subprocess; subprocess.run('tmux capture-pane -p -J -e -S -10 -t x ; send-keys -t x 1', shell=True)"`, typingRefused, typingRefused},
+		{`python3 -c "import subprocess; subprocess.run(['tmux', 'list-panes', '-a', '-F', '#{pane_id}', '-t', 'x', ';', 'send-keys', '-t', 'x', '1'])"`, typingRefused, typingRefused},
+		{`python3 -c "import os; os.system('tmux display-message -p \"#(true)\"')"`, typingRefused, typingRefused},
+		{`python3 -c "import os; os.system('tmux display-message -I -t x')"`, typingRefused, typingRefused},
+		{`python3 -c "import os; os.system('tmux display-message -p -I -t x')"`, typingRefused, typingRefused},
+		{`python3 -c "import os; os.system('tmux display-message hi')"`, typingRefused, typingRefused},
+		{`python3 -c "import os; os.system('tmux -c true')"`, typingRefused, typingRefused},
+		// make's --eval and a makefile on stdin are code, not variables.
+		{`make --eval='x: ; tmux send-keys -t x 1' x`, typingRefused, typingRefused},
+		{"make -f - <<'EOF'\nall:\n\ttmux send-keys -t x 1\nEOF", typingRefused, typingRefused},
+		// Text in code an interpreter runs is read the strict way, even
+		// when it only prints it (these were allowed in the first fix).
+		{`perl -ne 'print if /tmux kill-server/' notes.md`, typingRefused, typingRefused},
+		{`python3 -c "print('see tmux if you need it')"`, typingRefused, typingRefused},
+		{`python3 -c "print('run cadrei answer 7f3 yes to answer')"`, memberAnswerRefused, strictRefused},
+		{`sed -n '/cadrei answer 7f3 yes/p' docs/guide.md`, memberAnswerRefused, strictRefused},
+		// Re-review of 0.2.2 (M6): E: and T: expand a value as a format
+		// again, so the value could hold a #( job. Text to read, never run.
+		{`tmux display-message -p '#{E:pane_title}'`, typingRefused, typingRefused},
+		{`tmux list-panes -F '#{T:pane_title}'`, typingRefused, typingRefused},
+		{`tmux list-panes -a -F '#{pane_id} #{=10;E:pane_title}'`, typingRefused, typingRefused},
+		{`python3 -c "import subprocess; subprocess.run(['tmux', 'display-message', '-p', '#{E:pane_title}'])"`, typingRefused, typingRefused},
+		// Re-review of 0.2.2 (L15): tmux after a program that runs the rest.
+		{`arch -arm64 tmux send-keys -t x 1`, typingRefused, typingRefused},
+		{`flock /tmp/l tmux send-keys -t x 1`, typingRefused, typingRefused},
+		{`script -q /dev/null tmux -L other send-keys -t x 1`, typingRefused, typingRefused},
 	} {
 		blocked(member, "default", tc.command, tc.memberWhy)
 		blocked("", "default", tc.command, tc.orchWhy)
@@ -192,8 +243,12 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer k2m 3`, "k2m has options 1 to 2. Use cadrei answer k2m 1, for example.")
 	blocked(member, "default", `cadrei answer`, memberAnswerRefused)
 	allowed("", `cadrei answer`)
-	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`} {
+	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`,
+		// Re-review of 0.2.2 (H2): a shell a runner runs. The orchestrator
+		// may compact in any form.
+		`find . -name x -exec sh -c 'cadrei compact dev/engineer' \;`, `echo dev/engineer | xargs sh -c 'cadrei compact "$0"'`} {
 		blocked(member, "default", form, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
+		allowed("", form)
 	}
 	allowed("", `cadrei compact dev/engineer my-app`)
 	blocked(member, "default", `cadrei uninstall`, "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator.")
@@ -214,11 +269,14 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		`rg -n "tmux new-session" cmd/`, `rg -n "cadrei answer" docs/`, `rg -n 'cadrei compact' docs/`,
 		`python3 scripts/post.py --text "start tmux and attach later"`,
 		`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`,
-		`perl -ne 'print if /tmux kill-server/' notes.md`,
-		`python3 -c "print('see tmux if you need it')"`,
 		`make docs MSG="tmux set the title"`,
-		`awk '/tmux send-keys/' notes.md`, `sed -n '/cadrei answer/p' docs/guide.md`,
-		`python3 -c "print('run cadrei answer 7f3 yes to answer')"`,
+		`awk '/tmux send-keys -t/' notes.md`, `awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`,
+		// Re-review of 0.2.2: what runs only read-only tmux, or names tmux
+		// as a word.
+		`rg -n tmux -C 3 docs/`, `brew info tmux`, `arch -arm64 tmux list-sessions`,
+		`find . -name '*.md' -exec sh -c 'wc -l "$1"' _ {} \;`,
+		`echo x | xargs -n1 sh -c 'tmux capture-pane -p -t x'`,
+		`tmux display-message -p '#{pane_id} #{=10:pane_title}'`,
 	} {
 		allowed(member, command)
 		allowed("", command)
