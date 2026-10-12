@@ -308,7 +308,7 @@ Orchestrator  open in tmux since 14:02 · reopen with cadrei
 Teams
   dev on my-app                                    cadrei attach dev my-app
     ● engineer   working for 4m
-    ! reviewer   waiting on you · approve it in its window
+    ! reviewer   waiting on you · approve it with cadrei answer 7f3 yes
   research                                         cadrei attach research
     ○ scout      idle since 13:40
     ◌ writer     starting
@@ -322,7 +322,7 @@ Projects
 | Mark | State | What it means |
 |---|---|---|
 | `●` | working | busy on a task, `working for 4m` |
-| `!` | waiting on you | it needs your approval, or asked you something, in its window |
+| `!` | waiting on you | it needs your approval, or asked you something ([Answering your team](#answering-your-team)) |
 | `○` | idle | done, and waiting for its next task |
 | `◌` | starting | its window is open, but it hasn't started work yet |
 | `?` | running | it runs, but cadrei can't tell what it's doing (for example a member started by an older cadrei) |
@@ -413,6 +413,36 @@ When a member goes idle without replying at all, your orchestrator checks its st
 
 When a member runs in a different permission-mode class from your orchestrator, its replies wait for your approval in your orchestrator's window, and its idle notices may not reach your orchestrator at all (see [Troubleshooting](#troubleshooting)).
 
+### Answering your team
+
+A member that's `waiting` needs you: Claude Code is asking you something in its window. Either it wants to run something it isn't allowed to yet (a permission prompt), or it asked you a question. You can answer both from your orchestrator, without going to the member's window.
+
+**A permission prompt.** Your orchestrator tells you who's waiting and what for, then runs `cadrei answer 7f3 yes`. Claude Code stops it and asks you, in its own prompt:
+
+```text
+ Bash command
+ Answer the engineer's prompt
+ cadrei answer 7f3 yes
+ │ Hook PreToolUse:Bash requires confirmation for this command:
+ │ Cadrei: allow once? The engineer on my-app wants to run: gh pr merge 42 --squash
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. No
+```
+
+Read the line that starts with `Cadrei:`. That's cadrei's own text, from Claude Code's record of what the member asked, and your orchestrator can't change it. The line above the command is Claude's own description of it. Press 1 and the member runs it, once. Press 2 and your orchestrator stops: tell it what you want instead. To tell the member no, your orchestrator runs `cadrei answer 7f3 no`, and Claude Code asks you again. A no stops the member's turn, and it waits until it hears what to do instead.
+
+**A question.** A member can ask you something in its window, like "Upload resume.pdf to the signing site?". Members do this when only you can say yes: their instructions say so, or it touches personal data, money or something they can't undo. Your orchestrator shows you the question and its options exactly, each with a line to type. Type the one you pick, with `!` in front, right in your orchestrator: `! cadrei answer k2m 1`. A command you type with `!` is yours, so it runs at once.
+
+**A block a grant can fix.** When auto mode or a rule blocks a member, your orchestrator asks you here first: `Let the engineer on my-app run gh pr merge 42 --squash once?`. On a yes it gives a one-time grant and restarts the member, which picks up its chat.
+
+More:
+- `cadrei answer` with no code shows who's waiting on you, with the line that answers each. You can run it, and `cadrei answer <code> <choice>`, in your own terminal too.
+- Each request has its own short code. If the member's prompt changed in the meantime, the old code answers nothing.
+- `yes` only ever picks the plain "Yes", the one-time allow. It never picks "always allow" or "switch to auto mode".
+- In `dontAsk`, `bypassPermissions` or `plan` mode, Claude Code can't ask you about your orchestrator's answer, so it doesn't run it: type the `!` line yourself.
+- Some things still need the member's window (`cadrei attach`): a question that takes more than one pick or holds several questions, a prompt with no plain "Yes", a member in `dontAsk` mode (it can't ask you at all), and the orchestrator the every-chat hook opens, where `cadrei answer` doesn't run.
+
 ## The every-chat hook
 
 The every-chat hook is a SessionStart hook in `~/.claude/settings.json` that makes every new Claude Code chat open as your orchestrator. It isn't offered on the first run. Instead, your orchestrator offers it once, right after your first finished task. Say no, and it doesn't ask again (you can still ask it anytime).
@@ -455,7 +485,9 @@ Every member starts with the grants in `.claude/member-settings.json`, a Claude 
 
 Every copy also gets fixed entries that keep members off cadrei's own files: `Edit` denies for `~/.cadrei/config`, `~/.cadrei/framework`, and each crew's `.claude` (which holds `local/` and `build/`), `cadrei.conf`, `members`, `playbook.md`, `protocol.md`, `projects.yaml`, `.git`, `CLAUDE.md`, `CLAUDE.local.md` and `.mcp.json`; `Read` and `Edit` denies for `~/.cadrei-archive`; denies for `cadrei allow`, `cadrei new` (and its old name `cadrei init`), `cadrei use`, `cadrei uninstall` and `cadrei restore`; and a `soft_deny` line telling the auto-mode classifier that only you change these, through your orchestrator. Team folders stay writable.
 
-Every member's copy also runs `cadrei hook guard` before each Bash command. It refuses any command that may run cadrei's `uninstall` or `restore`, however it's written: through `env` or `sh -c`, by any path to the program, quoted or split up, or behind a variable. A command that only mentions them, like a `grep` for the word or a commit message about them, still runs. It refuses a command it can't read, and if the program is gone. The deny rules alone wouldn't do: Claude Code's own documentation says a prefix rule doesn't see through `env`, `sh -c` or a full path. A third check is in the commands: run inside a member's tmux window, `uninstall` and `restore` refuse, even when the member cleared its variables or named another tmux server. None of these is a sandbox: a member can still write a script and start it outside its own window. The member's instructions say never to, and in `default` mode it asks you first. [SECURITY.md](../SECURITY.md) has what each layer can and can't stop.
+Every member's copy also runs `cadrei hook guard` before each Bash command. It refuses any command that may run cadrei's `uninstall` or `restore`, however it's written: through `env` or `sh -c`, by any path to the program, quoted or split up, or behind a variable. A command that only mentions them, like a `grep` for the word or a commit message about them, still runs. In members it also refuses `cadrei answer` and `cadrei compact`: only you answer for a member. It refuses a command it can't read, and if the program is gone.
+
+Your orchestrator runs the same guard, from its own settings. There it lets uninstall and restore through (it runs them on your yes), asks you before `cadrei answer` ([Answering your team](#answering-your-team)), and refuses every other form of it. In both, it refuses typing into tmux windows: any `tmux` command outside a short read-only list (`capture-pane`, `list-sessions`, `list-windows`, `list-panes`, `list-clients`, `has-session`, `show-options`, `show-environment`, and `display-message -p`), on any tmux server, and `osascript` keystrokes. That's why your orchestrator compacts a member with `cadrei compact` instead of typing `/compact`. If cadrei is gone, your orchestrator's guard lets commands run, so an uninstalled cadrei doesn't lock your chat. The deny rules alone wouldn't do: Claude Code's own documentation says a prefix rule doesn't see through `env`, `sh -c` or a full path. A third check is in the commands: run inside a member's tmux window, `uninstall` and `restore` refuse, even when the member cleared its variables or named another tmux server. None of these is a sandbox: a member can still write a script and start it outside its own window. The member's instructions say never to, and in `default` mode it asks you first. [SECURITY.md](../SECURITY.md) has what each layer can and can't stop.
 
 A fingerprint in `~/.cadrei/config/member-settings.sha256` flags a file changed outside `cadrei allow`. A change that arrives as a commit `cadrei allow` made (for example pulled from another machine) is accepted. If the fingerprint is gone, cadrei checks the file against its last commit instead. To undo a hand edit, run `git -C ~/.cadrei/<name> checkout -- .claude/member-settings.json`.
 
@@ -630,7 +662,7 @@ Everything goes back to the same paths, so your orchestrator picks up its last c
 
 ## Troubleshooting
 
-- **A member never replies.** Run `cadrei ls`. `! waiting on you` means it needs your approval in its window: `cadrei attach <team> [project]` (or Ctrl-b then s in tmux). `✗ stopped by safeguards` means Claude's safeguards stopped its reply: open its window, type `/model` and pick the model again, or ask your orchestrator to restart it fresh. Otherwise look at its window; a new folder may show Claude Code's trust prompt, and `cadrei project trust <name>` avoids it next time.
+- **A member never replies.** Run `cadrei ls`. `! waiting on you` means it needs your approval or an answer: ask your orchestrator, or run `cadrei answer` to see what for ([Answering your team](#answering-your-team)). Its window is `cadrei attach <team> [project]` (or Ctrl-b then s in tmux). `✗ stopped by safeguards` means Claude's safeguards stopped its reply: open its window, type `/model` and pick the model again, or ask your orchestrator to restart it fresh. Otherwise look at its window; a new folder may show Claude Code's trust prompt, and `cadrei project trust <name>` avoids it next time.
 - **The trust prompt still shows for a project.** Run `cadrei project trust <name>`. A Claude Code session running during the change may have written its own copy of `~/.claude.json` over it; accept the prompt once, or run the command again with no sessions running. If you set `CLAUDE_CONFIG_DIR`, your orchestrator uses the one in the terminal you run `cadrei` from, and members use the one of whatever starts them (your orchestrator, or `cadrei up` in a terminal), even in a tmux server that started with another one.
 - **Claude Code asks to trust your crew's folder.** Claude Code hadn't run on this machine before your first run, or the crew was restored. If it's your crew, say yes.
 - **A member reports a blocked action.** Decide whether to allow it. If yes, tell your orchestrator to allow that exact action; it restarts the member when needed.
