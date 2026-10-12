@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 
@@ -68,7 +69,12 @@ func runHookGuard(e *env) int {
 	if m == nil {
 		return guardRefuses(e, strictRefused)
 	}
-	code, choice := m[1], m[2]
+	// By a full path, it must be cadrei: cadrei's text in the ask vouches
+	// for the program that runs.
+	if m[1] != "cadrei" && !isThisCadrei(m[1]) {
+		return guardRefuses(e, "Run cadrei answer <code> <choice> with cadrei by its name, so cadrei can ask you.")
+	}
+	code, choice := m[2], m[3]
 	if !promptModes[call.Mode] {
 		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves, or to answer in the member's window.")
 	}
@@ -86,6 +92,17 @@ func runHookGuard(e *env) int {
 	}
 	e.stdout.Write(rt.Sessions().Ask(askReason(w, choice)))
 	return 0
+}
+
+// isThisCadrei reports whether path is this program, or the cadrei the
+// PATH finds.
+func isThisCadrei(path string) bool {
+	real := paths.Real(path)
+	if self, err := os.Executable(); err == nil && paths.Real(self) == real {
+		return true
+	}
+	found, err := exec.LookPath("cadrei")
+	return err == nil && paths.Real(found) == real
 }
 
 // guardRefuses blocks the command, saying why where the runtime shows it.
@@ -114,7 +131,7 @@ var promptModes = setOf("default", "acceptEdits", "auto")
 // cadrei by its name or a full path, literal words, nothing around it.
 // answerListing is cadrei answer with nothing after it.
 var (
-	strictAnswer  = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|[0-9]{1,2})\s*$`)
+	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|[0-9]{1,2})\s*$`)
 	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer\s*$`)
 )
 
@@ -161,9 +178,17 @@ func programAt(words []shWord, p int, name string) (int, bool) {
 // runners run a program named in their arguments.
 var runners = setOf("xargs", "find", "parallel", "fd")
 
-// calls: code that runs tmux with a command outside the read-only list,
-// named in full or by its alias, within the next words.
-func (tmuxRule) calls(text string) bool {
+// calls: code another program runs (python's -c, a heredoc to node) that
+// runs a program, and holds tmux in a command's shape: tmux, its flags,
+// then a command outside the read-only list. An argument that's only text
+// (a search pattern, a message, a make variable) runs nothing, so tmux in
+// it is only words.
+func (tmuxRule) calls(text string) bool { return shellsOut(text) && tmuxShape(bluntWords(text)) }
+
+// mentions: text that becomes a shell's code, or that a program which is
+// itself an expansion may run: tmux with a command outside the read-only
+// list, in full or by its alias, in the next words.
+func (tmuxRule) mentions(text string) bool {
 	words := bluntWords(text)
 	for i, w := range words {
 		if w != "tmux" {
@@ -178,9 +203,42 @@ func (tmuxRule) calls(text string) bool {
 	return false
 }
 
-func (r tmuxRule) mentions(text string) bool { return r.calls(text) }
+func (r tmuxRule) blunt(text string) bool { return r.mentions(text) }
 
-func (r tmuxRule) blunt(text string) bool { return r.calls(text) }
+// tmuxShape reports whether words hold tmux as a command: tmux, its flags
+// (each maybe with a value), then a command outside the read-only list.
+func tmuxShape(words []string) bool {
+	for i, w := range words {
+		if w != "tmux" {
+			continue
+		}
+		flag := false
+		for _, v := range words[i+1 : min(i+6, len(words))] {
+			if strings.HasPrefix(v, "-") {
+				flag = true
+				continue
+			}
+			if name, ok := tmuxExact(v); ok {
+				if !tmuxReadOnly[name] {
+					return true
+				}
+				break
+			}
+			if !flag {
+				break
+			}
+			flag = false // a flag's value
+		}
+	}
+	return false
+}
+
+// shellOut is how code in another language runs a program: a call that
+// runs one, or a backtick.
+var shellOut = regexp.MustCompile("(?i)system|exec|popen|spawn|subprocess|child_process|check_output|open3|\\bpty\\b|`|\\bqx\\b|%x|shell\\s*=")
+
+// shellsOut reports whether code may run a program.
+func shellsOut(text string) bool { return shellOut.MatchString(text) }
 
 // tmuxWrites reports whether tmux's arguments run any command outside the
 // read-only list, or one it can't read. tmux takes a sequence of commands
@@ -190,6 +248,13 @@ func tmuxWrites(args []shWord) bool {
 	i := 0
 	// tmux's own flags: -C (control mode) and -c (a shell command) run
 	// commands; -f, -L, -S and -T take a value.
+	// A format's #( starts a shell job in the tmux server, as run-shell
+	// does, outside the session's own processes: in any argument.
+	for _, a := range args {
+		if strings.Contains(a.text, "#(") {
+			return true
+		}
+	}
 flags:
 	for ; i < len(args); i++ {
 		a := args[i]
@@ -231,6 +296,7 @@ flags:
 			return true
 		}
 		// The rest of this command, up to a ; word or one that ends with ;.
+		// display-message's -I writes into a pane.
 		printing := false
 		i++
 		for ; i < len(args); i++ {
@@ -240,6 +306,9 @@ flags:
 			t := args[i].text
 			if t == "-p" {
 				printing = true
+			}
+			if name == "display-message" && strings.HasPrefix(t, "-") && !strings.HasPrefix(t, "--") && strings.Contains(t, "I") {
+				return true
 			}
 			if strings.HasSuffix(t, ";") {
 				i++

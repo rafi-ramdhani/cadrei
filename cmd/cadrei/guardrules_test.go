@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,6 +27,8 @@ func answerCrew(t *testing.T) (c, eng, writer string) {
 	os.WriteFile(c+"/members/docs/writer.md", []byte("# Member: writer\n"), 0o644)
 	must(t, "up", "dev/engineer", "my-app")
 	must(t, "up", "docs/writer")
+	// cadrei on the PATH, which a full path in the strict form must be.
+	writeStub(t, home+"/bin/cadrei", "#!/bin/sh\nexit 0\n")
 	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"gh pr merge 42 --squash"}}`)
 	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Upload resume.pdf to the signing site?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`)
 	code := func(name string) string {
@@ -138,6 +141,26 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		{`t=tmux; $t send-keys -t x 1`, typingRefused, typingRefused},
 		{`osascript -e 'tell application "System Events" to keystroke "1"'`, keystrokeRefused, keystrokeRefused},
 		{`osascript -e 'tell application "System Events" to key code 36'`, keystrokeRefused, keystrokeRefused},
+		// Review of 0.2.2: tmux after every wrapper, osascript with its
+		// script on stdin or in JavaScript, code that runs tmux.
+		{`exec tmux send-keys -t x 1`, typingRefused, typingRefused},
+		{`time tmux send-keys -t x 1`, typingRefused, typingRefused},
+		{`nohup tmux send-keys -t x 1 &`, typingRefused, typingRefused},
+		{`env TMUX= tmux send-keys -t x 1`, typingRefused, typingRefused},
+		{`watch 'tmux send-keys -t x 1'`, typingRefused, typingRefused},
+		{`python3 -c "import subprocess; subprocess.run(['tmux', 'new-session', '-d'])"`, typingRefused, typingRefused},
+		{"osascript <<'EOF'\ntell application \"System Events\" to keystroke \"1\"\nEOF", keystrokeRefused, keystrokeRefused},
+		{`osascript -l JavaScript -e 'Application("System Events").keystroke("1")'`, keystrokeRefused, keystrokeRefused},
+		{`watch 'cadrei answer 7f3 yes'`, memberAnswerRefused, strictRefused},
+		// Review of 0.2.2 (M5): a format's #( starts a shell job in the
+		// tmux server, so even the read-only commands refuse one. These
+		// are text for the guard to read, never run.
+		{`tmux display-message -p '#(true)'`, typingRefused, typingRefused},
+		{`tmux list-panes -a -F '#{pane_id} #(true)'`, typingRefused, typingRefused},
+		{`tmux list-sessions -F "#(echo x)"`, typingRefused, typingRefused},
+		{`tmux display-message -I -t x`, typingRefused, typingRefused},
+		{`tmux display-message -pI x`, typingRefused, typingRefused},
+		{`tmux display-message -p -I -t x`, typingRefused, typingRefused},
 	} {
 		blocked(member, "default", tc.command, tc.memberWhy)
 		blocked("", "default", tc.command, tc.orchWhy)
@@ -148,7 +171,12 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	asks("default", `cadrei answer 7f3 yes`, "Cadrei: allow once? The engineer on my-app wants to run: gh pr merge 42 --squash")
 	asks("default", `cadrei answer 7f3 no`, "Cadrei: tell the engineer on my-app no? It wants to run: gh pr merge 42 --squash")
 	blocked(member, "default", `/opt/homebrew/bin/cadrei answer k2m 1`, memberAnswerRefused)
-	asks("default", `/opt/homebrew/bin/cadrei answer k2m 1`, `Cadrei: answer the writer in docs with "1. Yes"? It asks: Upload resume.pdf to the signing site?`)
+	asks("default", filepath.Dir(filepath.Dir(c))+`/bin/cadrei answer k2m 1`, `Cadrei: answer the writer in docs with "1. Yes"? It asks: Upload resume.pdf to the signing site?`)
+	// Review of 0.2.2 (L3): by a full path, it must be cadrei.
+	blocked(member, "default", `/tmp/x/cadrei answer 7f3 yes`, memberAnswerRefused)
+	blocked("", "default", `/tmp/x/cadrei answer 7f3 yes`, "Run cadrei answer <code> <choice> with cadrei by its name, so cadrei can ask you.")
+	// A listing that runs into something else isn't the listing.
+	blocked("", "default", `cadrei answer | cat`, strictRefused)
 	blocked(member, "default", `cadrei answer zz9 yes`, memberAnswerRefused)
 	blocked("", "default", `cadrei answer zz9 yes`, "Nothing's waiting under zz9 anymore. Run cadrei answer to see what's waiting now.")
 	for _, mode := range []string{"bypassPermissions", "dontAsk", "plan", ""} {
@@ -164,7 +192,9 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer k2m 3`, "k2m has options 1 to 2. Use cadrei answer k2m 1, for example.")
 	blocked(member, "default", `cadrei answer`, memberAnswerRefused)
 	allowed("", `cadrei answer`)
-	blocked(member, "default", `cadrei compact dev/engineer my-app`, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
+	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`} {
+		blocked(member, "default", form, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
+	}
 	allowed("", `cadrei compact dev/engineer my-app`)
 	blocked(member, "default", `cadrei uninstall`, "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator.")
 	allowed("", `cadrei uninstall`)
@@ -179,9 +209,45 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		`tmux list-windows -a`, `tmux has-session -t x`, `tmux show-options -g`, `tmux display-message -p '#S'`,
 		`tmux capturep -p -t x \; lsw`, `tmux -L other list-sessions`, `tmux -V`,
 		`brew install tmux`, `man tmux`, `which tmux`, `osascript -e 'display notification "done"'`,
+		// Review of 0.2.2 (MH1): text that only mentions tmux or cadrei
+		// answer, in arguments that run nothing.
+		`rg -n "tmux new-session" cmd/`, `rg -n "cadrei answer" docs/`, `rg -n 'cadrei compact' docs/`,
+		`python3 scripts/post.py --text "start tmux and attach later"`,
+		`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`,
+		`perl -ne 'print if /tmux kill-server/' notes.md`,
+		`python3 -c "print('see tmux if you need it')"`,
+		`make docs MSG="tmux set the title"`,
+		`awk '/tmux send-keys/' notes.md`, `sed -n '/cadrei answer/p' docs/guide.md`,
+		`python3 -c "print('run cadrei answer 7f3 yes to answer')"`,
 	} {
 		allowed(member, command)
 		allowed("", command)
+	}
+}
+
+// Review of 0.2.2 (M3): a request cadrei can't check on the screen (a
+// multi-select question, a tool it has no recorded screen for) is denied
+// before any ask, as is any code when the guard doesn't know the crew.
+func TestTheGuardDeniesWhatItCantAnswer(t *testing.T) {
+	c, _, _ := answerCrew(t)
+	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}]}}`)
+	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"mcp__files__upload","tool_input":{"path":"/w/a.pdf"}}`)
+	code := func(name string) string {
+		return session.ReadState(c + "/.claude/build/state/" + name + ".json").Request.Code
+	}
+	for command, why := range map[string]string{
+		"cadrei answer " + code("work-docs-writer") + " 1":           "This question needs more than one pick, so answer it in its window: cadrei attach docs",
+		"cadrei answer " + code("work-dev-my-app-engineer") + " yes": "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev my-app",
+	} {
+		if n, out, errOut := guardAs(t, c, "", "default", command); n != 2 || out != "" || strings.TrimSpace(errOut) != why {
+			t.Errorf("%s: %d %q %q", command, n, out, errOut)
+		}
+	}
+	t.Setenv("CADREI_HOME", "")
+	os.Unsetenv("CADREI_HOME")
+	in := `{"hook_event_name":"PreToolUse","tool_name":"Bash","permission_mode":"default","tool_input":{"command":"cadrei answer ` + code("work-docs-writer") + ` 1"}}`
+	if n, _, errOut := callIn(in, "hook", "guard"); n != 2 || !strings.Contains(errOut, "Nothing's waiting under") {
+		t.Errorf("no crew: %d %q", n, errOut)
 	}
 }
 

@@ -148,7 +148,18 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 			return true
 		}
 	}
+	// watch runs its words as a shell command.
+	watched := false
+	for _, w := range words[:p] {
+		watched = watched || wordName(w) == "watch"
+	}
 	switch {
+	case watched:
+		var code []string
+		for _, w := range words[p:] {
+			code = append(code, w.text)
+		}
+		return guardLine(rule, strings.Join(code, " "), depth+1)
 	case name == "eval":
 		var code []string
 		for _, w := range words[p+1:] {
@@ -200,13 +211,19 @@ func feeds(rule guardRule, c *shCommand, fed bool) bool {
 }
 
 // cadreiRule looks for cadrei's program running one of subs.
-type cadreiRule struct{ subs map[string]bool }
+// With code, an argument or a heredoc counts only when it's code that runs
+// a program (shellsOut): "cadrei answer" in a search pattern or a message
+// runs nothing.
+type cadreiRule struct {
+	subs map[string]bool
+	code bool
+}
 
 // The cadrei commands the guard looks for.
 var (
-	removalRule = cadreiRule{setOf("uninstall", "restore")}
-	answerRule  = cadreiRule{setOf("answer")}
-	compactRule = cadreiRule{setOf("compact")}
+	removalRule = cadreiRule{subs: setOf("uninstall", "restore")}
+	answerRule  = cadreiRule{subs: setOf("answer"), code: true}
+	compactRule = cadreiRule{subs: setOf("compact"), code: true}
 )
 
 func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
@@ -367,6 +384,9 @@ func (r cadreiRule) mentions(text string) bool {
 // to node) has cadrei, then one of the commands within the next three
 // words: "cadrei uninstall", or ["cadrei", "restore"].
 func (r cadreiRule) calls(text string) bool {
+	if r.code && !shellsOut(text) {
+		return false
+	}
 	words := bluntWords(text)
 	for i, w := range words {
 		if !programs[w] {
