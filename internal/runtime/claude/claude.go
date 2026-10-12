@@ -118,15 +118,15 @@ func (c Claude) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 		// IDE connection that terminal has (an IDE's built-in one).
 		unset = slices.DeleteFunc(slices.Clone(sessionVars), func(v string) bool { return v == ideVar })
 	}
+	// Every session reads Claude Code's config (its login, its trust
+	// marks, its transcripts) where cadrei checked the login and writes
+	// trust: cadrei's own config dir, set or not. In tmux, a server
+	// started earlier may have another one.
 	var env []string
-	if s.ConfigHere {
-		// In tmux, a server started earlier may have another config dir:
-		// the login went to this one.
-		if dir, ok := os.LookupEnv(configVar); ok {
-			env = append(env, configVar+"="+dir)
-		} else {
-			unset = append(slices.Clone(unset), configVar)
-		}
+	if dir, ok := os.LookupEnv(configVar); ok {
+		env = append(env, configVar+"="+dir)
+	} else {
+		unset = append(slices.Clone(unset), configVar)
 	}
 	return runtime.Command{Argv: argv, Dir: s.WorkDir, Env: env, Unset: unset}, nil
 }

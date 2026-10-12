@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strings"
@@ -102,7 +103,7 @@ func (e *env) logInNow(rt rtpkg.Runtime, ready string) bool {
 	}
 	// A login can end well and still leave no login (a closed browser
 	// tab): only one the runtime then confirms, or can't say about, counts.
-	if err == nil && rt.Probe().Login == rtpkg.LoggedOut {
+	if err == nil && rt.Probe(context.Background()).Login == rtpkg.LoggedOut {
 		err = errors.New("still logged out")
 	}
 	if err != nil {

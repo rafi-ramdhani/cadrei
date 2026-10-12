@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -65,10 +66,14 @@ func runPlain(e *env) int {
 	// The login, asked while the rest gets ready (the first run asked
 	// already): logged out, the orchestrator's first message would only
 	// get an error back.
+	// Whatever this run ends with, a check still going ends with it: in
+	// a process group of its own, nothing else would stop it.
 	var login chan string
 	if !first {
+		ctx, stop := context.WithCancel(context.Background())
+		defer stop()
 		login = make(chan string, 1)
-		go func() { login <- rt.Probe().Login }()
+		go func() { login <- rt.Probe(ctx).Login }()
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -221,10 +226,7 @@ func runPlain(e *env) int {
 		}
 		cmd, err := rt.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: orchestrator.Name(r.Name), Cadrei: r.Path,
 			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: readOnly, Prompt: first,
-			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value,
-			// The login was checked (and made) with this process's config
-			// dir, so the orchestrator reads that one, in tmux too.
-			ConfigHere: true})
+			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value})
 		// Pinned to this cadrei, and marked as the orchestrator, so the
 		// hook adds nothing more (K.3). What only this launch knows goes
 		// to the snapshot hook.

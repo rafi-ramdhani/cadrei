@@ -11,6 +11,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -350,6 +351,39 @@ func TestPlainCadreiOpensWhenTheLoginIsNoMatter(t *testing.T) {
 		code, out, errOut := call("--tmux", "--detach")
 		if took := time.Since(start); code != 0 || took > 2500*time.Millisecond {
 			t.Errorf("exit %d after %s:\n%s%s", code, took, out, errOut)
+		}
+	})
+	// Final read (N1): a check still going when cadrei is done ends with
+	// it: in a process group of its own, nothing else would stop it. The
+	// switch here takes half a second, so the check has started.
+	t.Run("open already, check stopped", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		real, _ := exec.LookPath("tmux")
+		os.MkdirAll(home+"/stub-tmux", 0o755)
+		writeStub(t, home+"/stub-tmux/tmux", "#!/bin/sh\n[ \"$3\" = attach ] && { sleep 0.5; exit 0; }\nexec "+real+" \"$@\"\n")
+		t.Setenv("PATH", home+"/stub-tmux:"+os.Getenv("PATH"))
+		pid := home + "/check-pid"
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') echo $$ > \""+pid+"\"; exec sleep 60 ;;\nesac\nexec sleep 300\n")
+		ttyForTests = true
+		t.Cleanup(func() { ttyForTests = false })
+		if code, out, errOut := call("--tmux"); code != 0 {
+			t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(readFile(t, pid)))
+		if err != nil {
+			t.Fatalf("the check didn't start: %v", err)
+		}
+		t.Cleanup(func() { syscall.Kill(n, syscall.SIGKILL) })
+		alive := true
+		for i := 0; i < 20 && alive; i++ {
+			alive = syscall.Kill(n, 0) == nil
+			time.Sleep(50 * time.Millisecond)
+		}
+		if alive {
+			t.Error("the login check outlived cadrei")
 		}
 	})
 	// Review recheck (L1): every open, not only one that logged in, has

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -9,7 +10,7 @@ type testRuntime struct{ caps Capabilities }
 
 func (t testRuntime) Name() string                       { return "test" }
 func (t testRuntime) Title() string                      { return "Test" }
-func (t testRuntime) Probe() Probe                       { return Probe{} }
+func (t testRuntime) Probe(context.Context) Probe        { return Probe{} }
 func (t testRuntime) Help() InstallHelp                  { return InstallHelp{} }
 func (t testRuntime) Login() (Command, error)            { return Command{}, nil }
 func (t testRuntime) Model() string                      { return "Test" }

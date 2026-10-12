@@ -64,17 +64,18 @@ func atLeast(v, floor [3]int) bool {
 	return true
 }
 
-// output runs claude with args, no input and a time limit.
-func output(bin string, args ...string) ([]byte, error) {
-	return outputWithin(15*time.Second, bin, args...)
+// output runs claude with args, no input and a time limit. Ending ctx
+// ends it sooner.
+func output(ctx context.Context, bin string, args ...string) ([]byte, error) {
+	return outputWithin(ctx, 15*time.Second, bin, args...)
 }
 
 // authLimit is how long the login check may take: offline, claude auth
 // status can wait a long time, and setup shows the check as it runs.
 const authLimit = 3 * time.Second
 
-func outputWithin(limit time.Duration, bin string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
+func outputWithin(parent context.Context, limit time.Duration, bin string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, limit)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = nil
@@ -99,7 +100,7 @@ func (c Claude) Health(full bool, cadreiDirs []string) []runtime.Problem {
 	// The full check asks Claude Code as the first run's screen does: the
 	// one Probe, so both say the same.
 	if full {
-		switch p := c.Probe(); {
+		switch p := c.Probe(context.Background()); {
 		case !p.Runs:
 			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fatal: true, Fix: "Reinstall it with " + help.Reinstall})
 		case p.Login == runtime.LoggedOut:
@@ -391,14 +392,15 @@ func (hooks) SnapshotSettings(dir, binary string) (string, error) {
 }
 
 // Probe runs claude --version, and claude auth status when this version
-// has it (3 seconds at most: offline it can wait much longer).
-func (c Claude) Probe() runtime.Probe {
+// has it (3 seconds at most: offline it can wait much longer). Ending ctx
+// ends both, and what they started.
+func (c Claude) Probe(ctx context.Context) runtime.Probe {
 	in, err := c.Detect()
 	if err != nil {
 		return runtime.Probe{}
 	}
 	p := runtime.Probe{Installed: true, Login: runtime.LoginUnsure}
-	raw, err := output(in.Path, "--version")
+	raw, err := output(ctx, in.Path, "--version")
 	v, ok := parseVersion(string(raw))
 	if err != nil || !ok {
 		return p
@@ -407,7 +409,7 @@ func (c Claude) Probe() runtime.Probe {
 	if !atLeast(v, authStatusSince) {
 		return p
 	}
-	raw, err = outputWithin(authLimit, in.Path, "auth", "status")
+	raw, err = outputWithin(ctx, authLimit, in.Path, "auth", "status")
 	var exit *exec.ExitError
 	isJSON := json.Valid(bytes.TrimSpace(raw))
 	switch {

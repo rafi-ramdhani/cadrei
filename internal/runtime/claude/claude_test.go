@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,12 +18,13 @@ func TestLaunch(t *testing.T) {
 	bin := t.TempDir()
 	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o755)
 	t.Setenv("PATH", bin)
+	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg")
 	cmd, err := Claude{}.Launch(runtime.LaunchSpec{Name: "w-dev-pm", Mode: "auto", PromptFile: "/p.md", Grants: "/g.json", WorkDir: "/w"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := filepath.Join(bin, "claude") + " --name w-dev-pm --permission-mode auto --append-system-prompt-file /p.md --settings /g.json"
-	if strings.Join(cmd.Argv, " ") != want || cmd.Dir != "/w" || len(cmd.Env) != 0 {
+	if strings.Join(cmd.Argv, " ") != want || cmd.Dir != "/w" || !slices.Equal(cmd.Env, []string{"CLAUDE_CONFIG_DIR=/cfg"}) {
 		t.Errorf("Launch: %+v", cmd)
 	}
 	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Name: "x", Mode: "default"})
@@ -39,21 +41,20 @@ func TestLaunch(t *testing.T) {
 	if slices.Contains(cmd.Unset, "CLAUDE_CODE_SSE_PORT") || !slices.Contains(cmd.Unset, "CLAUDECODE") || !slices.Contains(sessionVars, "CLAUDE_CODE_SSE_PORT") {
 		t.Errorf("the orchestrator's unset: %v", cmd.Unset)
 	}
-	// After cadrei logged the user in, the session reads the config dir
-	// the login did: this process's, set or not, never a tmux server's.
-	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg")
-	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default", ConfigHere: true})
-	if !slices.Contains(cmd.Env, "CLAUDE_CONFIG_DIR=/cfg") || slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") {
-		t.Errorf("config here, set: %+v", cmd)
-	}
-	os.Unsetenv("CLAUDE_CONFIG_DIR")
-	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default", ConfigHere: true})
-	if len(cmd.Env) != 0 || !slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") || slices.Contains(sessionVars, "CLAUDE_CONFIG_DIR") {
-		t.Errorf("config here, unset: %+v", cmd)
-	}
-	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default"})
-	if len(cmd.Env) != 0 || slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") {
-		t.Errorf("as before: %+v", cmd)
+	// Every session, the orchestrator and members alike, reads the config
+	// dir cadrei checked the login in and writes trust to: this process's,
+	// set or not, never a tmux server's.
+	for _, role := range []runtime.Role{runtime.Orchestrator, runtime.Member} {
+		t.Setenv("CLAUDE_CONFIG_DIR", "/cfg")
+		cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: role, Name: "x", Mode: "default"})
+		if !slices.Equal(cmd.Env, []string{"CLAUDE_CONFIG_DIR=/cfg"}) || slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") {
+			t.Errorf("%v, config dir set: %+v", role, cmd)
+		}
+		os.Unsetenv("CLAUDE_CONFIG_DIR")
+		cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: role, Name: "x", Mode: "default"})
+		if len(cmd.Env) != 0 || !slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") || slices.Contains(sessionVars, "CLAUDE_CONFIG_DIR") {
+			t.Errorf("%v, config dir unset: %+v", role, cmd)
+		}
 	}
 	t.Setenv("PATH", t.TempDir())
 	if _, err := (Claude{}).Launch(runtime.LaunchSpec{}); err == nil || !strings.Contains(err.Error(), "not on your PATH") {
@@ -116,7 +117,7 @@ func TestOutputWithinStopsAtItsLimit(t *testing.T) {
 	stub := filepath.Join(t.TempDir(), "hang")
 	os.WriteFile(stub, []byte("#!/bin/sh\nsleep 60 &\nsleep 60\n"), 0o755)
 	start := time.Now()
-	if _, err := outputWithin(authLimit, stub); err == nil {
+	if _, err := outputWithin(context.Background(), authLimit, stub); err == nil {
 		t.Error("a hung command came back without an error")
 	}
 	if took := time.Since(start); took > authLimit+500*time.Millisecond+5*time.Second {
@@ -134,7 +135,7 @@ func TestAHangingLoginCheckGivesUp(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 	start := time.Now()
-	p := Claude{}.Probe()
+	p := Claude{}.Probe(context.Background())
 	// Cut off well before the stub's 60 s, however loaded the machine (the
 	// limit itself is pinned below).
 	if took := time.Since(start); took > 30*time.Second {

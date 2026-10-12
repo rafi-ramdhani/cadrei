@@ -121,7 +121,7 @@ func (e *env) checks(rt rtpkg.Runtime) bool {
 		}
 	}
 	title := rt.Title()
-	p := rt.Probe()
+	p := rt.Probe(context.Background())
 	switch {
 	case !p.Installed:
 		help := rt.Help()

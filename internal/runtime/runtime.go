@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -70,10 +71,6 @@ type LaunchSpec struct {
 	// At most one is set, and only for a runtime with those capabilities.
 	SessionID string
 	Resume    string
-	// ConfigHere has the session read the runtime's own config (its login)
-	// as this process's environment says, not as a tmux server's does:
-	// where cadrei checked the login, and logged the user in.
-	ConfigHere bool
 }
 
 // Command is what cadrei runs: in tmux for a member, or as a child process.
@@ -385,8 +382,8 @@ type Runtime interface {
 	// folders changes what their sessions load.
 	Health(full bool, cadreis []string) []Problem
 	// Probe runs the runtime to say whether it works, its version and
-	// whether the user is logged in.
-	Probe() Probe
+	// whether the user is logged in. Ending ctx stops what it runs.
+	Probe(ctx context.Context) Probe
 	// Help is how to install or reinstall it.
 	Help() InstallHelp
 	// Login builds the command that logs the user in, run in their own

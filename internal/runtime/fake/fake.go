@@ -9,6 +9,7 @@ package fake
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -70,7 +71,7 @@ func (Fake) Login() (runtime.Command, error) {
 	return runtime.Command{}, errors.New("the fake runtime has no login")
 }
 
-func (Fake) Probe() runtime.Probe {
+func (Fake) Probe(context.Context) runtime.Probe {
 	return runtime.Probe{Installed: true, Runs: true, Version: "1.0.0", Login: runtime.LoggedIn}
 }
 
