@@ -58,11 +58,13 @@ Up to three lines, each on its own line:
 | One-time grants left over | `<n> one-time grants are left from last time. Want me to remove them?` |
 | A project is `not here`, `missing` or on a `drive` | `Heads up: <name> isn't on this machine. Want me to clone it?` (`missing`: `<name>'s folder is gone. Want me to find it or clone it again?`; `drive`: `<name> is on a drive that isn't connected.`) |
 | Opened from a git repo that isn't a project | `You're in <path>, which isn't a project yet. Want me to add it?` |
-| A member is waiting on you | `<Place> is waiting on you for an approval. Want to open its window?` |
+| A member is waiting on you, with a code | A prompt: `<Place> wants to <what it wants>. Want to answer it here?` A question: `<Place> asks: <question> To answer, type ! cadrei answer <code> and the number: <options>.` One only its window can answer: `<Place> is waiting on you in its window: <command>.` |
+| A member is waiting on you, with no code | `<Place> is waiting on you for an approval. Want to open its window?` |
 | A team is running (the team line already says who) | `What's next?` |
 | Otherwise | `Your team is ready. What's next?` |
 
 - `<place>` and `<command>` are the member's own, word for word from the snapshot's `Stopped by safeguards` or `Waiting on the user` entry (`the reviewer on my-app, ... opened with cadrei attach dev my-app`). Never build them from `Opened from`: a member's project is its own, not the folder the user is in. `<Place>` starts with a capital.
+- `<what it wants>`, `<question>`, `<code>` and `<options>` are word for word from the snapshot's `Waiting on the user` entry (`The engineer on my-app (7f3) wants to run: gh pr merge 42 --squash`). On a yes to "Want to answer it here?", run `cadrei answer <code> yes` on its own, as the skill's "Waiting on the user" says: Claude Code then asks the user.
 - The team line in the greeting is the reply's team line: don't add it again at the end. One team line per reply.
 - If the chat joins these lines into one paragraph, put a blank line between them.
 - When the greeting has a safeguard stop, the skill's "Safeguard stops" flow follows.
