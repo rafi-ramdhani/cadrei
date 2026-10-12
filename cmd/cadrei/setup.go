@@ -146,6 +146,9 @@ func (e *env) checks(rt rtpkg.Runtime) bool {
 	default:
 		add(markWarn, p.Says(title))
 	}
+	if p.Notice != nil {
+		add(markWarn, p.Notice.What, p.Notice.Fix)
+	}
 	for _, c := range []toolCheck{gitCheck(), tmuxCheck()} {
 		var fix []string
 		if c.fix != "" {

@@ -208,6 +208,13 @@ func TestFirstRunChecksTheTools(t *testing.T) {
 	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(flat(out), "! Claude Code 2.1.300, not logged in yet The setup logs you in before your orchestrator opens.") {
 		t.Errorf("not logged in: %d\n%s", code, out)
 	}
+	// 0.2.2: a Claude Code below 2.1.295 is said, with how to fix it, and
+	// the setup goes on.
+	home = firstMachine(t)
+	oldClaude(t, home)
+	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(flat(out), "! "+oldNotice) {
+		t.Errorf("old Claude Code: %d\n%s", code, out)
+	}
 }
 
 // loggedOut makes the claude stub logged out, with a login that ends

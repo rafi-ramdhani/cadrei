@@ -16,6 +16,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 - **Cadrei sessions can't type into tmux windows.** The guard in members, and now in your orchestrator too, refuses any `tmux` command outside a list of ones that only read (`capture-pane`, `list-*`, `has-session`, `show-options`, `show-environment`, `display-message -p`, none with a format's `#(`, `E:` or `T:`), on any tmux server, and `osascript` keystrokes: text typed into a window reads as yours. A command that only mentions tmux or `cadrei answer` still runs when its program never runs its arguments, like `grep` or `git commit -m`. Any other program's arguments count, even a search pattern for `rg`. Your orchestrator compacts a member with `cadrei compact` instead. In your orchestrator, the guard lets uninstall and restore through, and lets every command run when cadrei is gone, so an uninstalled cadrei doesn't lock your chat. [SECURITY.md](SECURITY.md) says what it can and can't stop.
 - `cadrei ls` shows a waiting member's `cadrei answer` line.
+- **A warning for Claude Code below 2.1.295.** On those versions, a guard that hangs or times out lets the command go on to Claude Code's own permission check. The setup, `cadrei --check` and each start say so, and that updating fixes it. Nothing stops you from using an older one.
 - The README's demo GIF is a third of its old size, so it loads faster on a phone.
 
 ### For tool builders

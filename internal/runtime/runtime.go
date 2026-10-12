@@ -397,6 +397,8 @@ type Probe struct {
 	Runs      bool   // it answers --version
 	Version   string // as it says it
 	Login     string // "yes", "no", or "unknown" (too old to ask, or no answer in time)
+	// Notice is something to tell the user about this version, or nil.
+	Notice *Problem
 }
 
 // Says is what the checks say about the runtime, called title: that it
