@@ -77,7 +77,7 @@ func TestPlainCadreiOpensTheOrchestratorInThisTerminal(t *testing.T) {
 	// Acceptance 14: its own settings (the snapshot hook), the seven
 	// read-only commands, and the seed last, after --.
 	tail := "--settings\n" + c + "/.claude/build/orchestrator-settings.json\n--session-id\n"
-	allowed := "--allowedTools\nBash(cadrei ls)\nBash(cadrei ls --json)\nBash(cadrei ls --all)\nBash(cadrei ls --json --all)\nBash(cadrei ls --all --json)\nBash(cadrei allow)\nBash(cadrei allow list)\nBash(cadrei hook skip)\n--\n(cadrei opened this chat)\n"
+	allowed := "--allowedTools\nBash(cadrei ls)\nBash(cadrei ls --json)\nBash(cadrei ls --all)\nBash(cadrei ls --json --all)\nBash(cadrei ls --all --json)\nBash(cadrei allow)\nBash(cadrei allow list)\nBash(cadrei hook skip)\nBash(cadrei answer)\n--\n(cadrei opened this chat)\n"
 	if !strings.Contains(ran, tail) || !strings.Contains(ran, allowed) {
 		t.Errorf("the orchestrator's command:\n%s", ran)
 	}

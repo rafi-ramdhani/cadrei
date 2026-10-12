@@ -34,7 +34,9 @@ const seed = "(cadrei opened this chat)"
 // these forms (the skill names them).
 var readOnly = []string{"cadrei ls", "cadrei ls --json", "cadrei ls --all", "cadrei ls --json --all", "cadrei ls --all --json", "cadrei allow", "cadrei allow list",
 	// It only records the user's no to the every-chat hook.
-	"cadrei hook skip"}
+	"cadrei hook skip",
+	// The listing of who's waiting: it answers nothing.
+	"cadrei answer"}
 
 // opening is what only the launch knows: where the orchestrator opens
 // (tmux, tmux-inside, terminal, or hook for a chat the every-chat hook
