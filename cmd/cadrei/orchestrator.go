@@ -62,6 +62,14 @@ func runPlain(e *env) int {
 		}
 		first = true
 	}
+	// The login, asked while the rest gets ready (the first run asked
+	// already): logged out, the orchestrator's first message would only
+	// get an error back.
+	var login chan string
+	if !first {
+		login = make(chan string, 1)
+		go func() { login <- rt.Probe().Login }()
+	}
 	r, ok := e.resolve()
 	if !ok {
 		return 1
@@ -114,6 +122,16 @@ func runPlain(e *env) int {
 		return 1
 	}
 	build := rt.BuildDir(r.Path)
+	// Logged out for sure: log in first, unless it's open already (that
+	// one is only switched to). Unsure (offline, an old runtime) opens as
+	// before. Asked before the start guard, which a login would hold.
+	if login != nil && <-login == runtime.LoggedOut && !e.orchestratorOpen(t, r, build) {
+		e.say("")
+		e.screen("You're not logged in to " + rt.Title() + ", so log in first.")
+		if !e.logInNow(rt, "") {
+			return 1
+		}
+	}
 	if err := session.EnsureBuild(build); err != nil {
 		return e.fail("%s", err)
 	}
@@ -291,6 +309,16 @@ func runPlain(e *env) int {
 		code = e.runTerminal(cmd, lockPath, func() { g.Release() })
 	}
 	return code
+}
+
+// orchestratorOpen reports whether the cadrei's orchestrator looks open,
+// in a terminal or in tmux, without the start guard: a look, which the
+// open under the guard checks again.
+func (e *env) orchestratorOpen(t session.Tmux, r *cadreis.Resolved, build string) bool {
+	if openOrchestrator(t, r.Name, r.Path, orchestrator.LockPath(build), false) != nil {
+		return true
+	}
+	return haveTmux() && orchestratorSession(t, orchestrator.SessionName(r.Name), r.Path, 0)
 }
 
 func haveTmux() bool {

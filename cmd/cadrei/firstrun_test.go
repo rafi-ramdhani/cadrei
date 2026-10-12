@@ -252,6 +252,100 @@ func TestFirstRunLogsInBeforeTheOrchestratorOpens(t *testing.T) {
 	}
 }
 
+// Every later open asks too: logged out for sure, plain cadrei logs the
+// user in first and opens the orchestrator once that went through. A
+// login that fails, or no terminal to log in from, opens nothing.
+func TestPlainCadreiLogsInBeforeTheOrchestratorOpens(t *testing.T) {
+	setup := func(t *testing.T, exit int, tty bool) string {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		loggedOut(t, home, exit)
+		ttyForTests = tty
+		t.Cleanup(func() { ttyForTests = false })
+		return home
+	}
+	t.Run("ok", func(t *testing.T) {
+		home := setup(t, 0, true)
+		code, out, errOut := callIn("", "--no-tmux")
+		if code != 0 || !strings.Contains(flat(out), "You're not logged in to Claude Code, so log in first.") || !strings.Contains(out, "+ Logged in to Claude Code") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if got := readFile(t, home+"/calls"); got != "login\norchestrator\n" {
+			t.Errorf("calls:\n%s", got)
+		}
+	})
+	for _, exit := range []int{1, 130} {
+		t.Run(strconv.Itoa(exit), func(t *testing.T) {
+			home := setup(t, exit, true)
+			code, out, errOut := callIn("", "--no-tmux")
+			all := flat(out + errOut)
+			if code != 1 || !strings.Contains(all, "not logged in to Claude Code yet, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") || strings.Contains(all, "crew is ready") {
+				t.Errorf("exit %d:\n%s%s", code, out, errOut)
+			}
+			// The login's own prompt line ends, then a blank line.
+			if !strings.HasSuffix(out, "\n\n") {
+				t.Errorf("no blank line before the failure: %q", out)
+			}
+			if got := readFile(t, home+"/calls"); got != "login\n" {
+				t.Errorf("calls:\n%s", got)
+			}
+		})
+	}
+	t.Run("no terminal", func(t *testing.T) {
+		home := setup(t, 0, false)
+		code, out, errOut := callIn("", "--no-tmux")
+		if code != 1 || !strings.Contains(flat(errOut), "not logged in to Claude Code, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if _, err := os.Stat(home + "/calls"); err == nil {
+			t.Errorf("calls:\n%s", readFile(t, home+"/calls"))
+		}
+	})
+}
+
+// An orchestrator that's open already is only switched to, logged out or
+// not; and a login that can't be checked (no answer in 3 seconds, as
+// offline) doesn't hold an open up.
+func TestPlainCadreiOpensWhenTheLoginIsNoMatter(t *testing.T) {
+	t.Run("open already", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		loggedOut(t, home, 0)
+		ttyForTests = true
+		t.Cleanup(func() { ttyForTests = false })
+		if code, out, errOut := call("--tmux", "--detach"); code != 0 || strings.Contains(out+errOut, "log in") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if _, err := os.Stat(home + "/calls"); err == nil {
+			t.Errorf("calls:\n%s", readFile(t, home+"/calls"))
+		}
+	})
+	t.Run("unsure", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		stubClaude(t, home)
+		must(t, "init", "work")
+		os.WriteFile(home+"/release", nil, 0o644)
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') sleep 60 ;;\n  'auth login') echo login >> \""+home+"/calls\"; exit 0 ;;\nesac\necho orchestrator >> \""+home+"/calls\"\n")
+		start := time.Now()
+		code, out, errOut := callIn("", "--no-tmux")
+		took := time.Since(start)
+		if code != 0 || readFile(t, home+"/calls") != "orchestrator\n" {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		limit := 3*time.Second + 2*time.Second
+		if raceOn {
+			limit += 5 * time.Second
+		}
+		if took > limit {
+			t.Errorf("took %s", took)
+		}
+	})
+}
+
 // A login that fails or is cancelled (Ctrl-C ends it with 130) leaves the
 // crew made and says how to log in and go on. The orchestrator doesn't
 // open: it would only answer "Not logged in".

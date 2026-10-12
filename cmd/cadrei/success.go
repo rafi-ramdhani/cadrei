@@ -46,8 +46,13 @@ func resumes(rt rtpkg.Runtime, c cadreis.Cadrei) bool {
 // one, the last line, and, with wait, a key before tmux takes the screen,
 // so a warning gets read. It reports whether the orchestrator opens.
 func (e *env) finish(tmux bool, last, notice string, wait bool) bool {
-	if e.logIn != nil && !e.logInFirst() {
-		return false
+	if rt := e.logIn; rt != nil {
+		e.logIn = nil
+		e.say("")
+		e.screen("Now log in to " + rt.Title() + ".")
+		if !e.logInNow(rt, "Your crew is ready. ") {
+			return false
+		}
 	}
 	if notice != "" {
 		e.say("")
@@ -75,16 +80,18 @@ func (e *env) loginItem() {
 	}
 }
 
-// logInFirst runs the runtime's own login in this terminal, before the
+// logInNow runs the runtime's own login in this terminal, before the
 // orchestrator opens: on a runtime that ran before, the orchestrator's
-// first message would only get a "not logged in" error back. It reports
-// whether the login went through.
-func (e *env) logInFirst() bool {
-	rt := e.logIn
-	e.logIn = nil
+// first message would only get a "not logged in" error back. ready starts
+// the failure's fix (what's done already). It reports whether the login
+// went through.
+func (e *env) logInNow(rt rtpkg.Runtime, ready string) bool {
 	title := rt.Title()
-	e.say("")
-	e.screen("Now log in to " + title + ".")
+	how := ready + "Log in with " + cmd(rt.Help().Login) + ", then run " + cmd("cadrei") + "."
+	if !e.interactive() {
+		e.failWith("You're not logged in to "+title+", so your orchestrator didn't open.", how)
+		return false
+	}
 	e.say("")
 	c, err := rt.Login()
 	if err == nil {
@@ -93,9 +100,11 @@ func (e *env) logInFirst() bool {
 		back()
 	}
 	if err != nil {
+		// The login can end on its own prompt's line ("Paste code here"):
+		// that line ends, then a blank one.
 		e.say("")
-		e.failWith("You're not logged in to "+title+" yet, so your orchestrator didn't open.",
-			"Your crew is ready. Log in with "+cmd(rt.Help().Login)+", then run "+cmd("cadrei")+".")
+		e.say("")
+		e.failWith("You're not logged in to "+title+" yet, so your orchestrator didn't open.", how)
 		return false
 	}
 	e.say("")
