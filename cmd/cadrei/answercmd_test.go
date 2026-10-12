@@ -85,7 +85,7 @@ func request(t *testing.T, c, role, payload string) string {
 }
 
 const (
-	mkdirRequest  = `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"mkdir <work>/s4a"}}`
+	mkdirRequest  = `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"mkdir e2e-yes"}}`
 	uploadRequest = `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Upload the test file to the signing site?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`
 )
 
@@ -110,7 +110,7 @@ func TestAnswerYes(t *testing.T) {
 	withTmux(t, home)
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
-	promptMember(t, home, "engineer", "bash-prompt.txt")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
 	code := request(t, c, "engineer", mkdirRequest)
 	ownTerminal(t)
 	out, errOut := "", ""
@@ -119,7 +119,7 @@ func TestAnswerYes(t *testing.T) {
 	} else {
 		out, errOut = o, e
 	}
-	if out != "+ Allowed once: the engineer in dev can run mkdir <work>/s4a.\n" || errOut != "" {
+	if out != "+ Allowed once: the engineer in dev can run mkdir e2e-yes.\n" || errOut != "" {
 		t.Errorf("out %q %q", out, errOut)
 	}
 	if k := key(t, home, "engineer"); k != "1" {
@@ -142,10 +142,10 @@ func TestAnswerNo(t *testing.T) {
 	withTmux(t, home)
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
-	promptMember(t, home, "engineer", "bash-prompt.txt")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
 	code := request(t, c, "engineer", mkdirRequest)
 	ownTerminal(t)
-	if n, out, errOut := call("answer", code, "no"); n != 0 || flat(out) != "+ Told the engineer in dev no. It won't run mkdir <work>/s4a, and it's waiting for what to do instead." {
+	if n, out, errOut := call("answer", code, "no"); n != 0 || flat(out) != "+ Told the engineer in dev no. It won't run mkdir e2e-yes, and it's waiting for what to do instead." {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
 	}
 	if k := key(t, home, "engineer"); k != "4" {
@@ -162,8 +162,8 @@ func TestAnswerAQuestion(t *testing.T) {
 	withTmux(t, home)
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
-	promptMember(t, home, "engineer", "question.txt")
-	code := request(t, c, "engineer", uploadRequest)
+	promptMember(t, home, "engineer", "question-live.txt")
+	code := request(t, c, "engineer", strings.Replace(uploadRequest, "the test file", "resume.pdf", 1))
 	ownTerminal(t)
 	if n, out, errOut := call("answer", code, "2"); n != 0 || out != "+ Answered the engineer in dev: 2. No\n" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
@@ -183,7 +183,7 @@ func TestAnswerSaysWhenThePromptStays(t *testing.T) {
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
 	os.WriteFile(home+"/stay", nil, 0o644)
-	promptMember(t, home, "engineer", "bash-prompt.txt")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
 	code := request(t, c, "engineer", mkdirRequest)
 	ownTerminal(t)
 	answerWait = 300 * time.Millisecond
@@ -202,7 +202,7 @@ func TestAnswerPressesNothingWhenItCant(t *testing.T) {
 	withTmux(t, home)
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
-	promptMember(t, home, "engineer", "bash-prompt.txt")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
 	changed := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf <work>"}}`)
 	ownTerminal(t)
 	for _, tc := range []struct {
@@ -254,7 +254,7 @@ func TestAnswerListsWhosWaiting(t *testing.T) {
 	rev := request(t, c, "reviewer", uploadRequest)
 	want := "Waiting on you:\n\n" +
 		"  " + eng + "  The engineer in dev wants to run a command:\n" +
-		"         mkdir <work>/s4a\n" +
+		"         mkdir e2e-yes\n" +
 		"       Allow it once:  cadrei answer " + eng + " yes\n" +
 		"       Say no:         cadrei answer " + eng + " no\n\n" +
 		"  " + rev + "  The reviewer in dev asks: Upload the test file to the signing site?\n" +

@@ -41,7 +41,6 @@ func question(text string, options ...string) *waitingOn {
 // mode), no is the one labeled No, and a question's pick is its number.
 // The earlier conversation's own numbered list isn't taken for the prompt.
 func TestTheKeyForEachAnswer(t *testing.T) {
-	bash := screenFixture(t, "bash-prompt.txt")
 	live := screenFixture(t, "bash-prompt-live.txt")
 	liveAsk := screenFixture(t, "question-live.txt")
 	write := screenFixture(t, "write-live.txt")
@@ -54,8 +53,6 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		choice string
 		key    string
 	}{
-		{bash, approval("mkdir <work>/s4a"), "yes", "1"},
-		{bash, approval("mkdir <work>/s4a"), "no", "4"},
 		// A member's own prompt: dashed rules around the command, and a
 		// long option that wraps.
 		{live, approval("mkdir e2e-yes"), "yes", "1"},
@@ -92,7 +89,7 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 // no prompt at all. With no plain Yes, yes refuses; with no No, no is
 // Escape.
 func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
-	bash := screenFixture(t, "bash-prompt.txt")
+	bash := screenFixture(t, "bash-prompt-live.txt")
 	ask := screenFixture(t, "question.txt")
 	lost := "I couldn't find that prompt on the engineer's screen, so I didn't press anything. Answer it in its window: cadrei attach dev"
 	lostWriter := "I couldn't find that prompt on the writer's screen, so I didn't press anything. Answer it in its window: cadrei attach docs"
@@ -102,14 +99,14 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		choice string
 		why    string
 	}{
-		"another command":      {bash, approval("rm -rf <work>/s4a"), "yes", lost},
-		"a question instead":   {ask, approval("mkdir <work>/s4a"), "yes", lost},
+		"another command":      {bash, approval("rm -rf e2e-yes"), "yes", lost},
+		"a question instead":   {ask, approval("mkdir e2e-yes"), "yes", lost},
 		"another question":     {ask, question("Delete the test file?", "Yes", "No"), "1", lostWriter},
 		"other options":        {ask, question("Upload the test file to the signing site?", "No", "Yes"), "1", lostWriter},
-		"no prompt":            {"⏺ Done.\n\n❯ \n? for shortcuts\n", approval("mkdir <work>/s4a"), "yes", lost},
-		"options gone":         {strings.Replace(bash, " Esc to cancel · Tab to amend\n", "", 1), approval("mkdir <work>/s4a"), "yes", lost},
-		"a gap in the numbers": {strings.Replace(bash, "   2. Yes, and always", "   5. Yes, and always", 1), approval("mkdir <work>/s4a"), "yes", lost},
-		"no plain Yes": {strings.Replace(bash, " ❯ 1. Yes\n", " ❯ 1. Yes, and don't ask again for mkdir commands\n", 1), approval("mkdir <work>/s4a"), "yes",
+		"no prompt":            {"⏺ Done.\n\n❯ \n? for shortcuts\n", approval("mkdir e2e-yes"), "yes", lost},
+		"options gone":         {strings.Replace(bash, " Esc to cancel · Tab to amend\n", "", 1), approval("mkdir e2e-yes"), "yes", lost},
+		"a gap in the numbers": {strings.Replace(bash, "   2. Yes, and always", "   5. Yes, and always", 1), approval("mkdir e2e-yes"), "yes", lost},
+		"no plain Yes": {strings.Replace(bash, " ❯ 1. Yes\n", " ❯ 1. Yes, and don't ask again for mkdir commands\n", 1), approval("mkdir e2e-yes"), "yes",
 			"This prompt has no plain \"Yes\", only choices that would allow it for good, so answer it in its window: cadrei attach dev"},
 	} {
 		key, why := keyFor(tc.screen, tc.w, tc.choice)
@@ -131,13 +128,29 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		screen string
 		w      *waitingOn
 	}{
-		"a command holding it":       {strings.Replace(bash, " mkdir <work>/s4a\n", " mkdir <work>/s4a && rm -rf <work>\n", 1), approval("mkdir <work>/s4a")},
-		"a longer command":           {strings.Replace(bash, " mkdir <work>/s4a\n", " git push --force origin main\n", 1), approval("git push")},
-		"a short record":             {strings.Replace(bash, " mkdir <work>/s4a\n", " ls -la\n", 1), approval("ls")},
+		"a command holding it":       {strings.Replace(bash, "╌\n mkdir e2e-yes\n", "╌\n mkdir e2e-yes && rm -rf <work>\n", 1), approval("mkdir e2e-yes")},
+		"a longer command":           {strings.Replace(bash, "╌\n mkdir e2e-yes\n", "╌\n git push --force origin main\n", 1), approval("git push")},
+		"a short record":             {strings.Replace(bash, "╌\n mkdir e2e-yes\n", "╌\n ls -la\n", 1), approval("ls")},
 		"another file":               {write, inApp("/Users/me/app/other.txt")},
 		"the same name elsewhere":    {strings.Replace(write, " notes.txt\n", " sub/notes.txt\n", 1), inApp("/Users/me/app/notes.txt")},
 		"its name in another's text": {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", "  1 notes.txt", 1), inApp("/Users/me/app/notes.txt")},
 		"its name alone in the text": {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", " notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+		// Re-review of 0.2.2 (L10): the command between the dashed rules,
+		// whole. Not one that goes on after the record on the next framed
+		// line, not the description line above them, and not a screen
+		// with no dashed rules (the S4 spike's, as written down).
+		"a command going on past it": {screenFixture(t, "wrapped-live.txt"), approval("rm <work>/notes.txt && ls -la")},
+		"only the description line":  {bash, approval("Create directory e2e-yes in the current working directory")},
+		"no dashed rules":            {screenFixture(t, "bash-prompt.txt"), approval("mkdir <work>/s4a")},
+		// Re-review of 0.2.2 (L11): file text can't stand in for the
+		// header: a long preview, text that holds a solid rule, with or
+		// without a title under it, or more lines in the header.
+		"its name in a long text":  {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", strings.Repeat("  1 hello\n", 70)+" notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+		"a solid rule in the text": {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", "─────────────────\n notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+		"a header in the text":     {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", "─────────────────\n Create file\n notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+		"more in the header":       {strings.Replace(write, " notes.txt\n╌", " notes.txt\n README.md\n╌", 1), inApp("/Users/me/app/notes.txt")},
+		// No solid rule anywhere: the box's top isn't on the screen.
+		"no solid rule": {strings.ReplaceAll(bash, "────────────────────────────────────────", ""), approval("mkdir e2e-yes")},
 	} {
 		if key, why := keyFor(tc.screen, tc.w, "yes"); key != "" || why == "" {
 			t.Errorf("%s: %q %q", name, key, why)
@@ -172,7 +185,7 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		t.Errorf("multi-select: %q", key)
 	}
 	noNo := strings.Replace(bash, "   4. No\n", "", 1)
-	if key, why := keyFor(noNo, approval("mkdir <work>/s4a"), "no"); key != "Escape" || why != "" {
+	if key, why := keyFor(noNo, approval("mkdir e2e-yes"), "no"); key != "Escape" || why != "" {
 		t.Errorf("no No option: %q %q", key, why)
 	}
 }
@@ -205,6 +218,8 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
 		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"x"}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
+		// Re-review of 0.2.2 (L12): a command recorded cut short.
+		{approval("rm -rf build && " + strings.Repeat("x", 290) + "…"), "yes", "That's too long for cadrei to check whole, so answer it in its window: cadrei attach dev"},
 	} {
 		if got := checkChoice(tc.w, tc.w.req.Code, tc.choice, plain); got != tc.want {
 			t.Errorf("%s: %q", tc.choice, got)

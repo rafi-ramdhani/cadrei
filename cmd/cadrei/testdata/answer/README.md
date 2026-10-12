@@ -2,8 +2,8 @@
 
 Claude Code's permission prompts and questions, as `tmux capture-pane -p` shows them in a member's window. The tests in `answer_test.go` read them to check which key `cadrei answer` presses, and that it presses none when the screen doesn't match.
 
-- `bash-prompt.txt`: a Bash permission prompt in default mode, with the "switch to auto mode" choice (spike S4, Claude Code 2.1.296). The tip line's dash is written as a semicolon.
-- `question.txt`: an `AskUserQuestion` question with two options, then `Type something.` and `Chat about this` (spike S5, Claude Code 2.1.296).
+- `bash-prompt.txt`: a Bash permission prompt in default mode, with the "switch to auto mode" choice (spike S4, Claude Code 2.1.296). The tip line's dash is written as a semicolon. As written down, it has no dashed rules around the command, which every live capture has, so `cadrei answer` presses nothing for it.
+- `question.txt`: an `AskUserQuestion` question with two options, then `Type something.` and `Chat about this` (spike S5, Claude Code 2.1.296). It has no solid rule above it, so the tests that read it put one there.
 - `bash-prompt-live.txt`: a member's Bash prompt, captured in the 0.2.2 end-to-end run (Claude Code 2.1.296): the command between dashed rules, a long option that wraps, and the member's reply above it. The folder is written `<work>` and the tip's dash as a hyphen.
 - `question-live.txt`: a member's question, captured in the 0.2.2 end-to-end run: a rule between its own options and the two Claude Code adds, and the window's status line under the footer.
 - `multi-live.txt`: a multi-select question (checkboxes and a Submit tab), captured in the 0.2.2 end-to-end run. `cadrei answer` refuses it: only its window can answer.

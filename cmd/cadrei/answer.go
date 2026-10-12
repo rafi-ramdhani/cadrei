@@ -136,15 +136,22 @@ var screenTools = setOf("Bash", "Write", "Edit")
 
 // answerable reports whether cadrei can answer req from here: a question
 // with one pick, or a prompt for one of screenTools with what it would
-// run or touch recorded. Any other is answered in the member's window.
+// run or touch recorded in full. Any other is answered in the member's
+// window.
 func answerable(req *session.Request) bool {
 	switch req.Kind {
 	case session.ForQuestion:
 		return !req.Multi && req.Question != "" && len(req.Options) > 0
 	case session.ForApproval:
-		return screenTools[req.Tool] && req.Summary != ""
+		return screenTools[req.Tool] && req.Summary != "" && !cutShort(req)
 	}
 	return false
+}
+
+// cutShort reports whether the record of what a prompt would run or touch
+// was cut, so neither the user nor the screen check would see its end.
+func cutShort(req *session.Request) bool {
+	return req.Kind == session.ForApproval && strings.HasSuffix(req.Summary, "…")
 }
 
 // note says a request for the orchestrator, from cadrei's record: who,
@@ -182,6 +189,8 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 	switch {
 	case w.req.Kind == session.ForQuestion && w.req.Multi:
 		return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
+	case cutShort(w.req) && screenTools[w.req.Tool]:
+		return "That's too long for cadrei to check whole, so answer it in its window: " + c(w.attach())
 	case !answerable(w.req):
 		return "Cadrei can't check this kind of prompt on the screen, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForApproval:
@@ -397,11 +406,17 @@ func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 		return nil, nil, false
 	}
 	// The box: back to the solid rule above it (blank lines, as in a
-	// command's own text, don't end it), at most 60 lines.
-	for i := first - 1; i >= 0 && first-i <= 60 && !solidRule(lines[i]); i-- {
+	// command's own text, don't end it). With no rule there, the box's top
+	// isn't on the screen.
+	for i := first - 1; ; i-- {
+		switch {
+		case i < 0:
+			return nil, nil, false
+		case solidRule(lines[i]):
+			return opts, box, true
+		}
 		box = append([]string{lines[i]}, box...)
 	}
-	return opts, box, true
 }
 
 // solidRule reports whether a line is a rule of ─, as the prompt's box
@@ -409,6 +424,13 @@ func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 func solidRule(line string) bool {
 	t := strings.TrimSpace(line)
 	return t != "" && strings.Trim(t, "─━") == ""
+}
+
+// dashedRule reports whether a line is a rule of ╌, as frames a command or
+// a file's text in a prompt's box.
+func dashedRule(line string) bool {
+	t := strings.TrimSpace(line)
+	return t != "" && strings.Trim(t, "╌") == ""
 }
 
 func indent(line string) int { return len(line) - len(strings.TrimLeft(line, " ")) }
@@ -428,9 +450,9 @@ func squeeze(text string) string {
 
 // promptShows reports whether a member's screen shows w's prompt: its
 // options, and in its box, exactly what the record says. A question's
-// text and every one of its labels; a command as a whole, on lines of its
-// own; a file by its path from the member's folder (or in full), on a line
-// of its own above the file's text.
+// text and every one of its labels; a command as a whole, and nothing
+// else, between the dashed rules; a file by its path from the member's
+// folder (or in full), on the line under the box's title.
 func promptShows(screen string, w *waitingOn) bool {
 	opts, box, ok := screenPrompt(screen)
 	if !ok || !answerable(w.req) {
@@ -451,44 +473,32 @@ func promptShows(screen string, w *waitingOn) bool {
 	}
 	switch req.Tool {
 	case "Write", "Edit":
-		return pathShown(header(box), req.Summary, w.dir)
+		// The box's title (Create file, Edit file), then the file, then
+		// the file's text between two dashed rules, and no other.
+		rules := dashedRules(box)
+		return len(rules) == 2 && rules[0] == 2 && pathShown(box[1:2], req.Summary, w.dir)
 	}
-	return linesSpell(box, req.Summary)
+	return commandShown(box, req.Summary)
 }
 
-// header is a prompt box's lines above the first dashed rule, where a
-// file prompt names its file; the file's text comes after it.
-func header(box []string) []string {
+// dashedRules are the indexes of box's dashed rules.
+func dashedRules(box []string) []int {
+	var rules []int
 	for i, line := range box {
-		if t := strings.TrimSpace(line); t != "" && strings.Trim(t, "╌") == "" {
-			return box[:i]
+		if dashedRule(line) {
+			rules = append(rules, i)
 		}
 	}
-	return box
+	return rules
 }
 
-// linesSpell reports whether some lines of box in a row, read squeezed,
-// spell want exactly: a command shown whole. A record cut short spells
-// the start of them.
-func linesSpell(box []string, want string) bool {
+// commandShown reports whether the lines between the box's first two
+// dashed rules, read squeezed, are want exactly: the command, whole, and
+// not the description above it.
+func commandShown(box []string, want string) bool {
+	rules := dashedRules(box)
 	w := squeeze(want)
-	cut := strings.HasSuffix(want, "…")
-	if w == "" {
-		return false
-	}
-	for i := range box {
-		got := ""
-		for _, line := range box[i:] {
-			got += squeeze(line)
-			if got == w || cut && strings.HasPrefix(got, w) {
-				return true
-			}
-			if len(got) >= len(w) {
-				break
-			}
-		}
-	}
-	return false
+	return len(rules) >= 2 && w != "" && squeeze(strings.Join(box[rules[0]+1:rules[1]], "")) == w
 }
 
 // pathShown reports whether one of the lines holds path alone: as it is,
