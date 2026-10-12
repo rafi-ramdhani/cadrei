@@ -249,6 +249,17 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		{`python3 -c "print('see tmux if you need it')"`, typingRefused, typingRefused},
 		{`python3 -c "print('run cadrei answer 7f3 yes to answer')"`, memberAnswerRefused, strictRefused},
 		{`sed -n '/cadrei answer 7f3 yes/p' docs/guide.md`, memberAnswerRefused, strictRefused},
+		// Every program's arguments are read the strict way, as the user
+		// chose for 0.2.2: these were allowed as text, not code, before.
+		// grep, git and gh still run (they never run their arguments).
+		{`rg -n "tmux new-session" cmd/`, typingRefused, typingRefused},
+		{`rg -n "cadrei answer" docs/`, memberAnswerRefused, strictRefused},
+		{`python3 scripts/post.py --text "start tmux and attach later"`, typingRefused, typingRefused},
+		{`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`, typingRefused, typingRefused},
+		{`make docs MSG="tmux set the title"`, typingRefused, typingRefused},
+		{`awk '/tmux send-keys -t/' notes.md`, typingRefused, typingRefused},
+		{`awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`, memberAnswerRefused, strictRefused},
+		{`rg -n tmux -C 3 docs/`, typingRefused, typingRefused},
 		// Re-review of 0.2.2 (M6): E: and T: expand a value as a format
 		// again, so the value could hold a #( job. Text to read, never run.
 		{`tmux display-message -p '#{E:pane_title}'`, typingRefused, typingRefused},
@@ -293,7 +304,9 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`,
 		// Re-review of 0.2.2 (H2): a shell a runner runs. The orchestrator
 		// may compact in any form.
-		`find . -name x -exec sh -c 'cadrei compact dev/engineer' \;`, `echo dev/engineer | xargs sh -c 'cadrei compact "$0"'`} {
+		`find . -name x -exec sh -c 'cadrei compact dev/engineer' \;`, `echo dev/engineer | xargs sh -c 'cadrei compact "$0"'`,
+		// A search's pattern is read the strict way too.
+		`rg -n 'cadrei compact' docs/`} {
 		blocked(member, "default", form, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
 		allowed("", form)
 	}
@@ -311,16 +324,9 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		`tmux list-windows -a`, `tmux has-session -t x`, `tmux show-options -g`, `tmux display-message -p '#S'`,
 		`tmux capturep -p -t x \; lsw`, `tmux -L other list-sessions`, `tmux -V`,
 		`brew install tmux`, `man tmux`, `which tmux`, `osascript -e 'display notification "done"'`,
-		// Review of 0.2.2 (MH1): text that only mentions tmux or cadrei
-		// answer, in arguments that run nothing.
-		`rg -n "tmux new-session" cmd/`, `rg -n "cadrei answer" docs/`, `rg -n 'cadrei compact' docs/`,
-		`python3 scripts/post.py --text "start tmux and attach later"`,
-		`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`,
-		`make docs MSG="tmux set the title"`,
-		`awk '/tmux send-keys -t/' notes.md`, `awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`,
 		// Re-review of 0.2.2: what runs only read-only tmux, or names tmux
 		// as a word.
-		`rg -n tmux -C 3 docs/`, `brew info tmux`, `arch -arm64 tmux list-sessions`,
+		`brew info tmux`, `arch -arm64 tmux list-sessions`,
 		`find . -name '*.md' -exec sh -c 'wc -l "$1"' _ {} \;`,
 		`echo x | xargs -n1 sh -c 'tmux capture-pane -p -t x'`,
 		`tmux display-message -p '#{pane_id} #{=10:pane_title}'`,

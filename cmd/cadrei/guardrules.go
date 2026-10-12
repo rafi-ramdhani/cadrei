@@ -150,7 +150,7 @@ type tmuxRule struct{}
 
 func (tmuxRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
 	k, ok := programAt(words, p, "tmux")
-	if !ok && !takesData(wordName(words[p]), words[p+1:]) {
+	if !ok {
 		// tmux after a program that runs the rest (arch, flock, script,
 		// ssh): tmux, then one of its flags or commands. man tmux and brew
 		// install tmux run nothing.
@@ -208,16 +208,10 @@ func tmuxNext(word string) bool {
 	return ok
 }
 
-// calls: code another program runs (python's -c, a heredoc to node) that
-// names tmux with a command outside the read-only list. An argument of a
-// program that takes text (a search pattern, a message, a make variable)
-// counts only when it's code that runs a program, too.
-func (r tmuxRule) calls(text string, data bool) bool {
-	if data && !shellsOut(text) {
-		return false
-	}
-	return r.mentions(text)
-}
+// calls: code another program runs (python's -c, a heredoc to node), or
+// any other argument, that names tmux with a command outside the
+// read-only list.
+func (r tmuxRule) calls(text string) bool { return r.mentions(text) }
 
 // mentions: text that becomes a shell's code, or that a program which is
 // itself an expansion may run: tmux with a command outside the read-only
@@ -285,13 +279,6 @@ func tmuxChain(words []string) bool {
 	}
 	return false
 }
-
-// shellOut is how code in another language runs a program: a call that
-// runs one, or a backtick.
-var shellOut = regexp.MustCompile("(?i)system|exec|popen|spawn|subprocess|child_process|check_output|open3|\\bpty\\b|`|\\bqx\\b|%x|shell\\s*=")
-
-// shellsOut reports whether code may run a program.
-func shellsOut(text string) bool { return shellOut.MatchString(text) }
 
 // tmuxWrites reports whether tmux's arguments run any command outside the
 // read-only list, or one it can't read. tmux takes a sequence of commands
@@ -467,7 +454,7 @@ func (keystrokeRule) runs(c *shCommand, words []shWord, p int, fed bool, line *l
 	return false
 }
 
-func (keystrokeRule) calls(text string, data bool) bool { return pressesAt(text) }
+func (keystrokeRule) calls(text string) bool { return pressesAt(text) }
 
 func (keystrokeRule) mentions(text string) bool { return pressesAt(text) }
 
