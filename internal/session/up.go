@@ -56,6 +56,7 @@ type Result struct {
 	Resumed bool   // it picked its last chat up again
 	Note    string // the conversation note, when it started fresh
 	Dir     string // the folder it runs in, when it started
+	Waiting bool   // it started on a screen that waits on the user, as a login does
 	Running bool   // it was running already
 	Legacy  string // the 0.1.x session it runs in, when it does
 	Err     error  // why it didn't start
@@ -152,6 +153,9 @@ func (u Up) print(out io.Writer, res Result) {
 		fmt.Fprintf(out, "  %s started in %s (%s)\n", name, res.Dir, res.Note)
 	default:
 		fmt.Fprintf(out, "  %s started in %s\n", name, res.Dir)
+	}
+	if res.Waiting {
+		fmt.Fprintf(out, "  %s waits on a login or setup screen; answer it in its window\n", name)
 	}
 }
 
@@ -253,7 +257,12 @@ func (u Up) starting(role string) (Result, error) {
 		rec.Effort, rec.EffortFrom = choice.Effort.Value, choice.Effort.From
 		WriteRecord(record, rec)
 	}
-	return Result{Started: true, Resumed: conv.Resume != "", Note: conv.Note, Dir: started, Choice: choice, Was: was}, nil
+	// A window only fails to start when it ends. One on a login or setup
+	// screen (a runtime that isn't logged in, say) started, but won't get
+	// going until the user answers it.
+	ops := rt.Sessions()
+	waiting := ops != nil && ops.Waiting(u.T.Screen(session, role))
+	return Result{Started: true, Resumed: conv.Resume != "", Note: conv.Note, Dir: started, Waiting: waiting, Choice: choice, Was: was}, nil
 }
 
 // ChoiceOf is the model and effort role starts with: this start's, over

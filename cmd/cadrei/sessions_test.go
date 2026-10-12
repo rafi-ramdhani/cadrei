@@ -527,6 +527,20 @@ func TestTheSecretsRuleReachesEveryMember(t *testing.T) {
 var chatMarks = []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
 	"CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_SSE_PORT", "CADREI_ORCHESTRATOR", "CADREI_OPENS_IN"}
 
+// A member Claude Code shows its login screen to (logged out, say) started,
+// but sits there: up says so, and where to answer it.
+func TestUpSaysWhenAMemberWaitsOnALogin(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+"[ -n \"$TMUX\" ] && echo ' Select login method:'\nexec sleep 300\n")
+	must(t, "init", "work")
+	out := flat(must(t, "up", "dev/engineer"))
+	want := "+ Started the engineer (fresh chat) It's waiting on a login or setup screen and won't get going until you answer it: cadrei attach dev"
+	if out != want {
+		t.Errorf("up: %q", out)
+	}
+}
+
 // Started from inside a chat (the orchestrator's cadrei up), a member
 // doesn't take that chat's session marks as its own, and keeps the user's
 // own settings. Audit sec-exposure-1 and sec-trust-3: the tmux server
