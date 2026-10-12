@@ -304,7 +304,8 @@ func TestTwoRunsStartOneOrchestrator(t *testing.T) {
 	home := sandbox(t)
 	withTmux(t, home)
 	must(t, "init", "work")
-	writeStub(t, home+"/bin/claude", "#!/bin/sh\necho x >> \""+home+"/starts\"\n"+
+	// The login check on each open asks too: those aren't starts.
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+"echo x >> \""+home+"/starts\"\n"+
 		"i=0; while [ ! -e \""+home+"/release\" ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done\n")
 	var wg sync.WaitGroup
 	codes := make([]int, 4)

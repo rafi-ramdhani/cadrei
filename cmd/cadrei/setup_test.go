@@ -317,7 +317,9 @@ func TestALastingFindingDoesNotSlowEveryStart(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		call()
 	}
-	if n := strings.Count(readFile(t, home+"/versions"), "x"); n != 1 {
+	// The full check once, and each open's login check (which asks the
+	// version before it asks about the login) three times.
+	if n := strings.Count(readFile(t, home+"/versions"), "x"); n != 1+3 {
 		t.Errorf("the full check ran %d times for one lasting finding", n)
 	}
 	ttyForTests = true
