@@ -309,7 +309,8 @@ func TestPlainCadreiLogsInBeforeTheOrchestratorOpens(t *testing.T) {
 	t.Run("no terminal", func(t *testing.T) {
 		home := setup(t, 0, false)
 		code, out, errOut := callIn("", "--no-tmux")
-		if code != 1 || !strings.Contains(flat(errOut), "not logged in to Claude Code, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") {
+		// Review recheck (L2): no "log in first" when it can't.
+		if code != 1 || !strings.Contains(flat(errOut), "not logged in to Claude Code, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") || strings.Contains(out+errOut, "log in first") {
 			t.Errorf("exit %d:\n%s%s", code, out, errOut)
 		}
 		if _, err := os.Stat(home + "/calls"); err == nil {
@@ -335,6 +336,41 @@ func TestPlainCadreiOpensWhenTheLoginIsNoMatter(t *testing.T) {
 		}
 		if _, err := os.Stat(home + "/calls"); err == nil {
 			t.Errorf("calls:\n%s", readFile(t, home+"/calls"))
+		}
+	})
+	// Review recheck (M1): a switch to one that's open doesn't wait for
+	// the check, which offline takes its whole 3 seconds.
+	t.Run("open already, slow check", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') sleep 60 ;;\nesac\nexec sleep 300\n")
+		start := time.Now()
+		code, out, errOut := call("--tmux", "--detach")
+		if took := time.Since(start); code != 0 || took > 2500*time.Millisecond {
+			t.Errorf("exit %d after %s:\n%s%s", code, took, out, errOut)
+		}
+	})
+	// Review recheck (L1): every open, not only one that logged in, has
+	// the orchestrator read the config dir the check read, not an older
+	// tmux server's.
+	t.Run("config dir", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		stubClaude(t, home)
+		must(t, "init", "work")
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/old-config")
+		tmuxIn(os.Getenv("CADREI_TMUX_SOCKET"), "new-session", "-d", "-s", "older")
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/.claude")
+		must(t, "--tmux", "--detach")
+		var ran string
+		for i := 0; i < 100 && !strings.Contains(ran, "CLAUDE_CONFIG_DIR="); i++ {
+			time.Sleep(50 * time.Millisecond)
+			ran = readFile(t, home+"/orch-ran")
+		}
+		if !strings.Contains(ran, "\nCLAUDE_CONFIG_DIR="+home+"/.claude\n") {
+			t.Errorf("the orchestrator's config dir:\n%s", ran)
 		}
 	})
 	t.Run("unsure", func(t *testing.T) {

@@ -72,7 +72,7 @@ type LaunchSpec struct {
 	Resume    string
 	// ConfigHere has the session read the runtime's own config (its login)
 	// as this process's environment says, not as a tmux server's does:
-	// cadrei just logged the user in from here.
+	// where cadrei checked the login, and logged the user in.
 	ConfigHere bool
 }
 

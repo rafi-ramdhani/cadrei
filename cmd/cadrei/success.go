@@ -115,7 +115,6 @@ func (e *env) logInNow(rt rtpkg.Runtime, ready string) bool {
 	}
 	e.say("")
 	e.work(markDone, "Logged in to "+title)
-	e.loggedIn = true
 	return true
 }
 

@@ -123,11 +123,14 @@ func runPlain(e *env) int {
 	}
 	build := rt.BuildDir(r.Path)
 	// Logged out for sure: log in first, unless it's open already (that
-	// one is only switched to). Unsure (offline, an old runtime) opens as
-	// before. Asked before the start guard, which a login would hold.
-	if login != nil && <-login == runtime.LoggedOut && !e.orchestratorOpen(t, r, build) {
-		e.say("")
-		e.screen("You're not logged in to " + rt.Title() + ", so log in first.")
+	// one is only switched to, without waiting for the answer). Unsure
+	// (offline, an old runtime) opens as before. Asked before the start
+	// guard, which a login would hold.
+	if login != nil && !e.orchestratorOpen(t, r, build) && <-login == runtime.LoggedOut {
+		if e.interactive() {
+			e.say("")
+			e.screen("You're not logged in to " + rt.Title() + ", so log in first.")
+		}
 		if !e.logInNow(rt, "") {
 			return 1
 		}
@@ -218,7 +221,10 @@ func runPlain(e *env) int {
 		}
 		cmd, err := rt.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: orchestrator.Name(r.Name), Cadrei: r.Path,
 			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: readOnly, Prompt: first,
-			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value, ConfigHere: e.loggedIn})
+			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value,
+			// The login was checked (and made) with this process's config
+			// dir, so the orchestrator reads that one, in tmux too.
+			ConfigHere: true})
 		// Pinned to this cadrei, and marked as the orchestrator, so the
 		// hook adds nothing more (K.3). What only this launch knows goes
 		// to the snapshot hook.
