@@ -161,7 +161,7 @@ Each member in a running team:
 | `tool` | string, optional | The tool it wants to use, like `Bash` |
 | `summary` | string, optional | What it would run or touch (a command, a path, a URL), or a question's text. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
 | `options` | list of strings, optional | A question's option labels, at most 6 |
-| `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, or holds more than one question |
+| `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, holds more than one question, has no options or more than 6, or cadrei couldn't read it |
 
 Each project in `projects`:
 

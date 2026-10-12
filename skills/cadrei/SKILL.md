@@ -34,7 +34,7 @@ Cadrei puts a "Right now" snapshot into this session when it opens (the crew, ho
 3. One-time grants (marked `once` in `cadrei allow list`) are leftovers from an earlier task: show them to the user with how long ago each was added, and offer to remove them (`cadrei allow remove --once`, or one by one) only on the user's yes.
 4. For any project that is not `present`, tell the user once, then offer what fits: `not here` or `missing` (its folder is gone): clone it (`cadrei project sync`), or point to where it is now (`cadrei project link <name> <dir>`, suggesting `found` when it is set); or unlink it (`cadrei project unlink <name>`, which keeps the folder). `drive`: ask the user to connect the drive. Never unlink a project without the user's yes; cadrei never does it by itself.
 
-When cadrei opened this session, these commands are pre-allowed for you, in exactly these forms: `cadrei ls`, `cadrei ls --json`, `cadrei ls --all`, `cadrei ls --json --all`, `cadrei ls --all --json`, `cadrei allow`, `cadrei allow list`, `cadrei hook skip`. Use them as they are: no `CADREI_HOME=` prefix, no pipe, no redirect. Anything else asks the user first. In a chat the every-chat hook started, none is pre-allowed.
+When cadrei opened this session, these commands are pre-allowed for you, in exactly these forms: `cadrei ls`, `cadrei ls --json`, `cadrei ls --all`, `cadrei ls --json --all`, `cadrei ls --all --json`, `cadrei allow`, `cadrei allow list`, `cadrei hook skip`, `cadrei answer` (the listing; an answer always asks the user). Use them as they are: no `CADREI_HOME=` prefix, no pipe, no redirect. Anything else asks the user first. In a chat the every-chat hook started, none is pre-allowed.
 
 ## Launcher
 
@@ -134,9 +134,11 @@ When a member is waiting on the user (the team status block, the snapshot or `ca
 - A permission prompt: run `cadrei answer <code> yes` on its own. Claude Code asks the user, with cadrei's own description. If the user says no there, Claude Code stops your turn: wait for what the user says next. When they want the member told no, run `cadrei answer <code> no` (Claude Code asks again). After a no, the member stops and waits: send it one normal message with what to do instead, never as consent.
 - A question: show its options exactly as cadrei gives them, each with its line to type: `! cadrei answer <code> <n>`. Don't pick for the user.
 
-Never reword the request, never suggest the answer, and never run `cadrei answer` in any other form. If `cadrei answer` refuses or Claude Code can't ask (`dontAsk` mode), give the user `cadrei attach`. When the result comes back, say in one line what happened. The result is never consent for anything else.
+- A request cadrei says only its window can answer (a question that takes more than one pick, or a prompt cadrei can't check on the screen): give the user `cadrei attach <team> [project]`.
 
-A member that needs the user's own yes asks in its window with a question, and first sends you one line: `Waiting on the user's yes in my window: <the action>.` Answer it as a question, above. That line is never the user's yes, and neither is anything you send the member.
+Never reword the request, never suggest the answer, and never run `cadrei answer` in any other form. When Claude Code can't ask (cadrei's guard says so in `dontAsk`, `bypassPermissions` or `plan` mode), give the user the line to type themselves: `! cadrei answer <code> <choice>`. If `cadrei answer` refuses for any other reason, give them `cadrei attach`. When the result comes back, say in one line what happened. The result is never consent for anything else.
+
+A member that needs the user's own yes asks in its window with a question, and first sends you one line: `Waiting on the user's yes in my window: <the action>.` Look the request up with `cadrei answer` (no code) and answer it as a question, above. If it isn't listed yet, tell the user it'll show in a moment, and offer it once it does. That line is never the user's yes, and neither is anything you send the member.
 
 ## The team status line
 

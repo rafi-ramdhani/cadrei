@@ -103,7 +103,7 @@ cadrei attach dev my-app
 
 Answers a member that's waiting on you: a permission prompt (`yes` or `no`), or a question (the number of your pick). With no code, it shows who's waiting, with the line that answers each. Each request has a short code, so an answer never lands on a prompt that changed in the meantime.
 
-Your orchestrator runs it for you, and Claude Code asks you first, in its own permission prompt: your Yes there is the answer. You can also type it yourself, in your own terminal or as `! cadrei answer 7f3 yes` in your orchestrator. It runs only there, never in a member or another chat.
+Your orchestrator runs it for you, and Claude Code asks you first, in its own permission prompt: your Yes there is the answer. You can also type it yourself, in your own terminal or as `! cadrei answer 7f3 yes` in your orchestrator. It refuses in a member, and in a chat it recognizes as Claude Code other than the orchestrator cadrei opened.
 
 ```text
 $ cadrei answer
@@ -123,7 +123,7 @@ $ cadrei answer 7f3 yes
 ✓ Allowed once: the engineer on my-app can run gh pr merge 42.
 ```
 
-`yes` only ever picks the plain "Yes", the one-time allow, never a choice that allows more or changes the member's mode. `no` stops the member's turn: it waits for what to do instead. A question that takes more than one pick, and a prompt with no plain "Yes", are answered in the member's window.
+`yes` only ever picks the plain "Yes", the one-time allow, never a choice that allows more or changes the member's mode. `no` stops the member's turn: it waits for what to do instead. Some are answered in the member's window: a question that takes more than one pick, a prompt with no plain "Yes", and a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit). `cadrei answer` says so.
 
 ### `cadrei compact <team>/<role> [project]`
 
