@@ -46,7 +46,7 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 	liveAsk := screenFixture(t, "question-live.txt")
 	write := screenFixture(t, "write-live.txt")
 	file := approval("/Users/me/app/notes.txt")
-	file.req.Tool = "Write"
+	file.req.Tool, file.dir = "Write", "/Users/me/app"
 	ask := screenFixture(t, "question.txt")
 	for _, tc := range []struct {
 		screen string
@@ -65,6 +65,14 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		// 1, never 2 (accept edits).
 		{write, file, "yes", "1"},
 		{write, file, "no", "3"},
+		// Recorded in the second run: an Edit prompt names the file from
+		// the member's folder; a command with a blank line in it is
+		// framed, line by line.
+		{screenFixture(t, "edit-live.txt"), &waitingOn{team: "dev", role: "engineer", dir: "/Users/me/app",
+			req: &session.Request{Code: "xqw", Kind: session.ForApproval, Tool: "Edit", Summary: "/Users/me/app/README.md"}}, "yes", "1"},
+		{screenFixture(t, "edit-live.txt"), &waitingOn{team: "dev", role: "engineer", dir: "/Users/me/app",
+			req: &session.Request{Code: "xqw", Kind: session.ForApproval, Tool: "Edit", Summary: "/Users/me/app/README.md"}}, "no", "3"},
+		{screenFixture(t, "para-live.txt"), approval("cat > para.txt <<'EOF'⏎line one⏎⏎line two⏎EOF⏎cat para.txt"), "yes", "1"},
 		// A long command wraps onto framed lines.
 		{screenFixture(t, "wrapped-live.txt"), approval("rm <work>/notes.txt && ls -la <work>/notes.txt 2>&1"), "no", "4"},
 		{ask, question("Upload the test file to the signing site?", "Yes", "No"), "1", "1"},
@@ -109,11 +117,54 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 			t.Errorf("%s: key %q, %q", name, key, why)
 		}
 	}
-	// Another file than the record's.
-	other := approval("/Users/me/app/other.txt")
-	other.req.Tool = "Write"
-	if key, why := keyFor(screenFixture(t, "write-live.txt"), other, "yes"); key != "" || why == "" {
-		t.Errorf("another file: %q %q", key, why)
+	// Review of 0.2.2 (M4): the screen must show exactly what the record
+	// says. A command that holds the recorded one, or one the short record
+	// is only the start of; another file of the same name; a file whose
+	// text names the recorded one.
+	write := screenFixture(t, "write-live.txt")
+	inApp := func(path string) *waitingOn {
+		w := approval(path)
+		w.req.Tool, w.dir = "Write", "/Users/me/app"
+		return w
+	}
+	for name, tc := range map[string]struct {
+		screen string
+		w      *waitingOn
+	}{
+		"a command holding it":       {strings.Replace(bash, " mkdir <work>/s4a\n", " mkdir <work>/s4a && rm -rf <work>\n", 1), approval("mkdir <work>/s4a")},
+		"a longer command":           {strings.Replace(bash, " mkdir <work>/s4a\n", " git push --force origin main\n", 1), approval("git push")},
+		"a short record":             {strings.Replace(bash, " mkdir <work>/s4a\n", " ls -la\n", 1), approval("ls")},
+		"another file":               {write, inApp("/Users/me/app/other.txt")},
+		"the same name elsewhere":    {strings.Replace(write, " notes.txt\n", " sub/notes.txt\n", 1), inApp("/Users/me/app/notes.txt")},
+		"its name in another's text": {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", "  1 notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+		"its name alone in the text": {strings.Replace(strings.Replace(write, " notes.txt\n", " README.md\n", 1), "  1 hello", " notes.txt", 1), inApp("/Users/me/app/notes.txt")},
+	} {
+		if key, why := keyFor(tc.screen, tc.w, "yes"); key != "" || why == "" {
+			t.Errorf("%s: %q %q", name, key, why)
+		}
+	}
+	// Review of 0.2.2 (M3): prompts recorded live that cadrei can't check
+	// get no key, whatever the record: a page fetch (no "Esc to cancel",
+	// the URL its own way), an MCP tool (its input not as recorded), a plan
+	// approval (no plain Yes).
+	for name, tc := range map[string]*session.Request{
+		"fetch-live.txt": {Code: "jsw", Kind: session.ForApproval, Tool: "WebFetch", Summary: "https://example.com"},
+		"mcp-live.txt":   {Code: "rxn", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"resume.pdf"}`},
+		"plan-live.txt":  {Code: "226", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"1. Read README.md"}`},
+	} {
+		w := &waitingOn{team: "dev", role: "engineer", req: tc}
+		if key, why := keyFor(screenFixture(t, name), w, "yes"); key != "" || why == "" {
+			t.Errorf("%s: %q %q", name, key, why)
+		}
+		if why := checkChoice(w, tc.Code, "yes", plain); why != "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev" {
+			t.Errorf("%s: %q", name, why)
+		}
+	}
+	// The full path shown matches, with the member's folder not known.
+	full := inApp("/Users/me/app/notes.txt")
+	full.dir = ""
+	if key, _ := keyFor(strings.Replace(write, " notes.txt\n", " /Users/me/app/notes.txt\n", 1), full, "yes"); key != "1" {
+		t.Errorf("the full path: %q", key)
 	}
 	// A multi-select question isn't taken for the recorded single one.
 	multi := question("Which files go to the signing site?", "resume.pdf", "cover.pdf")
@@ -147,6 +198,13 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 		{ask, "0", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{ask, "01", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{multi, "1", "This question needs more than one pick, so answer it in its window: cadrei attach docs"},
+		// Review of 0.2.2 (M3): a prompt cadrei can't check on the screen.
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/a.pdf"}`}}, "yes",
+			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash"}}, "yes",
+			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"x"}`}}, "yes",
+			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
 	} {
 		if got := checkChoice(tc.w, tc.w.req.Code, tc.choice, plain); got != tc.want {
 			t.Errorf("%s: %q", tc.choice, got)

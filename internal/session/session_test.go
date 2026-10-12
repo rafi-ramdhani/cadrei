@@ -543,6 +543,7 @@ func (o resumableOps) ShellCall(io.Reader) (runtime.ShellCall, error) {
 }
 func (o resumableOps) Ask(string) []byte                     { return nil }
 func (o resumableOps) SessionSettings(string) (string, bool) { return "", false }
+func (o resumableOps) InSession() bool                       { return false }
 func (o resumableOps) Sent(io.Reader) (runtime.Sent, bool)   { return runtime.Sent{}, false }
 func (o resumableOps) SentContext(string) []byte             { return nil }
 

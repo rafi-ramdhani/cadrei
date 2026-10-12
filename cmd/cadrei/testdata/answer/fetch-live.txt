@@ -1,0 +1,24 @@
+
+✻ Sautéed for 4s · done 6:34 PM
+
+❯ Use the WebFetch tool to fetch https://example.com and tell me its title.
+
+⏺ Grammar
+
+  Your message is already correct.
+
+  WebFetch is a deferred tool, so I'll load its schema first.
+
+⏺ Fetch(https://example.com)
+
+────────────────────────────────────────────────────────────────────────────────
+ Fetch
+ Claude wants to fetch content from example.com
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ url: https://example.com/
+ prompt: What is the title of this page? Reply with the exact title text only.
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to allow Claude to fetch this content?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for example.com
+   3. No, and tell Claude what to do differently (esc)

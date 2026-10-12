@@ -9,3 +9,10 @@ Claude Code's permission prompts and questions, as `tmux capture-pane -p` shows 
 - `multi-live.txt`: a multi-select question (checkboxes and a Submit tab), captured in the 0.2.2 end-to-end run. `cadrei answer` refuses it: only its window can answer.
 - `write-live.txt`: a member's Write prompt, captured in the 0.2.2 end-to-end run. It names the file from the member's folder, while the record has its full path; its second choice switches to accept edits.
 - `wrapped-live.txt`: a member's Bash prompt for a long command, captured in the 0.2.2 end-to-end run: the command wraps onto a second framed (│) line.
+- `edit-live.txt`: a member's Edit prompt, captured in the second end-to-end run: "Edit file", the file from the member's folder, then the change between dashed rules.
+- `fetch-live.txt`: a WebFetch prompt: no "Esc to cancel" line, and the URL shown as `url:` with a slash added. `cadrei answer` leaves these to the member's window.
+- `mcp-live.txt`: an MCP tool's prompt (a stand-in server): it shows the tool's input as `path: "resume.pdf"`, not the JSON cadrei records, so it's left to the window too.
+- `plan-live.txt`: a plan approval (ExitPlanMode): no plain "Yes" and no "Esc to cancel" line.
+- `para-live.txt`: a member's Bash prompt for a command with a blank line in it (a heredoc), framed with │.
+
+Claude Code's own em dashes in these screens are written as hyphens.

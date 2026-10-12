@@ -361,6 +361,9 @@ type SessionOps interface {
 	// the runtime's sessions, and the settings file it was started with,
 	// or "".
 	SessionSettings(args string) (settings string, ok bool)
+	// InSession reports whether this process's environment carries the
+	// marks the runtime sets in what its sessions run.
+	InSession() bool
 	// Sent reads what the orchestrator's notify hook receives after a
 	// message it sent: the message's target, whether it asked to hear when
 	// that session goes idle, and whether a subagent sent it. ok is false

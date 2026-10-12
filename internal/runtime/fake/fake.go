@@ -239,6 +239,8 @@ func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
 
 func (sessions) SessionSettings(string) (string, bool) { return "", false }
 
+func (sessions) InSession() bool { return false }
+
 func (sessions) Ask(why string) []byte {
 	b, _ := json.Marshal(map[string]string{"ask": why})
 	return append(b, '\n')

@@ -31,6 +31,7 @@ type waitingOn struct {
 	team, project, role string // as shown
 	session, window     string // the member's tmux window, as tmux has it
 	name                string // the member's name, its state file's
+	dir                 string // the folder it was started in, when known
 	since               time.Time
 	req                 *session.Request
 }
@@ -68,14 +69,21 @@ func waitingRequests(r *cadreis.Resolved, t session.Tmux) []waitingOn {
 // waitingIn lists the members of views that wait on the user with a
 // request cadrei recorded, oldest first.
 func waitingIn(views []sessionView) []waitingOn {
+	rt, _ := runtime.Get(runtimeName())
 	var out []waitingOn
 	for _, v := range views {
 		for _, m := range v.Members {
 			if m.status.State != session.Waiting || m.status.Request == nil {
 				continue
 			}
-			out = append(out, waitingOn{team: v.Team, project: v.Project, role: m.Role, session: v.info.Name, window: m.window,
-				name: m.name, since: m.status.Since, req: m.status.Request})
+			w := waitingOn{team: v.Team, project: v.Project, role: m.Role, session: v.info.Name, window: m.window,
+				name: m.name, since: m.status.Since, req: m.status.Request}
+			if rt != nil && v.info.Home != "" {
+				if rec := session.ReadRecord(session.RecordPath(rt.BuildDir(v.info.Home), m.name)); rec != nil {
+					w.dir = rec.Dir
+				}
+			}
+			out = append(out, w)
 		}
 	}
 	for i := 1; i < len(out); i++ {
@@ -120,22 +128,45 @@ func act(req *session.Request) (verb, object, kind string) {
 	return "use", strings.TrimSpace(req.Tool + " " + req.Summary), "use a tool"
 }
 
+// screenTools are the tools whose permission prompt cadrei knows how to
+// check on a member's screen, from recorded screens: a command, a file to
+// write or edit. A page to fetch isn't one: its prompt (2.1.296) has no
+// "Esc to cancel" line to find it by, and shows the URL its own way.
+var screenTools = setOf("Bash", "Write", "Edit")
+
+// answerable reports whether cadrei can answer req from here: a question
+// with one pick, or a prompt for one of screenTools with what it would
+// run or touch recorded. Any other is answered in the member's window.
+func answerable(req *session.Request) bool {
+	switch req.Kind {
+	case session.ForQuestion:
+		return !req.Multi && req.Question != "" && len(req.Options) > 0
+	case session.ForApproval:
+		return screenTools[req.Tool] && req.Summary != ""
+	}
+	return false
+}
+
 // note says a request for the orchestrator, from cadrei's record: who,
 // its code, what it wants or asks, and how it's answered.
 func (w *waitingOn) note() string {
 	who := capital(w.place()) + " (" + w.req.Code + ")"
+	window := " Only its window can answer that: " + w.attach() + "."
 	switch {
 	case w.req.Kind == session.ForApproval:
 		verb, object, _ := act(w.req)
+		if !answerable(w.req) {
+			return who + " wants to " + verb + ": " + object + "." + window
+		}
 		return who + " wants to " + verb + ": " + object + ". Answer with cadrei answer " + w.req.Code + " yes, or no."
-	case w.req.Kind == session.ForQuestion && !w.req.Multi:
+	case w.req.Kind == session.ForQuestion && answerable(w.req):
 		var opts []string
 		for i, o := range w.req.Options {
 			opts = append(opts, fmt.Sprintf("%d. %s", i+1, o))
 		}
 		return who + " asks: " + w.req.Question + " Options: " + strings.Join(opts, ", ") + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	case w.req.Kind == session.ForQuestion:
-		return who + " asks: " + w.req.Question + " Only its window can answer that: " + w.attach() + "."
+		return who + " asks: " + w.req.Question + window
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
 }
@@ -148,21 +179,20 @@ func nothingWaiting(code string, c func(string) string) string {
 // checkChoice says why choice can't answer w's request, or "". c formats
 // a command (cmd for the screen, plain text for the guard).
 func checkChoice(w *waitingOn, code, choice string, c func(string) string) string {
-	switch w.req.Kind {
-	case session.ForApproval:
+	switch {
+	case w.req.Kind == session.ForQuestion && w.req.Multi:
+		return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
+	case !answerable(w.req):
+		return "Cadrei can't check this kind of prompt on the screen, so answer it in its window: " + c(w.attach())
+	case w.req.Kind == session.ForApproval:
 		if choice != "yes" && choice != "no" {
 			return code + " is a yes-or-no prompt. Use " + c("cadrei answer "+code+" yes") + " or " + c("cadrei answer "+code+" no") + "."
 		}
-	case session.ForQuestion:
-		if w.req.Multi {
-			return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
-		}
+	case w.req.Kind == session.ForQuestion:
 		n, err := strconv.Atoi(choice)
 		if err != nil || strconv.Itoa(n) != choice || n < 1 || n > len(w.req.Options) {
 			return fmt.Sprintf("%s has options 1 to %d. Use %s, for example.", code, len(w.req.Options), c("cadrei answer "+code+" 1"))
 		}
-	default:
-		return "Cadrei can't answer this kind of request, so answer it in its window: " + c(w.attach())
 	}
 	return ""
 }
@@ -224,7 +254,7 @@ func runAnswer(e *env) int {
 	}
 	gone := false
 	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
-		if !promptShows(t.Screen(w.session, w.window), w.req) {
+		if !promptShows(t.Screen(w.session, w.window), w) {
 			gone = true
 			break
 		}
@@ -236,6 +266,20 @@ func runAnswer(e *env) int {
 		e.warn("", "I pressed your answer, but the prompt is still on the "+w.role+"'s screen. Check its window: "+cmd(w.attach()))
 		return 1
 	}
+	// The request is answered: a yes or a pick lets the member go on
+	// (working: its next hook comes only when the tool ends), and a no
+	// stops its turn with no hook to say so (idle). Either way it has
+	// nothing to answer, so nothing offers the code again.
+	next := session.Working
+	if w.req.Kind == session.ForApproval && choice == "no" {
+		next = session.Idle
+	}
+	if path := session.StatePath(rt.BuildDir(r.Path), w.name); path != "" {
+		if st := session.ReadState(path); st != nil && st.Request != nil && st.Request.Code == w.req.Code {
+			st.State, st.Since, st.WaitingFor, st.Request = next, time.Now(), "", nil
+			session.WriteState(path, st)
+		}
+	}
 	verb, object, _ := act(w.req)
 	switch {
 	case w.req.Kind == session.ForQuestion:
@@ -244,14 +288,6 @@ func runAnswer(e *env) int {
 	case choice == "yes":
 		e.note("", markDone, "Allowed once: "+w.place()+" can "+verb+" "+object+".")
 	default:
-		// A no stops the member's turn, and no hook says so: it's idle,
-		// with nothing to answer.
-		if path := session.StatePath(rt.BuildDir(r.Path), w.name); path != "" {
-			if st := session.ReadState(path); st != nil && st.Request != nil && st.Request.Code == w.req.Code {
-				st.State, st.Since, st.WaitingFor, st.Request = session.Idle, time.Now(), "", nil
-				session.WriteState(path, st)
-			}
-		}
 		e.note("", markDone, "Told "+w.place()+" no. It won't "+verb+" "+object+", and it's waiting for what to do instead.")
 	}
 	return 0
@@ -275,9 +311,13 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 			_, object, kind := act(w.req)
 			e.say("%s", "  "+code+"  "+capital(w.place())+" wants to "+kind+":")
 			e.say("%s", "         "+object)
+			if !answerable(w.req) {
+				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
+				continue
+			}
 			e.say("%s", "       "+pad("Allow it once:")+cmd("cadrei answer "+code+" yes"))
 			e.say("%s", "       "+pad("Say no:")+cmd("cadrei answer "+code+" no"))
-		case w.req.Kind == session.ForQuestion && !w.req.Multi:
+		case w.req.Kind == session.ForQuestion && answerable(w.req):
 			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
 			for i, o := range w.req.Options {
 				e.say("%s", fmt.Sprintf("         %d. %s", i+1, o))
@@ -306,9 +346,9 @@ var optionLine = regexp.MustCompile(`^\s*(?:[❯›>]\s*)?([1-9])\.\s+(.*?)\s*$`
 
 // screenPrompt reads the prompt at the bottom of a member's screen: the
 // numbered options above its last "Esc to cancel" line, numbered from 1,
-// and the lines right above them (up to a blank line or a rule), which
-// hold the command or the question.
-func screenPrompt(screen string) (opts []promptOption, above string, ok bool) {
+// and the prompt's box above them, back to the solid rule it starts
+// after, which holds its header, the command or the question.
+func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
 	foot := -1
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -318,7 +358,7 @@ func screenPrompt(screen string) (opts []promptOption, above string, ok bool) {
 		}
 	}
 	if foot < 0 {
-		return nil, "", false
+		return nil, nil, false
 	}
 	first := -1
 	for i := foot - 1; i >= 0; i-- {
@@ -330,13 +370,13 @@ func screenPrompt(screen string) (opts []promptOption, above string, ok bool) {
 			break
 		}
 		// A question's own options are ruled off from the two it adds.
-		if strings.Trim(strings.TrimSpace(line), "─━") == "" {
+		if solidRule(line) {
 			continue
 		}
 		if m := optionLine.FindStringSubmatch(line); m != nil {
 			n, _ := strconv.Atoi(m[1])
 			if len(opts) > 0 && n != opts[0].n-1 {
-				return nil, "", false
+				return nil, nil, false
 			}
 			opts = append([]promptOption{{n, m[2]}}, opts...)
 			if n == 1 {
@@ -354,24 +394,21 @@ func screenPrompt(screen string) (opts []promptOption, above string, ok bool) {
 		}
 	}
 	if first < 0 || len(opts) == 0 || opts[0].n != 1 {
-		return nil, "", false
+		return nil, nil, false
 	}
-	// The prompt's box starts after a solid rule; dashed ones (╌) frame
-	// the command inside it.
-	// A question's text can sit a blank line above its options.
-	var region []string
-	top := first - 1
-	for top >= 0 && strings.TrimSpace(lines[top]) == "" {
-		top--
+	// The box: back to the solid rule above it (blank lines, as in a
+	// command's own text, don't end it), at most 60 lines.
+	for i := first - 1; i >= 0 && first-i <= 60 && !solidRule(lines[i]); i-- {
+		box = append([]string{lines[i]}, box...)
 	}
-	for i := top; i >= 0 && first-i <= 40; i-- {
-		t := strings.TrimSpace(lines[i])
-		if t == "" || strings.Trim(t, "─━") == "" {
-			break
-		}
-		region = append([]string{lines[i]}, region...)
-	}
-	return opts, strings.Join(region, "\n"), true
+	return opts, box, true
+}
+
+// solidRule reports whether a line is a rule of ─, as the prompt's box
+// starts after. Dashed ones (╌) frame a command or a file's text in it.
+func solidRule(line string) bool {
+	t := strings.TrimSpace(line)
+	return t != "" && strings.Trim(t, "─━") == ""
 }
 
 func indent(line string) int { return len(line) - len(strings.TrimLeft(line, " ")) }
@@ -389,22 +426,19 @@ func squeeze(text string) string {
 	}, text)
 }
 
-// promptShows reports whether a member's screen shows req's prompt: its
-// options, and right above them its command or question.
-func promptShows(screen string, req *session.Request) bool {
-	opts, above, ok := screenPrompt(screen)
-	if !ok {
+// promptShows reports whether a member's screen shows w's prompt: its
+// options, and in its box, exactly what the record says. A question's
+// text and every one of its labels; a command as a whole, on lines of its
+// own; a file by its path from the member's folder (or in full), on a line
+// of its own above the file's text.
+func promptShows(screen string, w *waitingOn) bool {
+	opts, box, ok := screenPrompt(screen)
+	if !ok || !answerable(w.req) {
 		return false
 	}
-	want := req.Summary
-	switch req.Tool {
-	case "Edit", "MultiEdit", "Write", "Read", "NotebookEdit":
-		// The prompt names the file from the member's folder ("Create
-		// file notes.txt"): its name is what it surely shows.
-		want = filepath.Base(req.Summary)
-	}
-	if req.Kind == session.ForQuestion {
-		want = req.Question
+	req := w.req
+	switch req.Kind {
+	case session.ForQuestion:
 		if len(opts) < len(req.Options) {
 			return false
 		}
@@ -413,8 +447,69 @@ func promptShows(screen string, req *session.Request) bool {
 				return false
 			}
 		}
+		return strings.Contains(squeeze(strings.Join(box, "\n")), squeeze(req.Question))
 	}
-	return squeeze(want) != "" && strings.Contains(squeeze(above), squeeze(want))
+	switch req.Tool {
+	case "Write", "Edit":
+		return pathShown(header(box), req.Summary, w.dir)
+	}
+	return linesSpell(box, req.Summary)
+}
+
+// header is a prompt box's lines above the first dashed rule, where a
+// file prompt names its file; the file's text comes after it.
+func header(box []string) []string {
+	for i, line := range box {
+		if t := strings.TrimSpace(line); t != "" && strings.Trim(t, "╌") == "" {
+			return box[:i]
+		}
+	}
+	return box
+}
+
+// linesSpell reports whether some lines of box in a row, read squeezed,
+// spell want exactly: a command shown whole. A record cut short spells
+// the start of them.
+func linesSpell(box []string, want string) bool {
+	w := squeeze(want)
+	cut := strings.HasSuffix(want, "…")
+	if w == "" {
+		return false
+	}
+	for i := range box {
+		got := ""
+		for _, line := range box[i:] {
+			got += squeeze(line)
+			if got == w || cut && strings.HasPrefix(got, w) {
+				return true
+			}
+			if len(got) >= len(w) {
+				break
+			}
+		}
+	}
+	return false
+}
+
+// pathShown reports whether one of the lines holds path alone: as it is,
+// or from dir, the member's folder, when it's inside it.
+func pathShown(lines []string, path, dir string) bool {
+	want := map[string]bool{path: true}
+	if dir != "" {
+		for _, d := range []string{dir, paths.Real(dir)} {
+			for _, p := range []string{path, paths.Real(path)} {
+				if rel, err := filepath.Rel(d, p); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+					want[rel] = true
+				}
+			}
+		}
+	}
+	for _, line := range lines {
+		if want[strings.TrimSpace(strings.Trim(line, " │┃"))] {
+			return true
+		}
+	}
+	return false
 }
 
 // sameLabel compares a label on the screen with the recorded one, which
@@ -432,7 +527,7 @@ func sameLabel(screen, recorded string) bool {
 // no is the option labeled exactly No, else Escape.
 func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 	lost := "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything. Answer it in its window: " + cmd(w.attach())
-	if !promptShows(screen, w.req) {
+	if !promptShows(screen, w) {
 		return "", lost
 	}
 	opts, _, _ := screenPrompt(screen)
@@ -458,7 +553,10 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 // closest of the runtime's sessions it runs under is r's own orchestrator,
 // started with its settings file (which holds the guard), or it runs under
 // none (the user's own terminal). The every-chat orchestrator and the
-// user's other chats have no cadrei guard, so they don't get to.
+// user's other chats have no cadrei guard, so they don't get to. A run
+// under no session the process list shows, with the runtime's own marks in
+// its environment, runs under one cadrei doesn't recognize: it doesn't
+// either.
 func underOwnOrchestrator(rt runtime.Runtime, r *cadreis.Resolved) bool {
 	out, err := exec.Command("ps", "-A", "-ww", "-o", "pid=,ppid=,args=").Output()
 	if err != nil {
@@ -482,5 +580,5 @@ func underOwnOrchestrator(rt runtime.Runtime, r *cadreis.Resolved) bool {
 		}
 		return settings != "" && (settings == own || paths.Real(settings) == paths.Real(own))
 	}
-	return true
+	return !rt.Sessions().InSession()
 }

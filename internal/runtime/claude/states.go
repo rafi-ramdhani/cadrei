@@ -224,10 +224,18 @@ func (sessions) SessionSettings(args string) (string, bool) {
 	}
 	_, after, found := strings.Cut(args, " --settings ")
 	if !found {
-		return "", true
+		if _, after, found = strings.Cut(args, " --settings="); !found {
+			return "", true
+		}
 	}
 	settings, _, _ := strings.Cut(after, " --")
 	return strings.TrimSpace(settings), true
+}
+
+// InSession: Claude Code sets CLAUDECODE, and CLAUDE_CODE_CHILD_SESSION
+// for its tools, hooks and ! commands.
+func (sessions) InSession() bool {
+	return os.Getenv("CLAUDECODE") != "" || os.Getenv("CLAUDE_CODE_CHILD_SESSION") != ""
 }
 
 // Ask: a PreToolUse answer that has Claude Code ask the user, with why as

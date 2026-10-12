@@ -125,6 +125,14 @@ func TestAnswerYes(t *testing.T) {
 	if k := key(t, home, "engineer"); k != "1" {
 		t.Errorf("key %q", k)
 	}
+	// Review of 0.2.2 (M1): answered, it goes on with nothing to answer,
+	// so nothing offers the code again before the tool ends.
+	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Request != nil || st.WaitingFor != "" {
+		t.Errorf("state after yes: %+v", st)
+	}
+	if n, out, _ := call("answer"); n != 0 || out != "Nobody's waiting on you right now.\n" {
+		t.Errorf("listing after yes: %q", out)
+	}
 }
 
 // No presses the No option, then sets the member idle with nothing to
@@ -162,6 +170,9 @@ func TestAnswerAQuestion(t *testing.T) {
 	}
 	if k := key(t, home, "engineer"); k != "2" {
 		t.Errorf("key %q", k)
+	}
+	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Request != nil {
+		t.Errorf("state after the pick: %+v", st)
 	}
 }
 
@@ -279,6 +290,7 @@ func TestAnswerRunsOnlyUnderItsOwnOrchestrator(t *testing.T) {
 		ok   bool
 	}{
 		{[]string{"--name", "work-orchestrator", "--settings", own, "--session-id", "x"}, true},
+		{[]string{"--name", "work-orchestrator", "--settings=" + own}, true},
 		{[]string{"--settings", home + "/.cadrei/life/.claude/build/orchestrator-settings.json"}, false},
 		{[]string{"--name", "a-chat"}, false},
 	} {
@@ -291,6 +303,22 @@ func TestAnswerRunsOnlyUnderItsOwnOrchestrator(t *testing.T) {
 	ownTerminal(t)
 	if n, _, errOut := call("answer"); n != 0 {
 		t.Errorf("own terminal: %d %q", n, errOut)
+	}
+	// Review of 0.2.2 (M2): under a Claude Code cadrei doesn't recognize
+	// by its process (another launch shape), its marks in the environment
+	// still say so.
+	agent := filepath.Join(home, "agent")
+	os.MkdirAll(agent, 0o755)
+	writeStub(t, agent+"/node-agent", "#!/bin/sh\nsleep 60 >/dev/null 2>&1 &\necho $!\nwait\n")
+	// Started away from this test's own processes (which may run under a
+	// Claude Code), so it's the only session above.
+	runAs(t, exec.Command("sh", "-c", `"$0" --settings "$1" & exit 0`, agent+"/node-agent", own))
+	for _, v := range []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION"} {
+		t.Setenv(v, "1")
+		if n, _, errOut := call("answer"); n != 1 || flat(errOut) != refused {
+			t.Errorf("%s set, unrecognized: %d %q", v, n, errOut)
+		}
+		os.Unsetenv(v)
 	}
 }
 
