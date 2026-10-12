@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"strings"
 
@@ -50,7 +51,7 @@ func (e *env) finish(tmux bool, last, notice string, wait bool) bool {
 		e.logIn = nil
 		e.say("")
 		e.screen("Now log in to " + rt.Title() + ".")
-		if !e.logInNow(rt, "Your crew is ready. ") {
+		if !e.logInNow(rt, "Your setup is ready. ") {
 			return false
 		}
 	}
@@ -99,6 +100,11 @@ func (e *env) logInNow(rt rtpkg.Runtime, ready string) bool {
 		err = e.child(c).Run()
 		back()
 	}
+	// A login can end well and still leave no login (a closed browser
+	// tab): only one the runtime then confirms, or can't say about, counts.
+	if err == nil && rt.Probe().Login == rtpkg.LoggedOut {
+		err = errors.New("still logged out")
+	}
 	if err != nil {
 		// The login can end on its own prompt's line ("Paste code here"):
 		// that line ends, then a blank one.
@@ -109,6 +115,7 @@ func (e *env) logInNow(rt rtpkg.Runtime, ready string) bool {
 	}
 	e.say("")
 	e.work(markDone, "Logged in to "+title)
+	e.loggedIn = true
 	return true
 }
 

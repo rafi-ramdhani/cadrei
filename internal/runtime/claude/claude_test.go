@@ -39,6 +39,22 @@ func TestLaunch(t *testing.T) {
 	if slices.Contains(cmd.Unset, "CLAUDE_CODE_SSE_PORT") || !slices.Contains(cmd.Unset, "CLAUDECODE") || !slices.Contains(sessionVars, "CLAUDE_CODE_SSE_PORT") {
 		t.Errorf("the orchestrator's unset: %v", cmd.Unset)
 	}
+	// After cadrei logged the user in, the session reads the config dir
+	// the login did: this process's, set or not, never a tmux server's.
+	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg")
+	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default", ConfigHere: true})
+	if !slices.Contains(cmd.Env, "CLAUDE_CONFIG_DIR=/cfg") || slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("config here, set: %+v", cmd)
+	}
+	os.Unsetenv("CLAUDE_CONFIG_DIR")
+	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default", ConfigHere: true})
+	if len(cmd.Env) != 0 || !slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") || slices.Contains(sessionVars, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("config here, unset: %+v", cmd)
+	}
+	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: "x", Mode: "default"})
+	if len(cmd.Env) != 0 || slices.Contains(cmd.Unset, "CLAUDE_CONFIG_DIR") {
+		t.Errorf("as before: %+v", cmd)
+	}
 	t.Setenv("PATH", t.TempDir())
 	if _, err := (Claude{}).Launch(runtime.LaunchSpec{}); err == nil || !strings.Contains(err.Error(), "not on your PATH") {
 		t.Errorf("no claude: %v", err)

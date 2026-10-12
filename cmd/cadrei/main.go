@@ -59,6 +59,9 @@ type env struct {
 	// logIn is the runtime the first run's checks found logged out: the
 	// setup logs the user in before the orchestrator opens.
 	logIn rtpkg.Runtime
+	// loggedIn is set once this run logged the user in: the orchestrator
+	// then reads the runtime's config where the login wrote it.
+	loggedIn bool
 }
 
 // say prints a line on stdout as it is, styled for the stream but never

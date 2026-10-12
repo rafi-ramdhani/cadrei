@@ -218,7 +218,7 @@ func runPlain(e *env) int {
 		}
 		cmd, err := rt.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: orchestrator.Name(r.Name), Cadrei: r.Path,
 			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: readOnly, Prompt: first,
-			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value})
+			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value, ConfigHere: e.loggedIn})
 		// Pinned to this cadrei, and marked as the orchestrator, so the
 		// hook adds nothing more (K.3). What only this launch knows goes
 		// to the snapshot hook.

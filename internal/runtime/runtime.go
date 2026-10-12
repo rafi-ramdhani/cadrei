@@ -70,6 +70,10 @@ type LaunchSpec struct {
 	// At most one is set, and only for a runtime with those capabilities.
 	SessionID string
 	Resume    string
+	// ConfigHere has the session read the runtime's own config (its login)
+	// as this process's environment says, not as a tmux server's does:
+	// cadrei just logged the user in from here.
+	ConfigHere bool
 }
 
 // Command is what cadrei runs: in tmux for a member, or as a child process.
