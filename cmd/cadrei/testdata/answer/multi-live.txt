@@ -1,0 +1,24 @@
+
+  You picked No, so I won't upload resume.pdf to the signing site.
+
+✻ Sautéed for 2s · done 5:27 PM
+
+❯ Use the AskUserQuestion tool once to ask me exactly: "Which files go to the
+  signing site?" with multiSelect true and the options "resume.pdf" and
+  "cover.pdf". Then tell me what I picked.
+────────────────────────────────────────────────────────────────────────────────
+←  ☐ Files  ✔ Submit  →
+
+Which files go to the signing site?
+
+❯ 1. [ ] resume.pdf
+         Send resume.pdf to the signing site
+  2. [ ] cover.pdf
+         Send cover.pdf to the signing site
+  3. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+──────────────────────────────────────────────────────── work-dev-app-engineer ─

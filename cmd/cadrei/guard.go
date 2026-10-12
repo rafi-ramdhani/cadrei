@@ -3,44 +3,10 @@
 package main
 
 import (
-	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
-
-	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 )
-
-// runHookGuard is cadrei hook guard: a member's runtime runs it before
-// each shell command, and a command it refuses doesn't run (exit 2, the
-// reason on stderr). It refuses cadrei's uninstall and restore in any form
-// it can see, erring on the side of refusing, and anything it can't read.
-// It's one of three layers: the members' deny rules come first, and the
-// commands themselves refuse a member's window (memberAnyway). A command
-// it can't see into, such as a script file the member wrote, is left to
-// those, and to the member's instructions.
-func runHookGuard(e *env) int {
-	rt, err := runtime.Get(runtimeName())
-	if err != nil {
-		return guardRefuses(e, "cadrei can't check this command ("+err.Error()+"), so it's blocked.")
-	}
-	command, shell, err := rt.Sessions().ShellCommand(e.stdin)
-	switch {
-	case err != nil:
-		return guardRefuses(e, "cadrei couldn't read this command ("+err.Error()+"), so it's blocked.")
-	case !shell:
-		return 0
-	case removesCrews(command):
-		return guardRefuses(e, "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator.")
-	}
-	return 0
-}
-
-// guardRefuses blocks the command, saying why where the runtime shows it.
-func guardRefuses(e *env, why string) int {
-	fmt.Fprintln(e.stderr, why)
-	return 2
-}
 
 // removesCrews reports whether a command line may run cadrei's uninstall
 // or restore. It reads the line as a shell does, into the commands it
@@ -50,32 +16,49 @@ func guardRefuses(e *env, why string) int {
 // it (a heredoc to cat, grep's pattern, gh's or git commit's message) is
 // passed over. Text a shell, eval or another program could run is read
 // too, and a line it can't read whole is read the blunt way, as words.
-func removesCrews(command string) bool { return guardLine(command, 0) }
+func removesCrews(command string) bool { return guardLine(removalRule, command, 0) }
 
-// guardLine checks a command line, or a shell's code inside one.
-func guardLine(text string, depth int) bool {
+// guardRule is one thing the guard looks for in a command line, as
+// guardLine reads it.
+type guardRule interface {
+	// runs reports whether one command, its program at words[p] past any
+	// wrapper, runs it; fed is whether what pipes into it mentions it.
+	runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool
+	// calls reports whether code another program runs (an argument, a
+	// heredoc) runs it.
+	calls(text string) bool
+	// mentions reports whether text that may become code (fed to a shell,
+	// or behind a program that is an expansion) names it.
+	mentions(text string) bool
+	// blunt reads a line the guard can't read as commands, or one that
+	// hands a shell a script file it can't see.
+	blunt(text string) bool
+}
+
+// guardLine checks a command line, or a shell's code inside one, for rule.
+func guardLine(rule guardRule, text string, depth int) bool {
 	if depth > 16 {
 		return true
 	}
 	line, ok := parseShell(text)
 	if !ok {
-		return mentionsRemoval(text)
+		return rule.blunt(text)
 	}
 	for _, s := range line.subs {
-		if guardLine(s, depth+1) {
+		if guardLine(rule, s, depth+1) {
 			return true
 		}
 	}
-	whole := &lineText{text: text}
+	whole := &lineText{rule: rule, text: text}
 	for _, pipe := range line.pipes {
 		fed := false
 		for _, c := range pipe {
-			if guardCommand(c, fed, whole, depth) {
+			if guardCommand(rule, c, fed, whole, depth) {
 				return true
 			}
-			fed = feedsRemoval(c, fed)
+			fed = feeds(rule, c, fed)
 			for _, w := range c.words {
-				fed = fed || mentionsSub(w.text)
+				fed = fed || rule.mentions(w.text)
 			}
 		}
 	}
@@ -85,28 +68,29 @@ func guardLine(text string, depth int) bool {
 // lineText is a whole line, read the blunt way at most once, however many
 // of its commands ask.
 type lineText struct {
-	text            string
-	sub, removal    bool
-	readSub, readRm bool
+	rule                   guardRule
+	text                   string
+	mention, bluntly       bool
+	readMention, readBlunt bool
 }
 
-func (l *lineText) mentionsSub() bool {
-	if !l.readSub {
-		l.sub, l.readSub = mentionsSub(l.text), true
+func (l *lineText) mentions() bool {
+	if !l.readMention {
+		l.mention, l.readMention = l.rule.mentions(l.text), true
 	}
-	return l.sub
+	return l.mention
 }
 
-func (l *lineText) mentionsRemoval() bool {
-	if !l.readRm {
-		l.removal, l.readRm = mentionsRemoval(l.text), true
+func (l *lineText) blunt() bool {
+	if !l.readBlunt {
+		l.bluntly, l.readBlunt = l.rule.blunt(l.text), true
 	}
-	return l.removal
+	return l.bluntly
 }
 
-// guardCommand checks one command of a pipeline: fed is whether what
-// pipes into it has uninstall or restore, line the whole line it's on.
-func guardCommand(c *shCommand, fed bool, line *lineText, depth int) bool {
+// guardCommand checks one command of a pipeline for rule: fed is whether
+// what pipes into it mentions it, line the whole line it's on.
+func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth int) bool {
 	words := c.words
 	for len(words) > 0 && assignment.MatchString(words[0].text) {
 		words = words[1:]
@@ -144,34 +128,23 @@ func guardCommand(c *shCommand, fed bool, line *lineText, depth int) bool {
 	prog, name := words[p], wordName(words[p])
 	// A program that is itself an expansion, such as $(printf 'cadrei
 	// uninstall'), could be anything the line spells.
-	if removal[name] || prog.expands && line.mentionsSub() {
+	if prog.expands && line.mentions() {
 		return true
 	}
 	if inert(name, words[p+1:]) {
 		return false
 	}
-	afterCadrei, afterEither := false, false
-	for _, w := range words {
-		// cadrei, or a word that could expand to it, then uninstall.
-		if afterEither && (removal[strings.ToLower(w.bare)] || removal[strings.ToLower(w.text)]) {
-			return true
-		}
-		// cadrei $x, where x could be uninstall.
-		if afterCadrei && w.expands && line.mentionsSub() {
-			return true
-		}
-		cadrei := isCadrei(w)
-		afterCadrei = afterCadrei || cadrei
-		afterEither = afterEither || cadrei || w.expands
+	if rule.runs(c, words, p, fed, line) {
+		return true
 	}
-	// Code in an argument or on stdin: cadrei, then uninstall, close by.
+	// Code in an argument or on stdin.
 	for _, w := range words {
-		if callsRemoval(w.text) {
+		if rule.calls(w.text) {
 			return true
 		}
 	}
 	for _, in := range c.input {
-		if callsRemoval(in) {
+		if rule.calls(in) {
 			return true
 		}
 	}
@@ -181,20 +154,18 @@ func guardCommand(c *shCommand, fed bool, line *lineText, depth int) bool {
 		for _, w := range words[p+1:] {
 			code = append(code, w.text)
 		}
-		return guardLine(strings.Join(code, " "), depth+1)
+		return guardLine(rule, strings.Join(code, " "), depth+1)
 	case name == "source" || name == ".":
-		return len(words) > p+1 && line.mentionsRemoval()
+		return len(words) > p+1 && line.blunt()
 	case shells[name] || prog.expands:
-		return shellRuns(c, words[p+1:], fed, line, depth)
-	case name == "xargs":
-		return xargsRuns(c, words[p+1:], fed)
+		return shellRuns(rule, c, words[p+1:], fed, line, depth)
 	}
 	return false
 }
 
 // shellRuns checks what a shell runs: its -c code, a script file (which
 // the guard can't see, so the line is read the blunt way), or its stdin.
-func shellRuns(c *shCommand, args []shWord, fed bool, line *lineText, depth int) bool {
+func shellRuns(rule guardRule, c *shCommand, args []shWord, fed bool, line *lineText, depth int) bool {
 	code := false
 	for _, a := range args {
 		if strings.HasPrefix(a.bare, "-") || strings.HasPrefix(a.bare, "+") {
@@ -204,43 +175,71 @@ func shellRuns(c *shCommand, args []shWord, fed bool, line *lineText, depth int)
 			continue
 		}
 		if code {
-			return guardLine(a.text, depth+1)
+			return guardLine(rule, a.text, depth+1)
 		}
-		return line.mentionsRemoval()
+		return line.blunt()
 	}
 	if c.fromFile {
-		return line.mentionsRemoval()
+		return line.blunt()
 	}
 	for _, in := range c.input {
-		if guardLine(in, depth+1) {
+		if guardLine(rule, in, depth+1) {
 			return true
 		}
 	}
-	return feedsRemoval(c, fed)
+	return feeds(rule, c, fed)
 }
 
-// xargsRuns checks an xargs that runs cadrei, a shell, or a program it
-// can't name, with words from its stdin.
-func xargsRuns(c *shCommand, args []shWord, fed bool) bool {
-	for _, a := range args {
-		if isCadrei(a) || a.expands || shells[wordName(a)] {
-			return c.fromFile || feedsRemoval(c, fed)
+// feeds reports whether a command's stdin mentions what rule looks for:
+// fed, from what pipes into it, or its heredocs.
+func feeds(rule guardRule, c *shCommand, fed bool) bool {
+	for _, in := range c.input {
+		fed = fed || rule.mentions(in)
+	}
+	return fed
+}
+
+// cadreiRule looks for cadrei's program running one of subs.
+type cadreiRule struct{ subs map[string]bool }
+
+// The cadrei commands the guard looks for.
+var (
+	removalRule = cadreiRule{setOf("uninstall", "restore")}
+	answerRule  = cadreiRule{setOf("answer")}
+	compactRule = cadreiRule{setOf("compact")}
+)
+
+func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
+	if r.subs[wordName(words[p])] {
+		return true
+	}
+	afterCadrei, afterEither := false, false
+	for _, w := range words {
+		// cadrei, or a word that could expand to it, then the command.
+		if afterEither && (r.subs[strings.ToLower(w.bare)] || r.subs[strings.ToLower(w.text)]) {
+			return true
+		}
+		// cadrei $x, where x could be the command.
+		if afterCadrei && w.expands && line.mentions() {
+			return true
+		}
+		cadrei := isCadrei(w)
+		afterCadrei = afterCadrei || cadrei
+		afterEither = afterEither || cadrei || w.expands
+	}
+	// xargs running cadrei, a shell, or a program it can't name, with
+	// words from its stdin.
+	if wordName(words[p]) == "xargs" {
+		for _, a := range words[p+1:] {
+			if isCadrei(a) || a.expands || shells[wordName(a)] {
+				return c.fromFile || feeds(r, c, fed)
+			}
 		}
 	}
 	return false
 }
 
-// feedsRemoval reports whether a command's stdin has uninstall or
-// restore anywhere: fed, from what pipes into it, or its heredocs.
-func feedsRemoval(c *shCommand, fed bool) bool {
-	for _, in := range c.input {
-		fed = fed || mentionsSub(in)
-	}
-	return fed
-}
-
 var (
-	removal  = map[string]bool{"uninstall": true, "restore": true}
 	programs = map[string]bool{"cadrei": true, "cadre": true}
 	shells   = setOf("sh", "bash", "zsh", "dash", "ksh", "mksh", "yash", "fish", "csh", "tcsh", "busybox", "eval", "source", ".")
 	// runsAnother: programs that run the command after them.
@@ -334,18 +333,18 @@ func bluntWords(text string) []string {
 	return words
 }
 
-// mentionsRemoval is the blunt reading, for text the guard can't read as
-// commands: uninstall or restore, with cadrei's program by any path, or
-// with something that can hide the program's name: an expansion ($, a
+// blunt is the blunt reading, for text the guard can't read as commands:
+// one of the commands, with cadrei's program by any path, or with
+// something that can hide the program's name: an expansion ($, a
 // backtick), or another shell, eval, source or xargs.
-func mentionsRemoval(text string) bool {
+func (r cadreiRule) blunt(text string) bool {
 	hides := strings.ContainsAny(text, "$`")
 	program, sub := false, false
 	for _, w := range bluntWords(text) {
 		switch {
 		case programs[w]:
 			program = true
-		case removal[w]:
+		case r.subs[w]:
 			sub = true
 		case bluntHides[w]:
 			hides = true
@@ -354,28 +353,27 @@ func mentionsRemoval(text string) bool {
 	return sub && (program || hides)
 }
 
-// mentionsSub reports whether text has uninstall or restore as a word.
-func mentionsSub(text string) bool {
+// mentions reports whether text has one of the commands as a word.
+func (r cadreiRule) mentions(text string) bool {
 	for _, w := range bluntWords(text) {
-		if removal[w] {
+		if r.subs[w] {
 			return true
 		}
 	}
 	return false
 }
 
-// callsRemoval reports whether code another program runs (python's -c,
-// a heredoc to node, tmux send-keys) has cadrei, then uninstall or
-// restore within the next three words: "cadrei uninstall", or
-// ["cadrei", "restore"].
-func callsRemoval(text string) bool {
+// calls reports whether code another program runs (python's -c, a heredoc
+// to node) has cadrei, then one of the commands within the next three
+// words: "cadrei uninstall", or ["cadrei", "restore"].
+func (r cadreiRule) calls(text string) bool {
 	words := bluntWords(text)
 	for i, w := range words {
 		if !programs[w] {
 			continue
 		}
 		for _, v := range words[i+1 : min(i+4, len(words))] {
-			if removal[v] {
+			if r.subs[v] {
 				return true
 			}
 		}

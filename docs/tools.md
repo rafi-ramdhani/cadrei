@@ -148,8 +148,20 @@ Each member in a running team:
 | `waiting_for` | string, optional | With `waiting` only: `approval` (it wants to run something) or `question` (it asked you something) |
 | `no_activity_since` | time, optional | With `working` or `waiting` only: its chat hasn't changed since then, for 10 minutes or more. Maybe someone stopped it with Esc |
 | `turn_error` | bool, optional | With `idle` only: `true` when its last turn ended in an error |
+| `request` | object, optional | With `waiting` only: what it waits on you for, as Claude Code recorded it, when cadrei recorded it (a member started before 0.2.2 has none) |
 | `model`, `effort` | string, optional | The model and effort level it started with |
 | `model_from`, `effort_from` | string, optional | Where each one was set: `start` (the command that started it), `member` (its member file), `machine` (this machine's crew settings) or `crew` (the crew's settings) |
+
+`request`, what a waiting member asks you:
+
+| Field | Type | What it is |
+|---|---|---|
+| `code` | string | Three letters and digits, like `7f3`. `cadrei answer <code> yes`, `no` or an option's number answers it. A new request gets a new code |
+| `kind` | string | `approval` (a permission prompt) or `question`. Treat any other kind as one to answer in the member's window |
+| `tool` | string, optional | The tool it wants to use, like `Bash` |
+| `summary` | string, optional | What it would run or touch (a command, a path, a URL), or a question's text. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
+| `options` | list of strings, optional | A question's option labels, at most 6 |
+| `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, or holds more than one question |
 
 Each project in `projects`:
 
@@ -174,9 +186,9 @@ Each project in `projects`:
 
 ## The promise
 
-- `version` is 1. Within version 1, cadrei only adds things: new fields, new line types in the stream, and new values in the lists of values on this page (a member state, a `waiting_for`, a snapshot reason, a project state, a `model_from` or `effort_from` source, a `hook` setting and the like).
+- `version` is 1. Within version 1, cadrei only adds things: new fields, new line types in the stream, and new values in the lists of values on this page (a member state, a `waiting_for`, a request `kind`, a snapshot reason, a project state, a `model_from` or `effort_from` source, a `hook` setting and the like).
 - Version 2 is only for removing or renaming a field, changing its type, or changing what an existing value means.
-- Treat a value you don't know as the closest safe one: an unknown member `state` like `unknown`, an unknown `waiting_for` like a plain `waiting`, an unknown snapshot `reason` like `periodic`, an unknown project `state` like `missing`, and an unknown `model_from` or `effort_from` as not set.
+- Treat a value you don't know as the closest safe one: an unknown member `state` like `unknown`, an unknown `waiting_for` like a plain `waiting`, an unknown request `kind` as one to answer in the member's window, an unknown snapshot `reason` like `periodic`, an unknown project `state` like `missing`, and an unknown `model_from` or `effort_from` as not set.
 - `session` and a member's `name` are keys: compare them whole, and don't split them on `-`. Use `crew`, `team`, `project` and `role` for the parts.
 - `legacy` and `cloned` stay in version 1, even once cadrei no longer knows cadre 0.1.x: `legacy` is then always `false`, and the `legacy` list is `[]`.
 - Every change to this page, added fields and values included, is in CHANGELOG.md under "For tool builders".

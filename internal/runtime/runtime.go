@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // MessagingKind is how a runtime's sessions send each other messages.
@@ -252,6 +253,54 @@ type StateEvent struct {
 	Question   bool   // a permission request that is a question to the user
 	Session    string // the conversation id
 	Transcript string // the conversation's transcript
+	// Request is what a permission request asks the user, as the runtime
+	// passed it to the hook: never the member's own description of it.
+	Request *Request
+}
+
+// Request is what a member asks the user: a tool it wants to run, or a
+// question. Every text is one printable line (RequestText).
+type Request struct {
+	Tool     string   // the tool, as the runtime names it
+	Summary  string   // what it would run or touch: a command, a path, a URL
+	Question string   // a question's text, for a question
+	Options  []string // a question's option labels, at most MaxOptions
+	// Multi: a question that takes more than one pick, holds more than one
+	// question or has more options than recorded, so only its window can
+	// answer it.
+	Multi bool
+}
+
+// Limits on a request's text.
+const (
+	SummaryLimit = 300
+	OptionLimit  = 80
+	MaxOptions   = 6
+)
+
+// RequestText makes text one printable line of at most limit characters:
+// a line break shows as ⏎, any other control or invisible character as ?,
+// and what's past the limit is cut, with an ellipsis.
+func RequestText(text string, limit int) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	var b strings.Builder
+	n := 0
+	for _, r := range text {
+		if n == limit {
+			return strings.TrimRight(b.String(), " ") + "…"
+		}
+		switch {
+		case r == '\n':
+			r = '⏎'
+		case r == '\t':
+			r = ' '
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r), unicode.Is(unicode.Co, r), r == '\u2028', r == '\u2029', r == '\ufffc':
+			r = '?'
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }
 
 // State event names.
@@ -300,11 +349,18 @@ type SessionOps interface {
 	// screen): it got going. Only screens it knows count, so a command that
 	// printed a line and is about to end isn't taken for one.
 	Waiting(screen string) bool
-	// ShellCommand reads what a member's guard hook receives before a
-	// tool runs: the command line when the tool runs one in a shell, with
-	// shell set. An error says the input couldn't be read, which the
-	// guard counts as a command it can't let run.
-	ShellCommand(input io.Reader) (command string, shell bool, err error)
+	// ShellCall reads what the guard hook receives before a tool runs:
+	// the command line when the tool runs one in a shell, and the
+	// session's permission mode. An error says the input couldn't be read,
+	// which the guard counts as a command it can't let run.
+	ShellCall(input io.Reader) (ShellCall, error)
+	// Ask is the guard's answer that has the runtime ask the user before
+	// the call runs, with why as cadrei's text in its prompt.
+	Ask(why string) []byte
+	// SessionSettings reads a process's command line: whether it's one of
+	// the runtime's sessions, and the settings file it was started with,
+	// or "".
+	SessionSettings(args string) (settings string, ok bool)
 	// Sent reads what the orchestrator's notify hook receives after a
 	// message it sent: the message's target, whether it asked to hear when
 	// that session goes idle, and whether a subagent sent it. ok is false
@@ -313,6 +369,16 @@ type SessionOps interface {
 	// SentContext is the notify hook's answer: text added to the
 	// orchestrator's context after the send.
 	SentContext(text string) []byte
+}
+
+// ShellCall is a tool call the guard reads.
+type ShellCall struct {
+	Command string // the command line
+	Shell   bool   // the tool runs Command in a shell; else it runs none
+	// Mode is the session's permission mode as the runtime names it
+	// (Claude Code: default, acceptEdits, auto, plan, dontAsk,
+	// bypassPermissions), or "" when the input doesn't say.
+	Mode string
 }
 
 // Sent is a message the orchestrator sent, as its notify hook reads it.

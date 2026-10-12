@@ -50,8 +50,8 @@ func contractCrew(t *testing.T) (home, c, socket string) {
 	must(t, "up", "dev")
 	member := func(s string) string { return "work-dev-" + s }
 	feed(t, c, member("working"), `{"hook_event_name":"UserPromptSubmit"}`)
-	feed(t, c, member("approval"), `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`)
-	feed(t, c, member("question"), `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`)
+	feed(t, c, member("approval"), `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"gh pr merge 42 --squash"}}`)
+	feed(t, c, member("question"), `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Upload resume.pdf to the signing site?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`)
 	feed(t, c, member("idle"), `{"hook_event_name":"Stop"}`)
 	feed(t, c, member("error"), `{"hook_event_name":"StopFailure","error":"rate_limit"}`)
 	os.Remove(c + "/.claude/build/state/" + member("unknown") + ".json")
@@ -81,6 +81,7 @@ func contractCrew(t *testing.T) (home, c, socket string) {
 // details written the same way on every run.
 func normalized(home, out string) string {
 	out = regexp.MustCompile(`"\d{4}-\d\d-\d\dT[0-9:.]+(Z|[+-]\d\d:\d\d)"`).ReplaceAllString(out, `"<time>"`)
+	out = regexp.MustCompile(`"code": "[a-z0-9]{3}"`).ReplaceAllString(out, `"code": "<code>"`)
 	return strings.ReplaceAll(out, home, "<home>")
 }
 
@@ -137,7 +138,9 @@ func TestNoChatTextInTheJSON(t *testing.T) {
 	os.WriteFile(c+"/members/dev/engineer.md", []byte("# Member: Engineer\n\n"+marker+"\n"), 0o644)
 	transcript := filepath.Join(t.TempDir(), "t.jsonl")
 	os.WriteFile(transcript, []byte(`{"type":"user","message":{"content":"`+marker+`"}}`+"\n"), 0o600)
-	feed(t, c, "work-dev-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"`+marker+`"}]},"transcript_path":"`+transcript+`"}`)
+	// The request is the one text of the member's that's shown, as the
+	// runtime recorded it (0.2.2): its question, never the chat.
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]},"transcript_path":"`+transcript+`"}`)
 	t.Setenv("CADREI_HOME", c)
 	fastWatch(t)
 	s := startWatch(t)
@@ -245,14 +248,16 @@ func TestTheGoldensUseOnlyDocumentedFields(t *testing.T) {
 	top, crew, orch := table("Top level of `cadrei ls --json`"), table("`cadrei`, your crew"), table("`orchestrator`:")
 	team, member, proj := table("Each team in `running`"), table("Each member in a running team"), table("Each project in `projects`")
 	all := table("`cadrei ls --json --all` has")
+	request := table("`request`, what a waiting member asks")
 	if strings.Join(slices.Sorted(maps.Keys(other)), ",") != "missing,name,path,running" {
 		t.Errorf("other_cadreis row's fields: %v", other)
 	}
 	// What each key of a table holds, by table.
 	children := map[*map[string]bool]map[string]*map[string]bool{
-		&top:  {"cadrei": &crew, "orchestrator": &orch, "running": &team, "projects": &proj, "teams": nil, "other_cadreis": &other},
-		&team: {"members": &member},
-		&all:  {"cadreis": &top, "legacy": &team, "unknown": &team},
+		&top:    {"cadrei": &crew, "orchestrator": &orch, "running": &team, "projects": &proj, "teams": nil, "other_cadreis": &other},
+		&team:   {"members": &member},
+		&member: {"request": &request},
+		&all:    {"cadreis": &top, "legacy": &team, "unknown": &team},
 	}
 	var walk func(path string, fields *map[string]bool, v any)
 	walk = func(path string, fields *map[string]bool, v any) {

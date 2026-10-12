@@ -263,7 +263,8 @@ func writeState(rt runtime.Runtime, home, name string, input []byte) {
 	}
 	// Most tool events change nothing (working stays working): no write.
 	prev := session.ReadState(path)
-	if next := session.Apply(prev, ev, time.Now()); prev == nil || next == nil || *next != *prev {
+	if next := session.Apply(prev, ev, time.Now()); prev == nil || next == nil || !session.Same(next, prev) {
+		session.GiveCode(path, next)
 		session.WriteState(path, next)
 	}
 }

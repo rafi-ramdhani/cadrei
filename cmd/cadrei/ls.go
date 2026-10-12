@@ -53,6 +53,9 @@ type memberView struct {
 	// 10 minutes or more ago. For idle: its last turn ended in an error.
 	NoActivitySince *time.Time `json:"no_activity_since,omitempty"`
 	TurnError       bool       `json:"turn_error,omitempty"`
+	// While it waits: what it waits on the user for, as the runtime
+	// recorded it, with the code cadrei answer takes. Never consent.
+	Request *requestView `json:"request,omitempty"`
 	// The model and effort cadrei passed this member's start, and where
 	// each was set: start, member, machine or crew (7.11.4).
 	Model      string `json:"model,omitempty"`
@@ -79,6 +82,26 @@ func (m *memberView) fill() {
 		m.NoActivitySince = &quiet
 	}
 	m.TurnError = m.status.Error && m.status.State == session.Idle
+	m.Request = nil
+	if r := m.status.Request; r != nil {
+		m.Request = &requestView{Code: r.Code, Kind: r.Kind, Tool: r.Tool, Summary: r.Summary, Options: r.Options, Multi: r.Multi}
+		if r.Kind == session.ForQuestion {
+			m.Request.Summary = r.Question
+		}
+	}
+}
+
+// requestView is a waiting member's request in ls --json: kind is approval
+// or question (an open list: any other means answer it in its window);
+// summary is the command, path or URL, or a question's text; options are a
+// question's labels; multi means only its window can answer it.
+type requestView struct {
+	Code    string   `json:"code"`
+	Kind    string   `json:"kind"`
+	Tool    string   `json:"tool,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Multi   bool     `json:"multi,omitempty"`
 }
 
 // choice is the model and effort cadrei passed the member.

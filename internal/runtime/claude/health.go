@@ -371,8 +371,9 @@ func (hooks) Output(text string) []byte {
 
 // SnapshotSettings writes <dir>/orchestrator-settings.json, holding the
 // session start hook that runs `<binary> hook snapshot`, the prompt hook
-// that runs `<binary> hook team-status`, and the hook after each
-// SendMessage call that runs `<binary> hook notify`. Claude Code adds their
+// that runs `<binary> hook team-status`, the guard before each Bash call
+// (`<binary> hook guard`), and the hook after each SendMessage call that
+// runs `<binary> hook notify`. Claude Code adds their
 // output to the session's context (the snapshot on startup, on resume and
 // after /clear and /compact; the team status on each prompt; the notify
 // note after a send), and shows none of it in the chat.
@@ -385,8 +386,12 @@ func (hooks) SnapshotSettings(dir, binary string) (string, error) {
 		}
 		return &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}}
 	}
+	// The guard, before each Bash call: it asks the user before an answer
+	// for a member, and keeps the orchestrator from typing into tmux.
+	guard := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(OrchestratorGuardHook(binary)), "timeout", jsonx.Literal("10"))
+	pre := &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{jsonx.NewObject("matcher", jsonx.String("Bash"), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{guard}})}}
 	root := jsonx.NewObject("hooks", jsonx.NewObject("SessionStart", entry("snapshot", "10", ""), "UserPromptSubmit", entry("team-status", "5", ""),
-		"PostToolUse", entry("notify", "5", "SendMessage")))
+		"PreToolUse", pre, "PostToolUse", entry("notify", "5", "SendMessage")))
 	path := filepath.Join(dir, "orchestrator-settings.json")
 	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
 }

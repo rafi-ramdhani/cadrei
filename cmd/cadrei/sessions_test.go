@@ -684,11 +684,17 @@ func TestEveryHookCommandSurvivesAnOldProgram(t *testing.T) {
 			}
 			// The guard is the one hook that fails closed: with a program
 			// that's gone, or doesn't know it, a member's Bash call waits
-			// for a cadrei that does (exit 2).
+			// for a cadrei that does (exit 2). The orchestrator's lets the
+			// call go on when the program is gone (0.2.2).
 			if strings.Contains(command, " hook guard ") {
+				want := 2
+				if strings.HasSuffix(command, "else exit 0; fi") && program != old {
+					want = 0
+				}
 				var exit *exec.ExitError
-				if _, _, err := timed(command); !errors.As(err, &exit) || exit.ExitCode() != 2 {
-					t.Errorf("the guard with %s: %v, want exit 2", program, err)
+				_, _, err := timed(command)
+				if got := 0; err != nil && !errors.As(err, &exit) || (errors.As(err, &exit) && exit.ExitCode() != want) || (err == nil && want != got) {
+					t.Errorf("the guard with %s: %v, want exit %d", program, err, want)
 				}
 				continue
 			}

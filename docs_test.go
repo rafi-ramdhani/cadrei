@@ -64,8 +64,27 @@ func TestTheToolsPageIsTheSpecs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(page) != body {
-		t.Error("docs/tools.md isn't 7.13.6's text")
+	// 0.2.2 adds a waiting member's request (its spec, section 10): the
+	// page is 7.13.6's text with that added, and nothing else.
+	base := string(page)
+	table, next := strings.Index(base, "`request`, what a waiting member asks you:\n"), strings.Index(base, "Each project in `projects`:")
+	row := strings.Index(base, "| `request` | object, optional |")
+	if table < 0 || next < table || row < 0 {
+		t.Fatal("docs/tools.md lacks 0.2.2's request field")
+	}
+	base = base[:table] + base[next:]
+	base = base[:row] + base[row+strings.Index(base[row:], "\n")+1:]
+	for added, was := range map[string]string{
+		"a `waiting_for`, a request `kind`, a snapshot reason":                "a `waiting_for`, a snapshot reason",
+		" an unknown request `kind` as one to answer in the member's window,": "",
+	} {
+		if !strings.Contains(base, added) {
+			t.Errorf("docs/tools.md lacks %q", added)
+		}
+		base = strings.Replace(base, added, was, 1)
+	}
+	if base != body {
+		t.Error("docs/tools.md isn't 7.13.6's text, with 0.2.2's request field added")
 	}
 	// The promise as decided before 0.2.1 shipped (forward-compatibility
 	// audit M1, S3 to S5): values can grow within version 1, with safe

@@ -61,34 +61,44 @@ func TestLsShowsWhatMembersDo(t *testing.T) {
 	for _, step := range []struct{ payload, want string }{
 		{`{"hook_event_name":"UserPromptSubmit"}`, "    * engineer   working just now"},
 		{`{"hook_event_name":"PreToolUse","tool_name":"Read"}`, "    * engineer   working just now"},
-		{`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, "    ! engineer   waiting on you · approve it in its window"},
+		{`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, "    ! engineer   waiting on you · approve it with cadrei answer <code> yes"},
 		{`{"hook_event_name":"Stop"}`, "    o engineer   idle since <now>"},
 		{`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`, "    ! engineer   waiting on you · it asked you something in its window"},
+		{`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}}`, "    ! engineer   waiting on you · it asked you something: cadrei answer"},
 		{`{"hook_event_name":"StopFailure","error":"rate_limit"}`, "    o engineer   idle since <now> · its last turn hit an error"},
 		{`{"hook_event_name":"UserPromptSubmit"}`, "    * engineer   working just now"},
 		{`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, "    o engineer   idle since <now>"},
 	} {
 		before := time.Now().Format("15:04")
 		feed(t, c, "work-dev-engineer", step.payload)
-		r := row(t, "engineer")
+		r := regexp.MustCompile(`cadrei answer [a-z0-9]{3}`).ReplaceAllString(row(t, "engineer"), "cadrei answer <code>")
 		after := time.Now().Format("15:04")
 		if r != strings.ReplaceAll(step.want, "<now>", before) && r != strings.ReplaceAll(step.want, "<now>", after) {
 			t.Errorf("after %s: %q, want %q", step.payload, r, step.want)
 		}
 	}
 	// Styled, with the Unicode marks.
-	feed(t, c, "work-dev-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`)
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make test"}}`)
 	t.Setenv("FORCE_COLOR", "1")
 	out := must(t, "ls")
 	t.Setenv("FORCE_COLOR", "")
 	if !strings.Contains(out, "\x1b[33m!\x1b[0m engineer   waiting on you") || !strings.Contains(out, "◌\x1b[0m reviewer   starting") {
 		t.Errorf("styled:\n%q", out)
 	}
-	// The snapshot gives its place and command ready-made.
+	// The snapshot gives its place, its request and the commands
+	// ready-made (0.2.2: the request, with its code).
 	t.Setenv("CADREI_HOME", c)
 	t.Setenv("CADREI_ORCHESTRATOR", "1")
-	if s := snapshotText(t, "resume"); !strings.Contains(s, "- Waiting on the user: the engineer in dev, for an approval, opened with cadrei attach dev\n") {
+	code := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json").Request.Code
+	if s := snapshotText(t, "resume"); !strings.Contains(s, "- Waiting on the user: The engineer in dev ("+code+") wants to run: make test. Answer with cadrei answer "+code+" yes, or no. Its window: cadrei attach dev\n") {
 		t.Errorf("snapshot:\n%s", s)
+	}
+	// One with no request recorded (a member started before 0.2.2) keeps
+	// the words it had.
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"Stop"}`)
+	session.WriteState(c+"/.claude/build/state/work-dev-engineer.json", &session.State{State: session.Waiting, Since: time.Now(), WaitingFor: session.ForApproval})
+	if s := snapshotText(t, "resume"); !strings.Contains(s, "- Waiting on the user: the engineer in dev, for an approval, opened with cadrei attach dev\n") {
+		t.Errorf("snapshot, no request:\n%s", s)
 	}
 	t.Setenv("CADREI_ORCHESTRATOR", "")
 	t.Setenv("CADREI_HOME", "")

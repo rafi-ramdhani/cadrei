@@ -141,7 +141,7 @@ func TestCommandsStillNamedAsBefore(t *testing.T) {
 // Commands of features that were cut are gone, not stubs.
 func TestCutCommandsAreUnknown(t *testing.T) {
 	for _, args := range [][]string{
-		{"compact", "dev/pm"}, {"project", "export", "a", "/x"}, {"project", "move", "a", "/x"},
+		{"project", "export", "a", "/x"}, {"project", "move", "a", "/x"},
 		{"project", "restore", "a"}, {"project", "relink", "a", "/x"}, {"cadreis", "add", "/x"}, {"cadreis", "remove", "x"},
 		{"team", "add", "ops"}, {"member", "add", "ops/sre"},
 		{"which"}, {"ctx"}, {"start"},

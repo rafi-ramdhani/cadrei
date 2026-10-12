@@ -104,6 +104,7 @@ func TestTheGuardPassesTextThatOnlyMentionsRemoval(t *testing.T) {
 // read is refused.
 func TestTheGuardHook(t *testing.T) {
 	sandbox(t)
+	t.Setenv("CADREI_MEMBER", "work-dev-engineer")
 	bash := func(command string) string {
 		return `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":` + strconvQuote(command) + `}}`
 	}

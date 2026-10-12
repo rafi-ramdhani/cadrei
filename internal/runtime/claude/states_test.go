@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,17 +56,59 @@ func TestStateEvent(t *testing.T) {
 	for in, want := range map[string]runtime.StateEvent{
 		`{"hook_event_name":"UserPromptSubmit","session_id":"` + id + `","transcript_path":"/t/x.jsonl"}`: {Name: runtime.EvPrompt, Session: id, Transcript: "/t/x.jsonl"},
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`:                                             {Name: runtime.EvToolUse},
-		`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`:                                      {Name: runtime.EvPermission},
-		`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`:                           {Name: runtime.EvPermission, Question: true},
+		`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`:                                      {Name: runtime.EvPermission, Request: &runtime.Request{Tool: "Bash"}},
+		`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`:                           {Name: runtime.EvPermission, Question: true, Request: &runtime.Request{Tool: "AskUserQuestion", Multi: true}},
 		`{"hook_event_name":"Notification","notification_type":"permission_prompt"}`:                      {},
 		`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`:                            {Name: runtime.EvIdleReminder},
 		`{"hook_event_name":"StopFailure","error":"rate_limit"}`:                                          {Name: runtime.EvStopFailure},
 		`{"hook_event_name":"SessionEnd","session_id":"not-an-id","transcript_path":"relative"}`:          {Name: runtime.EvEnd},
 		`not json`: {},
 	} {
-		if got := (sessions{}).StateEvent(strings.NewReader(in)); got != want {
+		if got := (sessions{}).StateEvent(strings.NewReader(in)); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+// 0.2.2 (6.4): a permission request records what Claude Code passed the
+// hook: the command, path or URL, or the first question and its options
+// (spike S5's input), each one printable line, cut to its limit.
+func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
+	ev := func(tool, input string) *runtime.Request {
+		t.Helper()
+		in := `{"hook_event_name":"PermissionRequest","tool_name":"` + tool + `","tool_input":` + input + `}`
+		return (sessions{}).StateEvent(strings.NewReader(in)).Request
+	}
+	for _, tc := range []struct {
+		tool, input string
+		want        runtime.Request
+	}{
+		{"Bash", `{"command":"gh pr merge 42 --squash","description":"Merge it"}`, runtime.Request{Tool: "Bash", Summary: "gh pr merge 42 --squash"}},
+		{"Bash", `{"command":"echo a\nrm -rf x\u200b\u001b[2J"}`, runtime.Request{Tool: "Bash", Summary: "echo a⏎rm -rf x??[2J"}},
+		{"Edit", `{"file_path":"/w/a.go","old_string":"x","new_string":"y"}`, runtime.Request{Tool: "Edit", Summary: "/w/a.go"}},
+		{"Write", `{"file_path":"/w/b.md","content":"hi"}`, runtime.Request{Tool: "Write", Summary: "/w/b.md"}},
+		{"WebFetch", `{"url":"https://example.com/x","prompt":"read"}`, runtime.Request{Tool: "WebFetch", Summary: "https://example.com/x"}},
+		{"mcp__files__upload", `{"path": "/w/resume.pdf"}`, runtime.Request{Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/resume.pdf"}`}},
+		{"AskUserQuestion", `{"questions": [{"question": "Upload the test file to the signing site?", "header": "Upload", "options": [{"label": "Yes", "description": "Upload the test file to the signing site."}, {"label": "No", "description": "Do not upload the test file."}], "multiSelect": false}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "Upload the test file to the signing site?", Options: []string{"Yes", "No"}}},
+		{"AskUserQuestion", `{"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}], "multiSelect": true}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "Which?", Options: []string{"A", "B"}, Multi: true}},
+		{"AskUserQuestion", `{"questions": [{"question": "One?", "options": [{"label": "A"}]}, {"question": "Two?", "options": [{"label": "B"}]}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Multi: true}},
+		{"AskUserQuestion", `{"questions": [{"question": "Pick", "options": [{"label": "1"}, {"label": "2"}, {"label": "3"}, {"label": "4"}, {"label": "5"}, {"label": "6"}, {"label": "7"}]}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "Pick", Options: []string{"1", "2", "3", "4", "5", "6"}, Multi: true}},
+	} {
+		if got := ev(tc.tool, tc.input); got == nil || !reflect.DeepEqual(*got, tc.want) {
+			t.Errorf("%s %s: %+v", tc.tool, tc.input, got)
+		}
+	}
+	long := ev("Bash", `{"command":"`+strings.Repeat("a", 400)+`"}`).Summary
+	if n := len([]rune(long)); n != runtime.SummaryLimit+1 || !strings.HasSuffix(long, "…") {
+		t.Errorf("a long command: %d %q", n, long[len(long)-10:])
+	}
+	label := ev("AskUserQuestion", `{"questions": [{"question": "Q", "options": [{"label": "`+strings.Repeat("b", 100)+`"}, {"label": "No"}]}]}`).Options[0]
+	if n := len([]rune(label)); n != runtime.OptionLimit+1 {
+		t.Errorf("a long label: %d", n)
 	}
 }
 
@@ -73,7 +116,8 @@ func TestStateEvent(t *testing.T) {
 // the voice hint; each counts as ready, and a screen still starting
 // doesn't.
 func TestReadyKnowsEveryFooter(t *testing.T) {
-	for _, screen := range []string{"> \n  ? for shortcuts", "> \n  ⏵⏵ accept edits on (shift+tab to cycle)", "> \n  ⏸ plan mode on", "> \n  hold space to speak"} {
+	for _, screen := range []string{"> \n  ? for shortcuts", "> \n  ⏵⏵ accept edits on (shift+tab to cycle)", "> \n  ⏸ plan mode on", "> \n  hold space to speak",
+		"❯ \n  app | model Haiku 5.5 | effort low\n  ⏸ manual mode on · ← for agents"} {
 		if !(sessions{}).Ready(screen) {
 			t.Errorf("not ready: %q", screen)
 		}
@@ -133,20 +177,31 @@ func TestTheGuardsCommandFailsClosed(t *testing.T) {
 	}
 }
 
-// ShellCommand reads Claude Code's PreToolUse input: Bash's command, no
-// command for another tool, and an error for anything it can't read.
-func TestShellCommandReadsTheBashCall(t *testing.T) {
+// ShellCall reads Claude Code's PreToolUse input: Bash's command and the
+// permission mode, no command for another tool, and an error for anything
+// it can't read.
+func TestShellCallReadsTheBashCall(t *testing.T) {
 	ops := sessions{}
-	if c, shell, err := ops.ShellCommand(strings.NewReader(`{"tool_name":"Bash","tool_input":{"command":"ls -la"}}`)); c != "ls -la" || !shell || err != nil {
-		t.Errorf("Bash: %q %v %v", c, shell, err)
+	if c, err := ops.ShellCall(strings.NewReader(`{"tool_name":"Bash","permission_mode":"acceptEdits","tool_input":{"command":"ls -la"}}`)); c != (runtime.ShellCall{Command: "ls -la", Shell: true, Mode: "acceptEdits"}) || err != nil {
+		t.Errorf("Bash: %+v %v", c, err)
 	}
-	if _, shell, err := ops.ShellCommand(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/x"}}`)); shell || err != nil {
-		t.Errorf("Read: %v %v", shell, err)
+	if c, err := ops.ShellCall(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/x"}}`)); c.Shell || err != nil {
+		t.Errorf("Read: %+v %v", c, err)
 	}
 	for _, in := range []string{"", "[]", `{"tool_input":{"command":"ls"}}`, `{"tool_name":"Bash"}`, `{"tool_name":"Bash","tool_input":{"command":3}}`, strings.Repeat(" ", guardLimit+1)} {
-		if _, _, err := ops.ShellCommand(strings.NewReader(in)); err == nil {
+		if _, err := ops.ShellCall(strings.NewReader(in)); err == nil {
 			t.Errorf("read %.40q", in)
 		}
+	}
+}
+
+// 0.2.2 (6.6): the guard's ask is exactly one object, with only the event
+// name, ask and cadrei's text, and never allows.
+func TestTheGuardsAskIsOnlyAnAsk(t *testing.T) {
+	out := (sessions{}).Ask(`Cadrei: allow once? The engineer on my-app wants to run: gh pr merge 42 --squash`)
+	want := `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"Cadrei: allow once? The engineer on my-app wants to run: gh pr merge 42 --squash"}}` + "\n"
+	if string(out) != want {
+		t.Errorf("ask: %s", out)
 	}
 }
 
@@ -187,6 +242,60 @@ func TestTheNotifyHookIsTheOrchestratorsAndStaysQuiet(t *testing.T) {
 		out, err := exec.Command("/bin/sh", "-c", NotifyHook(bin)).Output()
 		if err != nil || len(out) != 0 {
 			t.Errorf("%s: %v, stdout %q", bin, err, out)
+		}
+	}
+}
+
+// 0.2.2 (6.6): the orchestrator's settings run the guard before each Bash
+// call. It lets the call go on when the program is gone (so an
+// uninstalled cadrei doesn't lock the user's chat), passes the guard's
+// ask on, and blocks when the guard fails.
+func TestTheOrchestratorsGuardFailsOpenOnlyWhenGone(t *testing.T) {
+	dir := t.TempDir()
+	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s struct {
+		Hooks map[string][]struct {
+			Matcher string
+			Hooks   []struct {
+				Command string
+				Timeout int
+			}
+		}
+	}
+	raw, _ := os.ReadFile(path)
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatal(err)
+	}
+	pre := s.Hooks["PreToolUse"]
+	if len(pre) != 1 || pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != OrchestratorGuardHook("/opt/cadrei/bin/cadrei") || pre[0].Hooks[0].Timeout != 10 {
+		t.Errorf("PreToolUse: %+v", pre)
+	}
+	stub := func(name, script string) string {
+		p := filepath.Join(dir, name)
+		if err := exec.Command("/bin/sh", "-c", `printf '%s' "$2" > "$1" && chmod 755 "$1"`, "sh", p, script).Run(); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	for bin, want := range map[string]struct {
+		code int
+		out  string
+	}{
+		filepath.Join(dir, "gone"):                                       {0, ""},
+		stub("asks", "#!/bin/sh\necho '{\"ask\":1}'\n"):                  {0, "{\"ask\":1}\n"},
+		stub("blocks", "#!/bin/sh\necho 'no' >&2\nexit 2\n"):             {2, ""},
+		stub("fails", "#!/bin/sh\necho 'unknown command' >&2\nexit 1\n"): {2, ""},
+	} {
+		out, err := exec.Command("/bin/sh", "-c", OrchestratorGuardHook(bin)).Output()
+		code := 0
+		if exit, ok := err.(*exec.ExitError); ok {
+			code = exit.ExitCode()
+		}
+		if code != want.code || string(out) != want.out {
+			t.Errorf("%s: exit %d, %q", filepath.Base(bin), code, out)
 		}
 	}
 }
