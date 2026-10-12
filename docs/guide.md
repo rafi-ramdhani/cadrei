@@ -58,7 +58,7 @@ The header names the version and the folder you're in, with a small figure besid
 | `o` | shows up when an archived setup is waiting: brings it back instead ([Bring back an archived setup](#bring-back-an-archived-setup)) |
 
 - **Your first crew is called `main`.** There's no name question. `cadrei new <name>` makes more later.
-- **Missing tools stop it.** If Claude Code, git or tmux 3.2 or newer is missing, the checks say how to install it, and nothing is changed. A Claude Code that isn't logged in doesn't stop it: Claude Code asks you to log in when it opens.
+- **Missing tools stop it.** If Claude Code, git or tmux 3.2 or newer is missing, the checks say how to install it, and nothing is changed. A Claude Code that isn't logged in doesn't stop it: the plan gets a login step, and before your orchestrator opens, the setup runs `claude auth login` (Claude Code's own login, which opens your browser) right in your terminal. If you cancel it, your crew is still made: log in with `claude auth login`, then run `cadrei` again.
 - **A repo with its own Claude Code settings** (`.claude/settings.json`, `.claude/settings.local.json` or `.mcp.json` at its top, or anything in a `.claude/skills`, `agents` or `commands` folder anywhere in it, outside what git ignores) isn't in the plan. Trusting it would let those settings run commands for your whole team, so press `a` only if you trust where the repo came from. Outside a git repo, there's no project line at all.
 - **No git name or email?** You get one line about it, once. `cadrei --check` shows how to set them.
 

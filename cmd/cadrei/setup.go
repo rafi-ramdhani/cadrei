@@ -138,6 +138,11 @@ func (e *env) checks(rt rtpkg.Runtime) bool {
 		add(markFail, p.Says(title), hint)
 	case p.Login == rtpkg.LoggedIn:
 		add(markDone, p.Says(title))
+	case p.Login == rtpkg.LoggedOut:
+		// One that ran before opens on its prompt, not its login screen,
+		// and would answer the orchestrator's first message with an error.
+		e.logIn = rt
+		add(markWarn, p.Says(title), "The setup logs you in before your orchestrator opens.")
 	default:
 		add(markWarn, p.Says(title))
 	}
@@ -293,6 +298,7 @@ func (e *env) newCrew(rt rtpkg.Runtime, name string) bool {
 			e.show("    ", dim("Your orchestrator opens there without "+title+" asking first."))
 		}
 		e.bullet("Link cadrei's instructions into " + title + " (" + unbroken(cadreis.Tilde(rt.Instructions().Path())) + ")")
+		e.loginItem()
 		e.bullet(tmuxItem)
 		e.show("    ", dim(tmuxWhy))
 		keys := "prq"
@@ -486,6 +492,7 @@ func (e *env) restoreCrew(rt rtpkg.Runtime, repo string) bool {
 	e.screen(bold("Here's the plan"))
 	e.bullet("Copy " + repo + " into " + unbroken(cadreis.Tilde(c.Path)))
 	e.bullet("Link cadrei's instructions into " + title + " (" + unbroken(cadreis.Tilde(rt.Instructions().Path())) + ")")
+	e.loginItem()
 	item, why := e.tmuxItem()
 	e.bullet(item)
 	e.show("    ", dim(why))
@@ -740,6 +747,7 @@ func (e *env) plugIn(rt rtpkg.Runtime, list []cadreis.Cadrei) bool {
 			e.bullet("Plug them back in, with " + list[def].Name + " as your default (press d to pick another)")
 		}
 		e.bullet("Link cadrei's instructions into " + title + " (" + unbroken(cadreis.Tilde(rt.Instructions().Path())) + ")")
+		e.loginItem()
 		e.bullet(openLine)
 		e.say("")
 		lead := "Press Enter to plug it back in."

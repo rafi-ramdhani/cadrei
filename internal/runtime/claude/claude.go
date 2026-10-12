@@ -37,7 +37,17 @@ func (Claude) ModelHint() string {
 }
 
 func (Claude) Help() runtime.InstallHelp {
-	return runtime.InstallHelp{Install: "brew install --cask claude-code", Reinstall: "brew reinstall --cask claude-code", URL: "https://claude.com/claude-code"}
+	return runtime.InstallHelp{Install: "brew install --cask claude-code", Reinstall: "brew reinstall --cask claude-code", URL: "https://claude.com/claude-code", Login: "claude auth login"}
+}
+
+// Login is claude auth login: it opens the browser, or takes a pasted
+// code, in the user's own terminal.
+func (c Claude) Login() (runtime.Command, error) {
+	in, err := c.Detect()
+	if err != nil {
+		return runtime.Command{}, err
+	}
+	return runtime.Command{Argv: []string{in.Path, "auth", "login"}, Unset: sessionVars}, nil
 }
 
 func (Claude) Caps() runtime.Capabilities {

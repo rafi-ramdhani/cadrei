@@ -650,6 +650,7 @@ func (e *env) restoreArchive(rt runtime.Runtime, a cadreis.Archive) bool {
 	if m.Machine.EveryChatHook == "on" {
 		e.bullet("Turn the every-chat hook back on (it was on before)")
 	}
+	e.loginItem()
 	if m.Machine.Orchestrator == cadreis.OpensInTmux {
 		e.bullet("Open your orchestrator in tmux, as before")
 	} else {

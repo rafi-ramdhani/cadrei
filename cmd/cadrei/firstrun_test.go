@@ -204,8 +204,76 @@ func TestFirstRunChecksTheTools(t *testing.T) {
 	}
 	home := firstMachine(t)
 	stub(t, home, "claude", "case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo '{\"loggedIn\": false}'; exit 1;; esac\nexit 0\n")
-	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(out, "! Claude Code 2.1.300, not logged in yet. It'll ask you when it opens.") {
+	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(flat(out), "! Claude Code 2.1.300, not logged in yet The setup logs you in before your orchestrator opens.") {
 		t.Errorf("not logged in: %d\n%s", code, out)
+	}
+}
+
+// loggedOut makes the claude stub logged out, with a login that ends
+// with exit and notes each call in home/calls.
+func loggedOut(t *testing.T, home string, exit int) {
+	t.Helper()
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+
+		"case \"$1 $2\" in\n"+
+		"  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n"+
+		"  'auth status') echo '{\"loggedIn\": false}'; exit 1 ;;\n"+
+		"  'auth login') echo login >> \""+home+"/calls\"; exit "+strconv.Itoa(exit)+" ;;\n"+
+		"esac\n"+
+		"echo orchestrator >> \""+home+"/calls\"\n")
+}
+
+// A Claude Code that ran before but is logged out now opens on its prompt,
+// so the orchestrator's first message would only get "Not logged in" back.
+// The first run logs the user in first, in this terminal, and opens the
+// orchestrator once that went through.
+func TestFirstRunLogsInBeforeTheOrchestratorOpens(t *testing.T) {
+	home := firstMachine(t)
+	loggedOut(t, home, 0)
+	code, out, errOut := callIn("p\n")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"- Log in to Claude Code (it opens your browser)",
+		"Now log in to Claude Code.",
+		"+ Logged in to Claude Code",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if got := readFile(t, home+"/calls"); got != "login\norchestrator\n" {
+		t.Errorf("calls:\n%s", got)
+	}
+	// The checks are one block: no blank line inside it.
+	checks := out[strings.Index(out, "Checking your setup"):strings.Index(out, "Here's the plan")]
+	if strings.Count(checks, "\n\n") != 1 || !strings.HasSuffix(checks, "\n\n  ") {
+		t.Errorf("a blank line in the checks:\n%q", checks)
+	}
+}
+
+// A login that fails or is cancelled (Ctrl-C ends it with 130) leaves the
+// crew made and says how to log in and go on. The orchestrator doesn't
+// open: it would only answer "Not logged in".
+func TestFirstRunSaysHowToLogInWhenTheLoginFails(t *testing.T) {
+	for _, exit := range []int{1, 130} {
+		t.Run(strconv.Itoa(exit), func(t *testing.T) {
+			home := firstMachine(t)
+			loggedOut(t, home, exit)
+			code, out, errOut := callIn("p\n")
+			all := flat(out + errOut)
+			if code != 1 ||
+				!strings.Contains(all, "not logged in to Claude Code yet, so your orchestrator didn't open.") ||
+				!strings.Contains(all, "Your crew is ready. Log in with claude auth login, then run cadrei.") {
+				t.Errorf("exit %d:\n%s%s", code, out, errOut)
+			}
+			if got := readFile(t, home+"/calls"); got != "login\n" {
+				t.Errorf("calls:\n%s", got)
+			}
+			if _, err := os.Stat(home + "/.cadrei/main"); err != nil {
+				t.Errorf("no crew: %v", err)
+			}
+		})
 	}
 }
 
@@ -221,7 +289,7 @@ func TestTheFullCheckSaysWhatTheFirstRunSays(t *testing.T) {
 	}
 	for _, tc := range []struct{ script, want string }{
 		{"case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo '{\"loggedIn\": false}'; exit 1;; esac\nexit 0\n",
-			"! Claude Code 2.1.300, not logged in yet. It'll ask you when it opens."},
+			"! Claude Code 2.1.300, not logged in yet Log in with claude auth login."},
 		{"case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo 'unknown command'; exit 2;; esac\nexit 0\n",
 			"! Claude Code 2.1.300. Couldn't check your login. If it asks, log in."},
 		{"exit 1\n", "Claude Code is installed but won't start. Reinstall it with brew reinstall"},

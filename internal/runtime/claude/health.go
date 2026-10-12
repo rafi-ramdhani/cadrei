@@ -102,6 +102,8 @@ func (c Claude) Health(full bool, cadreiDirs []string) []runtime.Problem {
 		switch p := c.Probe(); {
 		case !p.Runs:
 			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fatal: true, Fix: "Reinstall it with " + help.Reinstall})
+		case p.Login == runtime.LoggedOut:
+			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fix: "Log in with " + help.Login + "."})
 		case p.Login != runtime.LoggedIn:
 			out = append(out, runtime.Problem{What: p.Says(c.Title())})
 		}

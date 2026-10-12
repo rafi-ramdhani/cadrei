@@ -395,29 +395,8 @@ func lookalike(dir string) string {
 // the lock while it runs, and returns its exit code. release ends the
 // start guard once the lock is written.
 func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) int {
-	cmd := exec.Command(c.Argv[0], c.Argv[1:]...)
-	cmd.Dir = c.Dir
-	cmd.Env = append(unsetIn(withoutMember(os.Environ()), c.Unset), c.Env...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = e.stdin, e.stdout, e.stderr
-	// The terminal comes back as it was, even if the child dies raw.
-	if f, ok := e.stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		if saved, err := term.GetState(int(f.Fd())); err == nil {
-			defer term.Restore(int(f.Fd()), saved)
-		}
-	}
-	// Ctrl-C and the like are for Claude Code: cadrei catches them and only
-	// waits. Caught, not ignored: an ignored signal stays ignored in the
-	// child across exec.
-	quiet := make(chan os.Signal, 1)
-	signal.Notify(quiet, syscall.SIGINT, syscall.SIGQUIT)
-	go func() {
-		for range quiet {
-		}
-	}()
-	defer func() {
-		signal.Stop(quiet)
-		close(quiet)
-	}()
+	cmd := e.child(c)
+	defer e.lendTerminal()()
 	if err := cmd.Start(); err != nil {
 		return e.failWith("Your orchestrator didn't start: " + strings.TrimSuffix(err.Error(), ".") + ".")
 	}
@@ -457,6 +436,40 @@ func (e *env) runTerminal(c runtime.Command, lockPath string, release func()) in
 		return e.fail("%s", err)
 	}
 	return 0
+}
+
+// child builds a runtime command run in this terminal.
+func (e *env) child(c runtime.Command) *exec.Cmd {
+	cmd := exec.Command(c.Argv[0], c.Argv[1:]...)
+	cmd.Dir = c.Dir
+	cmd.Env = append(unsetIn(withoutMember(os.Environ()), c.Unset), c.Env...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = e.stdin, e.stdout, e.stderr
+	return cmd
+}
+
+// lendTerminal hands the terminal to a child until back is called. The
+// terminal comes back as it was, even if the child dies raw. Ctrl-C and
+// the like are for the child: cadrei catches them and only waits. Caught,
+// not ignored: an ignored signal stays ignored in the child across exec.
+func (e *env) lendTerminal() (back func()) {
+	var saved *term.State
+	f, ok := e.stdin.(*os.File)
+	if ok && term.IsTerminal(int(f.Fd())) {
+		saved, _ = term.GetState(int(f.Fd()))
+	}
+	quiet := make(chan os.Signal, 1)
+	signal.Notify(quiet, syscall.SIGINT, syscall.SIGQUIT)
+	go func() {
+		for range quiet {
+		}
+	}()
+	return func() {
+		signal.Stop(quiet)
+		close(quiet)
+		if saved != nil {
+			term.Restore(int(f.Fd()), saved)
+		}
+	}
 }
 
 // waitHeld is how long a screen that waits on the user must hold before

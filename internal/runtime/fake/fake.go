@@ -65,6 +65,11 @@ func (Fake) Caps() runtime.Capabilities {
 
 func (Fake) Help() runtime.InstallHelp { return runtime.InstallHelp{URL: "https://example.com/fake"} }
 
+// Login: the fake runtime is always logged in.
+func (Fake) Login() (runtime.Command, error) {
+	return runtime.Command{}, errors.New("the fake runtime has no login")
+}
+
 func (Fake) Probe() runtime.Probe {
 	return runtime.Probe{Installed: true, Runs: true, Version: "1.0.0", Login: runtime.LoggedIn}
 }

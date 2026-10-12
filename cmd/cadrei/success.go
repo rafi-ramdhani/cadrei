@@ -46,6 +46,9 @@ func resumes(rt rtpkg.Runtime, c cadreis.Cadrei) bool {
 // one, the last line, and, with wait, a key before tmux takes the screen,
 // so a warning gets read. It reports whether the orchestrator opens.
 func (e *env) finish(tmux bool, last, notice string, wait bool) bool {
+	if e.logIn != nil && !e.logInFirst() {
+		return false
+	}
 	if notice != "" {
 		e.say("")
 		e.screen(notice)
@@ -61,6 +64,42 @@ func (e *env) finish(tmux bool, last, notice string, wait bool) bool {
 		key, ok := e.readKey(e.wrapScreen("Press Enter to open your orchestrator."), "q")
 		return ok && key == keyEnter
 	}
+	return true
+}
+
+// loginItem is the plan's login line, when the checks found the user
+// logged out.
+func (e *env) loginItem() {
+	if e.logIn != nil {
+		e.bullet("Log in to " + e.logIn.Title() + " (it opens your browser)")
+	}
+}
+
+// logInFirst runs the runtime's own login in this terminal, before the
+// orchestrator opens: on a runtime that ran before, the orchestrator's
+// first message would only get a "not logged in" error back. It reports
+// whether the login went through.
+func (e *env) logInFirst() bool {
+	rt := e.logIn
+	e.logIn = nil
+	title := rt.Title()
+	e.say("")
+	e.screen("Now log in to " + title + ".")
+	e.say("")
+	c, err := rt.Login()
+	if err == nil {
+		back := e.lendTerminal()
+		err = e.child(c).Run()
+		back()
+	}
+	if err != nil {
+		e.say("")
+		e.failWith("You're not logged in to "+title+" yet, so your orchestrator didn't open.",
+			"Your crew is ready. Log in with "+cmd(rt.Help().Login)+", then run "+cmd("cadrei")+".")
+		return false
+	}
+	e.say("")
+	e.work(markDone, "Logged in to "+title)
 	return true
 }
 

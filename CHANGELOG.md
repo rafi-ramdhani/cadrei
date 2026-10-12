@@ -14,6 +14,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ### Fixed
 
+- **A first run that isn't logged in to Claude Code**: if Claude Code was set up before but is logged out now, it skipped its login screen, so your orchestrator's first message only got "Not logged in" back and never greeted you. Now the setup logs you in first, with `claude auth login` right in your terminal (it opens your browser), and opens your orchestrator once that's done. If the login doesn't go through, your crew is still made, and cadrei says to log in and run `cadrei` again. `cadrei --check` says how to log in too.
 - The first run's checks no longer show a stray blank line under git.
 
 ## 0.2.1 - 2026-10-11
