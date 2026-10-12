@@ -12,6 +12,10 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 - The README's demo GIF is a third of its old size, so it loads faster on a phone.
 
+### Fixed
+
+- The first run's checks no longer show a stray blank line under git.
+
 ## 0.2.1 - 2026-10-11
 
 Your folder of teams, members and settings is now called your **crew** everywhere (the folder layout still says cadrei: `~/.cadrei/<name>`, `cadrei.conf`).

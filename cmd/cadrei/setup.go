@@ -142,7 +142,11 @@ func (e *env) checks(rt rtpkg.Runtime) bool {
 		add(markWarn, p.Says(title))
 	}
 	for _, c := range []toolCheck{gitCheck(), tmuxCheck()} {
-		add(c.mark, c.what, c.fix)
+		var fix []string
+		if c.fix != "" {
+			fix = append(fix, c.fix)
+		}
+		add(c.mark, c.what, fix...)
 	}
 	if e.hookPlaced(framework.Binary()) != nil {
 		e.shown = true // the guard and the health check don't repeat it
