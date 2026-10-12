@@ -260,8 +260,9 @@ func TestTheOrchestratorsGuardFailsOpenOnlyWhenGone(t *testing.T) {
 		Hooks map[string][]struct {
 			Matcher string
 			Hooks   []struct {
-				Command string
-				Timeout int
+				Command   string
+				Timeout   int
+				OnFailure string
 			}
 		}
 	}
@@ -269,8 +270,9 @@ func TestTheOrchestratorsGuardFailsOpenOnlyWhenGone(t *testing.T) {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		t.Fatal(err)
 	}
+	// A guard that times out blocks the call (review of 0.2.2, H1).
 	pre := s.Hooks["PreToolUse"]
-	if len(pre) != 1 || pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != OrchestratorGuardHook("/opt/cadrei/bin/cadrei") || pre[0].Hooks[0].Timeout != 10 {
+	if len(pre) != 1 || pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 || pre[0].Hooks[0].Command != OrchestratorGuardHook("/opt/cadrei/bin/cadrei") || pre[0].Hooks[0].Timeout != 10 || pre[0].Hooks[0].OnFailure != "block" {
 		t.Errorf("PreToolUse: %+v", pre)
 	}
 	stub := func(name, script string) string {
