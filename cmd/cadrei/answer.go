@@ -356,7 +356,9 @@ var optionLine = regexp.MustCompile(`^\s*(?:[❯›>]\s*)?([1-9])\.\s+(.*?)\s*$`
 // screenPrompt reads the prompt at the bottom of a member's screen: the
 // numbered options above its last "Esc to cancel" line, numbered from 1,
 // and the prompt's box above them, back to the solid rule it starts
-// after, which holds its header, the command or the question.
+// after, which holds its header, the command or the question. A prompt
+// taller than the pane has its options, and no box: its top isn't on the
+// screen (the runtime draws on the whole screen, with nothing kept above).
 func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
 	foot := -1
@@ -411,7 +413,7 @@ func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 	for i := first - 1; ; i-- {
 		switch {
 		case i < 0:
-			return nil, nil, false
+			return opts, nil, false
 		case solidRule(lines[i]):
 			return opts, box, true
 		}
@@ -536,9 +538,22 @@ func sameLabel(screen, recorded string) bool {
 // labeled exactly Yes (never one that allows more, or changes the mode);
 // no is the option labeled exactly No, else Escape.
 func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
-	lost := "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything. Answer it in its window: " + cmd(w.attach())
+	return keyOn(screen, w, choice, cmd)
+}
+
+// keyOn is keyFor, with c to format a command (cmd for the screen, plain
+// text for the guard).
+func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (key, why string) {
+	window := " Answer it in its window: " + c(w.attach())
 	if !promptShows(screen, w) {
-		return "", lost
+		opts, box, _ := screenPrompt(screen)
+		switch {
+		case len(opts) > 0 && box == nil:
+			return "", "That prompt is taller than the " + w.role + "'s window, so cadrei can't see it whole." + window
+		case (w.req.Tool == "Write" || w.req.Tool == "Edit") && len(box) > 1 && strings.HasPrefix(strings.TrimSpace(box[1]), "…"):
+			return "", "The " + w.role + "'s window shows that file's path cut short, so cadrei can't check it." + window
+		}
+		return "", "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything." + window
 	}
 	opts, _, _ := screenPrompt(screen)
 	if w.req.Kind == session.ForQuestion {
@@ -556,7 +571,7 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 	if choice == "no" {
 		return "Escape", ""
 	}
-	return "", "This prompt has no plain \"Yes\", only choices that would allow it for good, so answer it in its window: " + cmd(w.attach())
+	return "", "This prompt has no plain \"Yes\", only choices that would allow it for good, so answer it in its window: " + c(w.attach())
 }
 
 // underOwnOrchestrator reports whether this run may answer for crew r: the

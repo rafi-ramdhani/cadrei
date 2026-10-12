@@ -1,0 +1,24 @@
+❯ Use the Write tool to create the file
+  /Users/me/e2e/a-folder-with-a-rather-long-na
+  me-for-wrapping/and-a-second-long-folder-name/notes.txt containing the single
+  word hello. Nothing else.
+
+⏺ Grammar
+
+  Your message was already correct, so no changes are needed.
+
+⏺ Write(~/Documents/cadre-uv-e2e/a-folder-with-a-rather-long-name-fo…/notes.txt)
+
+────────────────────────────────────────────────────────────────────────────────
+ Create file
+ …-with-a-rather-long-name-for-wrapping/and-a-second-long-folder-name/notes.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hello
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create notes.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common file
+      commands) for this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

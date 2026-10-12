@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -38,7 +39,53 @@ func answerCrew(t *testing.T) (c, eng, writer string) {
 		}
 		return st.Request.Code
 	}
+	// Each member's window shows what it waits on, as Claude Code draws
+	// it. TestTheGuardLooksAtTheScreenFirst reads real windows.
+	read := guardScreen
+	guardScreen = func(w *waitingOn) string { return drawn(t, w.req) }
+	t.Cleanup(func() { guardScreen = read })
 	return c, code("work-dev-my-app-engineer"), code("work-docs-writer")
+}
+
+// drawn is a member's screen showing req's prompt, from the live ones: a
+// command as the Bash prompt frames it, or a question with Yes and No.
+func drawn(t *testing.T, req *session.Request) string {
+	t.Helper()
+	if req.Kind == session.ForQuestion {
+		return strings.Replace(screenFixture(t, "question-live.txt"), "\nUpload resume.pdf to the signing site?\n", "\n"+req.Question+"\n", 1)
+	}
+	return strings.Replace(screenFixture(t, "bash-prompt-live.txt"), "╌\n mkdir e2e-yes\n", "╌\n │ "+strings.ReplaceAll(req.Summary, "⏎", "\n │ ")+"\n", 1)
+}
+
+// Re-review round 2 (M7): the guard looks at the member's window before
+// it asks. A prompt taller than the window can't be checked whole, so
+// it's refused with no ask, and so is one that isn't there. One that's
+// there is asked about.
+func TestTheGuardLooksAtTheScreenFirst(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "tall-live.txt")
+	var lines []string
+	for i := 1; i <= 30; i++ {
+		lines = append(lines, "line "+strconv.Itoa(i))
+	}
+	command, _ := json.Marshal("cat > tall.txt <<'EOF'\n" + strings.Join(lines, "\n") + "\nEOF\nwc -l tall.txt")
+	tall := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":`+string(command)+`}}`)
+	if n, out, errOut := guardAs(t, c, "", "default", "cadrei answer "+tall+" yes"); n != 2 || out != "" ||
+		strings.TrimSpace(errOut) != "That prompt is taller than the engineer's window, so cadrei can't see it whole. Answer it in its window: cadrei attach dev" {
+		t.Errorf("tall: %d %q %q", n, out, errOut)
+	}
+	promptMember(t, home, "reviewer", "bash-prompt-live.txt")
+	shown := request(t, c, "reviewer", mkdirRequest)
+	if n, out, errOut := guardAs(t, c, "", "default", "cadrei answer "+shown+" yes"); n != 0 || errOut != "" || !strings.Contains(out, `"permissionDecision":"ask"`) {
+		t.Errorf("shown: %d %q %q", n, out, errOut)
+	}
+	lost := request(t, c, "reviewer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}`)
+	if n, out, errOut := guardAs(t, c, "", "default", "cadrei answer "+lost+" yes"); n != 2 || out != "" || !strings.Contains(errOut, "I couldn't find that prompt on the reviewer's screen") {
+		t.Errorf("lost: %d %q %q", n, out, errOut)
+	}
 }
 
 // guardAs runs cadrei hook guard on a Bash call in mode, as a member

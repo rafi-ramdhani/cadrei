@@ -90,9 +90,18 @@ func runHookGuard(e *env) int {
 	if why := checkChoice(w, code, choice, plain); why != "" {
 		return guardRefuses(e, why)
 	}
+	// The prompt must be on the member's screen now, as cadrei answer
+	// checks it again after the user's yes: a yes for one it can't find
+	// would come to nothing.
+	if _, why := keyOn(guardScreen(w), w, choice, plain); why != "" {
+		return guardRefuses(e, why)
+	}
 	e.stdout.Write(rt.Sessions().Ask(askReason(w, choice)))
 	return 0
 }
+
+// guardScreen is what the member's window shows, as the guard reads it.
+var guardScreen = func(w *waitingOn) string { return session.Default().Screen(w.session, w.window) }
 
 // isThisCadrei reports whether path is this program, or the cadrei the
 // PATH finds.

@@ -14,5 +14,7 @@ Claude Code's permission prompts and questions, as `tmux capture-pane -p` shows 
 - `mcp-live.txt`: an MCP tool's prompt (a stand-in server): it shows the tool's input as `path: "resume.pdf"`, not the JSON cadrei records, so it's left to the window too.
 - `plan-live.txt`: a plan approval (ExitPlanMode): no plain "Yes" and no "Esc to cancel" line.
 - `para-live.txt`: a member's Bash prompt for a command with a blank line in it (a heredoc), framed with │.
+- `tall-live.txt`: a Bash prompt taller than the member's 80x24 window, captured in the round 2 run: the whole window, with no solid rule. Claude Code draws on the alternate screen, so the prompt's top isn't kept anywhere tmux can read. Read as it is, not with a rule above it.
+- `longpath-live.txt`: a Write prompt for a file outside the member's folder whose path is longer than the window: Claude Code cuts its start, so the line under "Create file" starts with `…`. The path the user typed is written `/Users/me/e2e`.
 
 Claude Code's own em dashes in these screens are written as hyphens.

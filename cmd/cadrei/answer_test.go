@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,35 @@ func screenFixture(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return "⏺ Here's the plan:\n  1. Yes\n  2. No\n\n" + "────────────────────────────────────────\n" + string(raw)
+}
+
+// tallCommand is the command in tall-live.txt, as the state hook records
+// it: 34 lines.
+var tallCommand = func() string {
+	lines := []string{"cat > tall.txt <<'EOF'"}
+	for i := 1; i <= 30; i++ {
+		lines = append(lines, fmt.Sprintf("line %d", i))
+	}
+	return strings.Join(append(lines, "EOF", "wc -l tall.txt"), "⏎")
+}()
+
+// longPath is the Write in longpath-live.txt: a file outside the
+// member's folder, with a path too long for the window.
+func longPath() *waitingOn {
+	w := approval("/Users/me/e2e/a-folder-with-a-rather-long-name-for-wrapping/and-a-second-long-folder-name/notes.txt")
+	w.req.Tool, w.dir = "Write", "/Users/me/e2e/app"
+	return w
+}
+
+// rawFixture is a prompt screen from testdata/answer as it is: the whole
+// window.
+func rawFixture(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(answerFixtures, name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
 }
 
 // approval and question are records as the state hook writes them.
@@ -72,6 +102,9 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		{screenFixture(t, "para-live.txt"), approval("cat > para.txt <<'EOF'⏎line one⏎⏎line two⏎EOF⏎cat para.txt"), "yes", "1"},
 		// A long command wraps onto framed lines.
 		{screenFixture(t, "wrapped-live.txt"), approval("rm <work>/notes.txt && ls -la <work>/notes.txt 2>&1"), "no", "4"},
+		// Re-review round 2 (M7): a prompt taller than 24 lines, with its
+		// top on the screen (a taller window).
+		{drawn(t, approval(tallCommand).req), approval(tallCommand), "yes", "1"},
 		{ask, question("Upload the test file to the signing site?", "Yes", "No"), "1", "1"},
 		{ask, question("Upload the test file to the signing site?", "Yes", "No"), "2", "2"},
 		// A long label recorded cut short still matches.
@@ -106,6 +139,13 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		"no prompt":            {"⏺ Done.\n\n❯ \n? for shortcuts\n", approval("mkdir e2e-yes"), "yes", lost},
 		"options gone":         {strings.Replace(bash, " Esc to cancel · Tab to amend\n", "", 1), approval("mkdir e2e-yes"), "yes", lost},
 		"a gap in the numbers": {strings.Replace(bash, "   2. Yes, and always", "   5. Yes, and always", 1), approval("mkdir e2e-yes"), "yes", lost},
+		// Re-review round 2 (M7): a prompt taller than the window, as an
+		// 80x24 one shows it (its top is gone, with nothing kept above),
+		// and a path the window shows cut short at its start.
+		"taller than its window": {rawFixture(t, "tall-live.txt"), approval(tallCommand), "yes",
+			"That prompt is taller than the engineer's window, so cadrei can't see it whole. Answer it in its window: cadrei attach dev"},
+		"a path cut short": {screenFixture(t, "longpath-live.txt"), longPath(), "yes",
+			"The engineer's window shows that file's path cut short, so cadrei can't check it. Answer it in its window: cadrei attach dev"},
 		"no plain Yes": {strings.Replace(bash, " ❯ 1. Yes\n", " ❯ 1. Yes, and don't ask again for mkdir commands\n", 1), approval("mkdir e2e-yes"), "yes",
 			"This prompt has no plain \"Yes\", only choices that would allow it for good, so answer it in its window: cadrei attach dev"},
 	} {
