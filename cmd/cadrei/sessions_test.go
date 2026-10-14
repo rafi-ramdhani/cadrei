@@ -69,7 +69,7 @@ func TestUpLsStop(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		args = readFile(t, home+"/args-work-dev-engineer")
 	}
-	if !strings.Contains(args, "--settings\n"+home+"/.cadrei/work/.claude/build/member-settings.") {
+	if !strings.Contains(args, "--settings\n"+home+"/.cadrei/work/.claude/build/member-settings") {
 		t.Errorf("the member got no settings copy:\n%s", args)
 	}
 	// Acceptance 14: none of the orchestrator's extras.

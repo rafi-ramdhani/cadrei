@@ -154,8 +154,8 @@ func MemberMemory(workDir, name string) string {
 }
 
 // ownMemory writes a copy of the member's grants with its own memory
-// folder (MemberMemory), beside them, named and written as Export names
-// and writes the grants' copy, and returns it.
+// folder (MemberMemory), beside them, named by its text and read-only as
+// the grants' copy is, and returns it.
 func ownMemory(s runtime.LaunchSpec) (string, error) {
 	raw, err := os.ReadFile(s.Grants)
 	if err != nil {
@@ -168,7 +168,7 @@ func ownMemory(s runtime.LaunchSpec) (string, error) {
 	root.Set("autoMemoryDirectory", jsonx.String(MemberMemory(s.WorkDir, s.Name)))
 	text := jsonx.Format(root, "  ")
 	sum := sha256.Sum256(text)
-	path := filepath.Join(filepath.Dir(s.Grants), "member-settings."+hex.EncodeToString(sum[:])[:16]+".json")
+	path := filepath.Join(filepath.Dir(s.Grants), "member-settings-own."+hex.EncodeToString(sum[:])[:16]+".json")
 	return path, fsx.WriteFile(path, text, 0o400)
 }
 
