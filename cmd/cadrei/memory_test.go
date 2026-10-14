@@ -416,8 +416,64 @@ func TestTheOtherMachineKeepsItsMemory(t *testing.T) {
 	if readFile(t, d+"/user_role.md") != "The user is a developer.\n" {
 		t.Error("the note didn't come back")
 	}
-	// Once back, never again.
+	// Once back, never again: not even after the user cleared the notes
+	// (L11), here or on the machine that opted out.
 	if out := must(t); strings.Contains(out, "Brought") {
 		t.Errorf("again:\n%s", out)
 	}
+	os.RemoveAll(d)
+	if out := must(t); strings.Contains(out, "Brought") {
+		t.Errorf("cleared notes came back:\n%s", out)
+	}
+	if _, err := os.Stat(d + "/user_role.md"); err == nil {
+		t.Error("a cleared note came back")
+	}
+	t.Chdir(c)
+	mine := rt.Memory().Folders(c)[0]
+	os.RemoveAll(mine)
+	if out := must(t); strings.Contains(out, "Brought") {
+		t.Errorf("the machine that opted out got its notes back:\n%s", out)
+	}
+}
+
+// cadrei pull: no backup, a member, and a note both machines changed,
+// kept whole on each side and named.
+func TestCadreiPull(t *testing.T) {
+	home, c, _ := memoryCrew(t)
+	must(t)
+	must(t) // the memory is committed
+	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(flat(errOut), "work has no backup to pull from.") {
+		t.Errorf("no backup: %d %q", code, errOut)
+	}
+	// The crew's pre-push hook names the test binary, so the pushes here
+	// skip it: they only set the test up.
+	bare := filepath.Join(t.TempDir(), "backup.git")
+	other := filepath.Join(t.TempDir(), "other")
+	for _, args := range [][]string{{"init", "-q", "--bare", bare}, {"-C", c, "remote", "add", "origin", bare}, {"-C", c, "push", "-q", "--no-verify", "-u", "origin", "HEAD"},
+		{"clone", "-q", bare, other}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	os.WriteFile(other+"/.memory/user_role.md", []byte("The user is a designer.\n"), 0o644)
+	for _, args := range [][]string{{"-C", other, "commit", "-qam", "other"}, {"-C", other, "push", "-q", "--no-verify"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	os.WriteFile(c+"/.memory/user_role.md", []byte("The user is a manager.\n"), 0o644)
+	exec.Command("git", "-C", c, "commit", "-qam", "here").Run()
+	out := must(t, "pull")
+	if !strings.Contains(flat(out), "Both machines changed one of your orchestrator's notes, so both are kept: the other machine's under its name, and this one's as user_role.from-") ||
+		!strings.Contains(flat(out), "+ Pulled work's backup") {
+		t.Errorf("the pull:\n%s", out)
+	}
+	if readFile(t, c+"/.memory/user_role.md") != "The user is a designer.\n" || memory.Count(c) != 2 {
+		t.Error("a side was lost")
+	}
+	t.Setenv("CADREI_MEMBER", "work-dev-engineer")
+	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(errOut, "team members can't pull the crew's backup.") {
+		t.Errorf("a member: %d %q", code, errOut)
+	}
+	_ = home
 }

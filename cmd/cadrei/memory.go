@@ -72,11 +72,18 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 	if _, err := os.Stat(memory.Dir(crew)); err != nil {
 		memory.RemovePointer(folders[0])
 		// A removal that wasn't committed yet (git was busy).
-		memory.CommitRemoval(crew, memoryLeft)
+		if memory.CommitRemoval(crew, memoryLeft) {
+			cadreis.SetMemoryRestored(c, memory.LastRemoval(crew))
+		}
 		// Another machine kept the memory on its own and pushed the
-		// removal: this one brings the notes back from the history.
+		// removal: this one brings the notes back from the history, once
+		// per removal, so notes the user cleared later stay cleared.
 		if holds, err := memory.Holds(folders[0]); err == nil && !holds {
-			if res, err := memory.FromHistory(crew, folders[0], memory.Machine()); err != nil {
+			res, removal, err := memory.FromHistory(crew, folders[0], memory.Machine(), cadreis.MemoryRestored(c))
+			if removal != "" && err == nil {
+				cadreis.SetMemoryRestored(c, removal)
+			}
+			if err != nil {
 				e.warn("", "Your orchestrator's memory couldn't come back from your crew's history: "+strings.TrimSuffix(err.Error(), ".")+".",
 					"It's still in the history: ask your orchestrator to bring it back.")
 			} else if res.Moved > 0 {
@@ -90,9 +97,48 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 			"It stays in your crew (.memory/) for now, and your orchestrator uses its own folder.")
 		return
 	}
-	memory.CommitRemoval(crew, memoryLeft)
+	// This machine's own removal is never brought back here.
+	if memory.CommitRemoval(crew, memoryLeft) {
+		cadreis.SetMemoryRestored(c, memory.LastRemoval(crew))
+	}
 	cadreis.SetMemoryNotice(c, "")
 	e.note("", markDone, "Your orchestrator's memory is back on this machine only. Earlier backups still have it in their history.")
+}
+
+// runPull is cadrei pull: git pull --rebase --autostash in the crew, which
+// never makes a merged note of the orchestrator's memory (memory.Pull),
+// and aborts on a clash anywhere else, naming the files.
+func runPull(e *env) int {
+	if len(e.args) > 0 {
+		return e.failWith("Use " + cmd("cadrei pull") + ", with nothing after it.")
+	}
+	if e.member("pull the crew's backup") {
+		return 1
+	}
+	r, ok := e.resolve()
+	if !ok {
+		return 1
+	}
+	crew := paths.Real(r.Path)
+	if !memory.HasRemote(crew) {
+		return e.failWith(r.Name+" has no backup to pull from.", "Ask your orchestrator to back up your crew first.")
+	}
+	got, err := memory.Pull(crew, memory.Machine())
+	switch {
+	case err != nil:
+		return e.failWith("Couldn't pull "+r.Name+"'s backup: "+strings.TrimSuffix(err.Error(), ".")+".", "Nothing was changed.")
+	case len(got.Conflicts) > 0:
+		return e.failWith(andList(got.Conflicts)+" changed here and on another machine, so nothing was pulled.",
+			"Nothing was lost: each machine keeps its own. Pick which to keep, then run "+cmd("cadrei pull")+" again.")
+	}
+	for _, k := range got.Kept {
+		e.note("", markWarn, "Both machines changed one of your orchestrator's notes, so both are kept: the other machine's under its name, and this one's as "+k+".")
+	}
+	for _, f := range got.Restored {
+		e.note("", markWarn, f+" was deleted on one machine and changed on the other, so the changed one is kept.")
+	}
+	e.note("", markDone, "Pulled "+r.Name+"'s backup")
+	return 0
 }
 
 // memoryFolders are the runtime's own memory folders for the crew, the

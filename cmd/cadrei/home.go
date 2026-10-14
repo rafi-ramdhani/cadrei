@@ -97,7 +97,7 @@ func (e *env) resolve() (*cadreis.Resolved, bool) {
 // still work there.
 var changesCrew = map[string]bool{
 	"": true, "--tmux": true, "up": true, "allow add": true, "allow remove": true, "project add": true, "project link": true,
-	"project unlink": true, "project sync": true, "project trust": true, "tmux": true,
+	"project unlink": true, "project sync": true, "project trust": true, "tmux": true, "pull": true,
 }
 
 // inMember reports whether cadrei runs in a member's session: CADREI_MEMBER,

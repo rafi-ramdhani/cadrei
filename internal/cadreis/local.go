@@ -153,6 +153,34 @@ func SetMemoryNotice(c Cadrei, when string) error {
 	return writeLocal(path, m)
 }
 
+// MemoryRestored is the commit cadrei last brought the orchestrator's
+// notes back from (memory.FromHistory), or "".
+func MemoryRestored(c Cadrei) string {
+	m, err := readLocal(filepath.Join(LocalDir(c.Path), "state.json"))
+	if err != nil {
+		return ""
+	}
+	var commit string
+	json.Unmarshal(m["memory_restored"], &commit)
+	return commit
+}
+
+// SetMemoryRestored records that commit.
+func SetMemoryRestored(c Cadrei, commit string) error {
+	l, err := lockLocal(c)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	path := filepath.Join(LocalDir(c.Path), "state.json")
+	m, err := readLocal(path)
+	if err != nil {
+		return err
+	}
+	m["memory_restored"], _ = json.Marshal(commit)
+	return writeLocal(path, m)
+}
+
 // RecordServer notes the tmux server (its socket's path) a session of the
 // crew was started on, so the commands that move or delete crews look
 // for its teams there whatever server the environment names then.
