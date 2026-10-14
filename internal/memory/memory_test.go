@@ -313,7 +313,7 @@ func TestAttributes(t *testing.T) {
 	if added, _ := Attributes(crew); added {
 		t.Error("added twice")
 	}
-	if got := read(t, filepath.Join(crew, ".gitattributes")); got != "*.png binary\n# The orchestrator's memory: two machines' lines are both kept.\n/.memory/** merge=union\n" {
+	if got := read(t, filepath.Join(crew, ".gitattributes")); got != "*.png binary\n# The orchestrator's memory index: two machines' lines are both kept.\n/.memory/MEMORY.md merge=union\n" {
 		t.Errorf("%q", got)
 	}
 }
@@ -406,12 +406,43 @@ func TestUnpushed(t *testing.T) {
 	}
 }
 
+// note is a note in Claude Code's own format.
+func note(name, description, modified, body string) string {
+	return "---\nname: " + name + "\ndescription: " + description + "\nmetadata:\n  type: user\n  modified: " + modified + "\n---\n\n" + body + "\n"
+}
+
+// oneFrontMatter fails unless text is one note: one front matter, at
+// the top, with no key twice.
+func oneFrontMatter(t *testing.T, label, text string) {
+	t.Helper()
+	if strings.Count(text, "\n---\n")+boolInt(strings.HasPrefix(text, "---\n")) != 2 || strings.Contains(text, "<<<<<<<") {
+		t.Errorf("%s isn't one note:\n%s", label, text)
+		return
+	}
+	head, _, _ := strings.Cut(strings.TrimPrefix(text, "---\n"), "\n---\n")
+	seen := map[string]bool{}
+	for _, l := range strings.Split(head, "\n") {
+		key, _, _ := strings.Cut(l, ":")
+		if seen[key] {
+			t.Errorf("%s has %q twice:\n%s", label, key, text)
+		}
+		seen[key] = true
+	}
+}
+
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 // Two machines upgrade a crew from before 0.2.2, each from notes of its
-// own, with one note both named the same: after the notice session (no
-// pull, so nothing untracked stands in the way), each commits, pulls and
-// pushes, and both end with every note, both sides of the shared one,
-// and no conflict. A note both rewrite later merges the same way. A clash
-// outside the memory still stops the pull, and aborting keeps each side.
+// own, with one note both named the same, then change one note on both
+// and delete another on one while the other changes it. Pull never makes
+// a merged note: a note both changed is kept whole on each side, the
+// other machine's under its name and this one's beside it, and a changed
+// note beats a deletion. A clash outside the memory aborts the pull.
 func TestTwoMachines(t *testing.T) {
 	bare := t.TempDir()
 	gitIn(t, bare, "init", "-q", "--bare", "-b", "main")
@@ -422,12 +453,11 @@ func TestTwoMachines(t *testing.T) {
 	gitIn(t, filepath.Dir(b), "clone", "-q", bare, b)
 	gitIn(t, b, "config", "user.name", "T")
 	gitIn(t, b, "config", "user.email", "t@example.invalid")
-	// Each machine's own notes in Claude Code's folder.
 	upgrade := func(crew, machine, text, own string) {
 		d := filepath.Join(t.TempDir(), "memory")
 		write(t, filepath.Join(d, Index), "- [Role](user_role.md): "+text+"\n- ["+own+"]("+own+".md): "+own+"\n")
-		write(t, filepath.Join(d, "user_role.md"), "---\nname: user_role\n---\n"+text+"\n")
-		write(t, filepath.Join(d, own+".md"), own+"\n")
+		write(t, filepath.Join(d, "user_role.md"), note("user_role", text, "2026-10-14T10:00:00Z", text+"."))
+		write(t, filepath.Join(d, own+".md"), note(own, own, "2026-10-14T10:00:00Z", own+"."))
 		if _, err := MoveIn(crew, []string{d}, machine); err != nil {
 			t.Fatal(err)
 		}
@@ -435,64 +465,103 @@ func TestTwoMachines(t *testing.T) {
 	}
 	upgrade(a, "a", "the user designs", "tone")
 	upgrade(b, "b", "the user codes", "status")
-	// The notice session on B: its notes are untracked, and a pull would
-	// stop on them once A pushed, which is why the orchestrator skips it.
 	if !Commit(a, "Update the orchestrator's memory") {
 		t.Fatal("a didn't commit")
 	}
 	gitIn(t, a, "push", "-q")
-	if err := exec.Command("git", "-C", b, "pull", "-q", "--rebase", "--autostash").Run(); err == nil {
+	// B's notice session: its notes are untracked, and a pull would stop
+	// on them, which is why the orchestrator skips it.
+	if _, err := Pull(b, "b"); err == nil {
 		t.Error("a pull over untracked notes went through; the notice session's skip isn't needed")
 	}
-	// B's next session: committed, then the pull and the push.
+	if Busy(b) != "" {
+		t.Error("a stopped pull left git busy")
+	}
 	if !Commit(b, "Update the orchestrator's memory") {
 		t.Fatal("b didn't commit")
 	}
-	gitIn(t, b, "pull", "-q", "--rebase", "--autostash")
+	pulled, err := Pull(b, "b")
+	if err != nil || !slices.Equal(pulled.Kept, []string{"user_role.from-b.md"}) {
+		t.Fatalf("b's pull: %+v %v", pulled, err)
+	}
 	gitIn(t, b, "push", "-q")
-	gitIn(t, a, "pull", "-q", "--rebase", "--autostash")
+	if _, err := Pull(a, "a"); err != nil {
+		t.Fatal(err)
+	}
 	for _, dir := range []string{a, b} {
-		if got := names(t, Dir(dir)); !slices.Equal(got, []string{Index, "status.md", "tone.md", "user_role.md"}) {
+		if got := names(t, Dir(dir)); !slices.Equal(got, []string{Index, "status.md", "tone.md", "user_role.from-b.md", "user_role.md"}) {
 			t.Errorf("%s: %v", dir, got)
 		}
-		role, idx := read(t, filepath.Join(Dir(dir), "user_role.md")), read(t, filepath.Join(Dir(dir), Index))
-		for _, want := range []string{"the user designs", "the user codes"} {
-			if !strings.Contains(role, want) || !strings.Contains(idx, want) {
-				t.Errorf("%s lost %q:\n%s\n%s", dir, want, role, idx)
+		if got := read(t, filepath.Join(Dir(dir), "user_role.md")); !strings.Contains(got, "the user designs") || strings.Contains(got, "the user codes") {
+			t.Errorf("%s: the other machine's note: %q", dir, got)
+		}
+		if got := read(t, filepath.Join(Dir(dir), "user_role.from-b.md")); !strings.Contains(got, "the user codes") || strings.Contains(got, "designs") {
+			t.Errorf("%s: b's own note: %q", dir, got)
+		}
+		for _, f := range []string{"user_role.md", "user_role.from-b.md", "tone.md", "status.md"} {
+			oneFrontMatter(t, dir+"/"+f, read(t, filepath.Join(Dir(dir), f)))
+		}
+		idx := read(t, filepath.Join(Dir(dir), Index))
+		for _, l := range []string{"(user_role.md)", "(user_role.from-b.md)", "(tone.md)", "(status.md)"} {
+			if !strings.Contains(idx, l) || strings.Contains(idx, "<<<<<<<") {
+				t.Errorf("%s index lacks %s:\n%s", dir, l, idx)
 			}
 		}
-		if strings.Contains(role+idx, "<<<<<<<") {
-			t.Errorf("%s has conflict marks", dir)
-		}
 	}
-	// The same note, rewritten on both.
-	write(t, filepath.Join(Dir(a), "tone.md"), "short answers\n")
+	// One note changed on both, with Claude Code's own fields; another
+	// deleted on b while a changes it.
+	write(t, filepath.Join(Dir(a), "tone.md"), note("tone", "short answers", "2026-10-14T11:00:00Z", "Short answers."))
+	write(t, filepath.Join(Dir(a), "status.md"), note("status", "status, updated", "2026-10-14T11:00:00Z", "Updated."))
 	Commit(a, "Update the orchestrator's memory")
 	gitIn(t, a, "push", "-q")
-	write(t, filepath.Join(Dir(b), "tone.md"), "long answers\n")
+	write(t, filepath.Join(Dir(b), "tone.md"), note("tone", "long answers", "2026-10-14T11:05:00Z", "Long answers."))
+	os.Remove(filepath.Join(Dir(b), "status.md"))
 	Commit(b, "Update the orchestrator's memory")
-	gitIn(t, b, "pull", "-q", "--rebase", "--autostash")
-	if tone := read(t, filepath.Join(Dir(b), "tone.md")); !strings.Contains(tone, "short answers") || !strings.Contains(tone, "long answers") {
-		t.Errorf("a note both rewrote: %q", tone)
+	pulled, err = Pull(b, "b")
+	if err != nil || !slices.Equal(pulled.Kept, []string{"tone.from-b.md"}) || !slices.Equal(pulled.Restored, []string{"status.md"}) {
+		t.Fatalf("b's second pull: %+v %v", pulled, err)
 	}
-	// A clash outside the memory still stops.
+	oneFrontMatter(t, "tone.md", read(t, filepath.Join(Dir(b), "tone.md")))
+	oneFrontMatter(t, "tone.from-b.md", read(t, filepath.Join(Dir(b), "tone.from-b.md")))
+	if !strings.Contains(read(t, filepath.Join(Dir(b), "tone.from-b.md")), "Long answers.") || !strings.Contains(read(t, filepath.Join(Dir(b), "status.md")), "Updated.") {
+		t.Error("a side was lost")
+	}
+	// A clash outside the memory aborts the pull, and nothing changes.
 	gitIn(t, b, "push", "-q")
-	gitIn(t, a, "pull", "-q", "--rebase")
+	Pull(a, "a")
 	write(t, filepath.Join(a, "playbook.md"), "from a\n")
 	gitIn(t, a, "commit", "-qam", "a")
 	gitIn(t, a, "push", "-q")
 	write(t, filepath.Join(b, "playbook.md"), "from b\n")
 	gitIn(t, b, "commit", "-qam", "b")
-	if err := exec.Command("git", "-C", b, "pull", "-q", "--rebase", "--autostash").Run(); err == nil {
-		t.Fatal("the rebase went through a clash")
+	before := gitIn(t, b, "rev-parse", "HEAD")
+	pulled, err = Pull(b, "b")
+	if err != nil || !slices.Equal(pulled.Conflicts, []string{"playbook.md"}) {
+		t.Errorf("a clash outside the memory: %+v %v", pulled, err)
 	}
-	write(t, filepath.Join(Dir(b), "new.md"), "new\n")
-	if Busy(b) == "" || Commit(b, "x") {
-		t.Error("a commit during the stopped rebase")
+	if Busy(b) != "" || gitIn(t, b, "rev-parse", "HEAD") != before || read(t, filepath.Join(b, "playbook.md")) != "from b\n" {
+		t.Error("the aborted pull changed something")
 	}
-	gitIn(t, b, "rebase", "--abort")
-	if read(t, filepath.Join(b, "playbook.md")) != "from b\n" {
-		t.Error("b lost its own change")
+}
+
+// The line a build before the review wrote, which merged notes too, is
+// replaced, in the file and in the memory's first commit.
+func TestTheOldUnionLineGoes(t *testing.T) {
+	crew := repo(t)
+	write(t, filepath.Join(crew, ".gitattributes"), "*.png binary\n# The orchestrator's memory: two machines' lines are both kept.\n/.memory/** merge=union\n")
+	gitIn(t, crew, "add", ".gitattributes")
+	gitIn(t, crew, "commit", "-qm", "the old line")
+	if added, err := Attributes(crew); !added || err != nil {
+		t.Fatal(added, err)
+	}
+	want := "*.png binary\n" + attributesText
+	if got := read(t, filepath.Join(crew, ".gitattributes")); got != want {
+		t.Errorf("the file: %q", got)
+	}
+	write(t, filepath.Join(Dir(crew), "a.md"), "a\n")
+	Commit(crew, "Update the orchestrator's memory")
+	if got := gitIn(t, crew, "show", "HEAD:.gitattributes"); got != strings.TrimSpace(want) {
+		t.Errorf("committed: %q", got)
 	}
 }
 
@@ -508,15 +577,24 @@ func TestFromHistory(t *testing.T) {
 	CommitRemoval(crew, "Keep the orchestrator's memory on this machine")
 	d := filepath.Join(t.TempDir(), "memory")
 	write(t, filepath.Join(d, Index), Pointer(crew))
-	res, err := FromHistory(crew, d, "m")
-	if err != nil || res.Moved != 1 {
-		t.Fatalf("%+v %v", res, err)
+	res, removal, err := FromHistory(crew, d, "m", "")
+	if err != nil || res.Moved != 1 || removal == "" {
+		t.Fatalf("%+v %q %v", res, removal, err)
 	}
 	if got := names(t, d); !slices.Equal(got, []string{Index, "role.md"}) || read(t, filepath.Join(d, Index)) != "- [Role](role.md): the user\n" {
 		t.Errorf("D %v", got)
 	}
-	if res, err := FromHistory(repo(t), t.TempDir(), "m"); err != nil || res.Moved != 0 {
+	if res, _, err := FromHistory(repo(t), t.TempDir(), "m", ""); err != nil || res.Moved != 0 {
 		t.Errorf("no removal: %+v %v", res, err)
+	}
+	// L11: the same removal again, after the user cleared the notes:
+	// done, so they stay cleared.
+	os.RemoveAll(d)
+	if res, again, err := FromHistory(crew, d, "m", removal); err != nil || res.Moved != 0 || again != "" {
+		t.Errorf("brought back twice: %+v %q %v", res, again, err)
+	}
+	if _, err := os.Stat(d); err == nil {
+		t.Error("the cleared folder came back")
 	}
 }
 
@@ -542,6 +620,15 @@ func TestCommitTakesOnlyTheUnionLine(t *testing.T) {
 	if got := gitIn(t, crew, "status", "--porcelain"); got != "M .gitattributes" {
 		t.Errorf("status: %q", got)
 	}
+	// An edit the user staged in .gitattributes stays staged.
+	write(t, filepath.Join(crew, ".gitattributes"), read(t, filepath.Join(crew, ".gitattributes"))+"*.zip binary\n")
+	gitIn(t, crew, "add", ".gitattributes")
+	write(t, filepath.Join(Dir(crew), "staged.md"), "s\n")
+	Commit(crew, "Update the orchestrator's memory")
+	if got := gitIn(t, crew, "diff", "--cached", "--name-only"); got != ".gitattributes" {
+		t.Errorf("the user's staged edit: %q", got)
+	}
+	gitIn(t, crew, "reset", "-q", "--", ".gitattributes")
 	// With the line committed, a later memory commit leaves the file alone.
 	write(t, filepath.Join(Dir(crew), "b.md"), "b\n")
 	Commit(crew, "Update the orchestrator's memory")

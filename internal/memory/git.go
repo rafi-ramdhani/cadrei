@@ -1,24 +1,44 @@
 package memory
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/gitx"
 )
 
-// UnionLine is the .gitattributes line that merges two machines' notes,
-// the index and each note, by keeping both sides' lines: a note both
-// machines wrote never stops a pull, and nothing of either is lost.
-const UnionLine = "/" + Folder + "/** merge=union"
+// UnionLine is the .gitattributes line that merges two machines' indexes
+// by keeping both sides' lines. Notes aren't merged at all: Pull keeps
+// both versions of a note both machines changed, whole.
+const UnionLine = "/" + Folder + "/" + Index + " merge=union"
+
+// oldUnion is the line a build of 0.2.2 before its review wrote, which
+// merged notes too: Attributes and the memory commit replace it.
+var oldUnion = []string{"# The orchestrator's memory: two machines' lines are both kept.", "/" + Folder + "/** merge=union"}
+
+// withoutOldUnion is text without oldUnion's lines.
+func withoutOldUnion(text string) string {
+	var keep []string
+	for _, l := range strings.SplitAfter(text, "\n") {
+		if t := strings.TrimSpace(l); t == oldUnion[0] || t == oldUnion[1] {
+			continue
+		}
+		keep = append(keep, l)
+	}
+	return strings.Join(keep, "")
+}
 
 // attributesText is what Attributes adds.
-const attributesText = "# The orchestrator's memory: two machines' lines are both kept.\n" + UnionLine + "\n"
+const attributesText = "# The orchestrator's memory index: two machines' lines are both kept.\n" + UnionLine + "\n"
 
 // Attributes adds UnionLine to the crew's .gitattributes when it isn't
 // there. It reports whether it added it. The line is committed with the
@@ -29,10 +49,13 @@ func Attributes(crew string) (bool, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
+	text := withoutOldUnion(string(raw))
 	if hasUnionLine(file) {
-		return false, nil
+		if text == string(raw) {
+			return false, nil
+		}
+		return true, fsx.WriteFile(file, []byte(text), 0o644)
 	}
-	text := string(raw)
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -100,6 +123,9 @@ func commit(crew, msg string, attributes bool) bool {
 		return false
 	}
 	head, _ := git(crew, "rev-parse", "-q", "--verify", "HEAD")
+	// An edit the user staged in .gitattributes stays staged.
+	_, unstaged := git(crew, "diff", "--cached", "--quiet", "--", ".gitattributes")
+	userStaged := unstaged != nil
 	index := filepath.Join(dir, "cadrei-memory-index")
 	defer os.Remove(index)
 	in := func(stdin string, args ...string) (string, error) {
@@ -126,11 +152,17 @@ func commit(crew, msg string, attributes bool) bool {
 		if head == "" || err != nil {
 			was = ""
 		}
-		if !strings.Contains("\n"+was+"\n", "\n"+UnionLine+"\n") {
-			if was != "" {
+		if fixed := strings.TrimRight(withoutOldUnion(was+"\n"), "\n"); fixed != was || !strings.Contains("\n"+was+"\n", "\n"+UnionLine+"\n") {
+			was = fixed
+			if !strings.Contains("\n"+was+"\n", "\n"+UnionLine+"\n") {
+				if was != "" {
+					was += "\n"
+				}
+				was += attributesText
+			} else {
 				was += "\n"
 			}
-			blob, err := in(was+attributesText, "hash-object", "-w", "--stdin")
+			blob, err := in(was, "hash-object", "-w", "--stdin")
 			if err != nil {
 				return false
 			}
@@ -163,8 +195,13 @@ func commit(crew, msg string, attributes bool) bool {
 	if _, err := git(crew, ref...); err != nil {
 		return false
 	}
-	// The user's index catches up on those two paths only.
-	git(crew, "reset", "-q", "--", Folder, ".gitattributes")
+	// The user's index catches up on the memory, and on .gitattributes
+	// unless they staged an edit there.
+	reset := []string{"reset", "-q", "--", Folder}
+	if !userStaged {
+		reset = append(reset, ".gitattributes")
+	}
+	git(crew, reset...)
 	return true
 }
 
@@ -182,19 +219,22 @@ func hasUnionLine(file string) bool {
 // FromHistory brings back into to the notes the crew's memory folder held
 // in git just before the last commit that removed some: another machine
 // kept its memory on its own machine and pushed the removal. It merges
-// them as MoveOut does.
-func FromHistory(crew, to, machine string) (Result, error) {
-	removal, err := git(crew, "log", "-1", "--format=%H", "--diff-filter=D", "--", Folder)
-	if err != nil || removal == "" {
-		return Result{}, err
+// them as MoveOut does. It returns that commit, and does nothing when
+// it's done, the commit cadrei last brought notes back from: each
+// removal is brought back once, so notes the user cleared later stay
+// cleared.
+func FromHistory(crew, to, machine, done string) (Result, string, error) {
+	removal := LastRemoval(crew)
+	if removal == "" || removal == done {
+		return Result{}, "", nil
 	}
 	list, err := git(crew, "ls-tree", "-r", removal+"^", "--", Folder+"/")
 	if err != nil {
-		return Result{}, err
+		return Result{}, "", err
 	}
 	tmp, err := os.MkdirTemp("", "cadrei-memory-")
 	if err != nil {
-		return Result{}, err
+		return Result{}, "", err
 	}
 	defer os.RemoveAll(tmp)
 	for _, line := range strings.Split(list, "\n") {
@@ -206,14 +246,24 @@ func FromHistory(crew, to, machine string) (Result, error) {
 		}
 		data, err := gitx.Reading(crew, "cat-file", "blob", f[2]).Output()
 		if err != nil {
-			return Result{}, err
+			return Result{}, "", err
 		}
 		if err := os.WriteFile(filepath.Join(tmp, filepath.Base(path)), data, 0o600); err != nil {
-			return Result{}, err
+			return Result{}, "", err
 		}
 	}
 	res, _, err := merge(tmp, to, machine)
-	return res, err
+	return res, removal, err
+}
+
+// LastRemoval is the last commit that removed notes from the crew's
+// memory folder, or "".
+func LastRemoval(crew string) string {
+	out, err := git(crew, "log", "-1", "--format=%H", "--diff-filter=D", "--", Folder)
+	if err != nil {
+		return ""
+	}
+	return out
 }
 
 // tracked reports whether git tracks anything at p in the crew.
@@ -244,4 +294,160 @@ func Unpushed(crew string) int {
 func HasRemote(crew string) bool {
 	out, err := git(crew, "remote")
 	return err == nil && out != ""
+}
+
+// A Pulled is what Pull did.
+type Pulled struct {
+	// Kept are the notes both machines changed: the other machine's
+	// version under the note's name, and this one's beside it under these
+	// names, as the move in keeps a clash.
+	Kept []string
+	// Restored are notes one machine deleted and the other changed: the
+	// changed one is kept.
+	Restored []string
+	// Conflicts are files outside the memory that clash. The pull was
+	// aborted, and nothing changed.
+	Conflicts []string
+}
+
+// pullLimit is how long the pull from the backup may take.
+const pullLimit = 60 * time.Second
+
+// Pull brings in what the crew's other machines pushed: git pull --rebase
+// --autostash, with the crew's hooks off. A clash inside the memory never
+// produces a merged note: when both machines changed a note, the other
+// machine's version keeps its name and this one's is kept whole beside it
+// (<name>.from-<machine>.md, with its index line), and when one deleted a
+// note the other changed, the changed one stays. A clash in any other file
+// aborts the pull, so nothing changes, and names the files.
+func Pull(crew, machine string) (Pulled, error) {
+	var out Pulled
+	if why := Busy(crew); why != "" {
+		return out, fmt.Errorf("git is busy in the crew (%s)", why)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), pullLimit)
+	defer cancel()
+	pinned := gitx.Reading(crew, "pull", "-q", "--rebase", "--autostash")
+	c := exec.CommandContext(ctx, pinned.Path, pinned.Args[1:]...)
+	c.Env = append(pinned.Env, "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+	text, err := c.CombinedOutput()
+	if ctx.Err() != nil {
+		return out, fmt.Errorf("the pull took longer than %d seconds", int(pullLimit.Seconds()))
+	}
+	// A rebase that stopped: each stop is settled, or the whole pull is
+	// aborted. Never more stops than commits it can replay.
+	for i := 0; err != nil && rebasing(crew) && i < 1000; i++ {
+		files, ferr := git(crew, "diff", "--name-only", "--diff-filter=U")
+		if ferr != nil {
+			break
+		}
+		var clash []string
+		for _, f := range strings.Split(files, "\n") {
+			if f != "" && !strings.HasPrefix(f, Folder+"/") {
+				clash = append(clash, f)
+			}
+		}
+		if len(clash) > 0 || files == "" {
+			git(crew, "rebase", "--abort")
+			out.Conflicts = clash
+			if len(clash) == 0 {
+				return out, errors.New(firstLine(string(text)))
+			}
+			return out, nil
+		}
+		for _, f := range strings.Split(files, "\n") {
+			if err := settle(crew, f, machine, &out); err != nil {
+				git(crew, "rebase", "--abort")
+				return Pulled{}, err
+			}
+		}
+		cont := gitx.Reading(crew, "rebase", "--continue")
+		cont.Env = append(cont.Env, "GIT_EDITOR=true")
+		text, err = cont.CombinedOutput()
+	}
+	if err != nil {
+		if rebasing(crew) {
+			git(crew, "rebase", "--abort")
+		}
+		return out, errors.New(firstLine(string(text)))
+	}
+	return out, nil
+}
+
+// rebasing reports whether a rebase is under way in the crew.
+func rebasing(crew string) bool {
+	dir := gitDir(crew)
+	for _, f := range []string{"rebase-merge", "rebase-apply"} {
+		if _, err := os.Lstat(filepath.Join(dir, f)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// settle resolves one clashing file of the memory, as Pull says. In a
+// rebase, stage 2 is the other machine's (the branch being rebased onto)
+// and stage 3 this machine's own commit being replayed.
+func settle(crew, file, machine string, out *Pulled) error {
+	theirs, _ := gitx.Reading(crew, "show", ":2:"+file).Output()
+	_, theirsErr := git(crew, "cat-file", "-e", ":2:"+file)
+	ours, _ := gitx.Reading(crew, "show", ":3:"+file).Output()
+	_, oursErr := git(crew, "cat-file", "-e", ":3:"+file)
+	path := filepath.Join(crew, file)
+	switch {
+	case theirsErr == nil && oursErr == nil && filepath.Base(file) == Index:
+		// Both indexes, whole: union keeps every line of each.
+		next, _ := mergeIndex(theirs, ours, nil, machine)
+		if err := fsx.WriteFile(path, next, 0o644); err != nil {
+			return err
+		}
+	case theirsErr == nil && oursErr == nil:
+		if err := fsx.WriteFile(path, theirs, 0o644); err != nil {
+			return err
+		}
+		name, same, err := freeName(filepath.Dir(path), filepath.Base(file), machine, ours)
+		if err != nil {
+			return err
+		}
+		if !same {
+			if err := fsx.WriteFile(filepath.Join(filepath.Dir(path), name), ours, 0o644); err != nil {
+				return err
+			}
+		}
+		index := filepath.Join(filepath.Dir(path), Index)
+		have, _ := os.ReadFile(index)
+		if next, changed := mergeIndex(have, nil, map[string]string{filepath.Base(file): name}, machine); changed {
+			if err := fsx.WriteFile(index, next, 0o644); err != nil {
+				return err
+			}
+		}
+		add := []string{"add", "--", file, filepath.Join(Folder, name)}
+		if _, err := os.Stat(index); err == nil {
+			add = append(add, filepath.Join(Folder, Index))
+		}
+		if _, err := git(crew, add...); err != nil {
+			return err
+		}
+		out.Kept = append(out.Kept, name)
+		return nil
+	case theirsErr == nil:
+		// This machine deleted it, the other changed it: keep the change.
+		if err := fsx.WriteFile(path, theirs, 0o644); err != nil {
+			return err
+		}
+		out.Restored = append(out.Restored, filepath.Base(file))
+	default:
+		// The other machine deleted it, this one changed it.
+		if err := fsx.WriteFile(path, ours, 0o644); err != nil {
+			return err
+		}
+		out.Restored = append(out.Restored, filepath.Base(file))
+	}
+	_, err := git(crew, "add", "--", file)
+	return err
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	return strings.TrimPrefix(strings.TrimSpace(line), "fatal: ")
 }
