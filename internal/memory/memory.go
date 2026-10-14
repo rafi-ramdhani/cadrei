@@ -37,6 +37,33 @@ func Pointer(crew string) string {
 
 var pointerRule = regexp.MustCompile(`^- This crew's orchestrator memory is in (.+)/\.memory \(cadrei keeps it there\)\. Read (.+)/\.memory/MEMORY\.md for the index\.\n$`)
 
+// pointerLine is a pointer's line, for any crew, among an index's lines.
+var pointerLine = regexp.MustCompile(`^- This crew's orchestrator memory is in .+/\.memory \(cadrei keeps it there\)\. Read .+/\.memory/MEMORY\.md for the index\.$`)
+
+// withoutPointer is an index without cadrei's pointer lines, which Claude
+// Code can write notes' lines under: nil when nothing else is left.
+func withoutPointer(data []byte) []byte {
+	if IsPointer(data) {
+		return nil
+	}
+	var keep []string
+	found := false
+	for _, l := range strings.SplitAfter(string(data), "\n") {
+		if pointerLine.MatchString(strings.TrimRight(l, "\n")) {
+			found = true
+			continue
+		}
+		keep = append(keep, l)
+	}
+	if !found {
+		return data
+	}
+	if strings.TrimSpace(strings.Join(keep, "")) == "" {
+		return nil
+	}
+	return []byte(strings.Join(keep, ""))
+}
+
 // IsPointer reports whether data is exactly a pointer cadrei wrote.
 func IsPointer(data []byte) bool {
 	m := pointerRule.FindSubmatch(data)
@@ -69,9 +96,7 @@ func entries(dir string) (files []string, index []byte, err error) {
 			if err != nil {
 				return nil, nil, err
 			}
-			if !IsPointer(data) {
-				index = data
-			}
+			index = withoutPointer(data)
 			continue
 		}
 		files = append(files, en.Name())
@@ -95,24 +120,28 @@ func Count(crew string) int {
 // merge copies the notes in from into to, which it makes when it must. A
 // note to lacks is copied; one with the same name and the same text is
 // skipped; one with the same name and other text is copied beside it as
-// <name>.from-<machine>.md. The index gets from's lines it lacks, with
-// links to renamed notes renamed. Every copy is read back before merge
-// returns, and from is left as it was.
-func merge(from, to, machine string) (Result, error) {
-	var res Result
+// <name>.from-<machine>.md. The index gets from's lines it lacks (never a
+// pointer's), with links to renamed notes renamed. Every copy is read
+// back before merge returns, and from is left as it was. taken is each
+// file of from it dealt with, as it read it, for clear.
+func merge(from, to, machine string) (res Result, taken map[string][]byte, err error) {
+	taken = map[string][]byte{}
 	files, index, err := entries(from)
 	if err != nil {
-		return res, err
+		return res, nil, err
 	}
 	if len(files) == 0 && index == nil {
-		return res, nil
+		return res, nil, nil
+	}
+	if raw, err := os.ReadFile(filepath.Join(from, Index)); err == nil {
+		taken[Index] = raw
 	}
 	have, haveIndex, err := entries(to)
 	if err != nil {
-		return res, err
+		return res, nil, err
 	}
 	if err := os.MkdirAll(to, 0o700); err != nil {
-		return res, err
+		return res, nil, err
 	}
 	present := map[string]bool{}
 	for _, f := range have {
@@ -123,19 +152,20 @@ func merge(from, to, machine string) (Result, error) {
 	for _, name := range files {
 		data, err := os.ReadFile(filepath.Join(from, name))
 		if err != nil {
-			return res, err
+			return res, nil, err
 		}
+		taken[name] = data
 		target := name
 		if present[name] {
 			same, err := sameText(filepath.Join(to, name), data)
 			if err != nil {
-				return res, err
+				return res, nil, err
 			}
 			if same {
 				continue
 			}
 			if target, same, err = freeName(to, name, machine, data); err != nil {
-				return res, err
+				return res, nil, err
 			}
 			renamed[name] = target
 			res.Copies = append(res.Copies, target)
@@ -144,23 +174,23 @@ func merge(from, to, machine string) (Result, error) {
 			}
 		}
 		if err := fsx.WriteFile(filepath.Join(to, target), data, 0o644); err != nil {
-			return res, err
+			return res, nil, err
 		}
 		written[target] = data
 		res.Moved++
 	}
 	if next, changed := mergeIndex(haveIndex, index, renamed, machine); changed {
 		if err := fsx.WriteFile(filepath.Join(to, Index), next, 0o644); err != nil {
-			return res, err
+			return res, nil, err
 		}
 		written[Index] = next
 	}
 	for name, data := range written {
 		if same, err := sameText(filepath.Join(to, name), data); err != nil || !same {
-			return res, fmt.Errorf("%s didn't read back as it was written", filepath.Join(to, name))
+			return res, nil, fmt.Errorf("%s didn't read back as it was written", filepath.Join(to, name))
 		}
 	}
-	return res, nil
+	return res, taken, nil
 }
 
 // freeName is the name a clashing note is copied under: <name>.from-
@@ -237,18 +267,15 @@ func mergeIndex(have, from []byte, renamed map[string]string, machine string) ([
 	return []byte(text + strings.Join(add, "\n") + "\n"), true
 }
 
-// clear removes a memory folder's files, which merge copied and read
-// back, and the folder when that empties it.
-func clear(dir string) error {
-	files, index, err := entries(dir)
-	if err != nil {
-		return err
-	}
-	if index != nil {
-		files = append(files, Index)
-	}
-	for _, f := range files {
-		if err := os.Remove(filepath.Join(dir, f)); err != nil {
+// clear removes the files merge took from dir, each only while it still
+// holds what merge copied (a note saved or changed meanwhile stays, for
+// the next move), and dir when that empties it.
+func clear(dir string, taken map[string][]byte) error {
+	for name, data := range taken {
+		if same, err := sameText(filepath.Join(dir, name), data); err != nil || !same {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
 			return err
 		}
 	}
@@ -264,18 +291,25 @@ func clear(dir string) error {
 func MoveIn(crew string, from []string, machine string) (Result, error) {
 	var res Result
 	seen := map[string]bool{}
+	// Every folder is merged before any is cleared: a stop on one leaves
+	// them all as they were.
+	var dirs []string
+	var takes []map[string][]byte
 	for _, d := range from {
 		if seen[paths.Real(d)] {
 			continue
 		}
 		seen[paths.Real(d)] = true
-		r, err := merge(d, Dir(crew), machine)
+		r, taken, err := merge(d, Dir(crew), machine)
 		res.Moved += r.Moved
 		res.Copies = append(res.Copies, r.Copies...)
 		if err != nil {
 			return res, err
 		}
-		if err := clear(d); err != nil {
+		dirs, takes = append(dirs, d), append(takes, taken)
+	}
+	for i, d := range dirs {
+		if err := clear(d, takes[i]); err != nil {
 			return res, err
 		}
 	}
@@ -314,11 +348,11 @@ func MoveOut(crew, to, machine string) (Result, error) {
 			os.Remove(filepath.Join(to, Index))
 		}
 	}
-	res, err := merge(Dir(crew), to, machine)
+	res, taken, err := merge(Dir(crew), to, machine)
 	if err != nil {
 		return res, err
 	}
-	return res, clear(Dir(crew))
+	return res, clear(Dir(crew), taken)
 }
 
 // RemovePointer removes the pointer in dir, when it is exactly cadrei's,

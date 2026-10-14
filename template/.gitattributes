@@ -1,2 +1,2 @@
-# The orchestrator's memory index: two machines' lines are both kept.
-/.memory/MEMORY.md merge=union
+# The orchestrator's memory: two machines' lines are both kept.
+/.memory/** merge=union

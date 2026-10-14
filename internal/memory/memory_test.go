@@ -313,7 +313,7 @@ func TestAttributes(t *testing.T) {
 	if added, _ := Attributes(crew); added {
 		t.Error("added twice")
 	}
-	if got := read(t, filepath.Join(crew, ".gitattributes")); got != "*.png binary\n# The orchestrator's memory index: two machines' lines are both kept.\n/.memory/MEMORY.md merge=union\n" {
+	if got := read(t, filepath.Join(crew, ".gitattributes")); got != "*.png binary\n# The orchestrator's memory: two machines' lines are both kept.\n/.memory/** merge=union\n" {
 		t.Errorf("%q", got)
 	}
 }
@@ -406,60 +406,204 @@ func TestUnpushed(t *testing.T) {
 	}
 }
 
-// Two machines: each saves a fact, and both are kept, the index by the
-// union merge. When both rewrite the same fact, the rebase stops.
+// Two machines upgrade a crew from before 0.2.2, each from notes of its
+// own, with one note both named the same: after the notice session (no
+// pull, so nothing untracked stands in the way), each commits, pulls and
+// pushes, and both end with every note, both sides of the shared one,
+// and no conflict. A note both rewrite later merges the same way. A clash
+// outside the memory still stops the pull, and aborting keeps each side.
 func TestTwoMachines(t *testing.T) {
 	bare := t.TempDir()
 	gitIn(t, bare, "init", "-q", "--bare", "-b", "main")
 	a := repo(t)
-	Attributes(a)
-	write(t, filepath.Join(Dir(a), Index), "- [Role](role.md): the user\n")
-	write(t, filepath.Join(Dir(a), "role.md"), "role\n")
-	Commit(a, "Update the orchestrator's memory")
 	gitIn(t, a, "remote", "add", "origin", bare)
 	gitIn(t, a, "push", "-q", "-u", "origin", "main")
 	b := filepath.Join(t.TempDir(), "b")
 	gitIn(t, filepath.Dir(b), "clone", "-q", bare, b)
 	gitIn(t, b, "config", "user.name", "T")
 	gitIn(t, b, "config", "user.email", "t@example.invalid")
-
-	write(t, filepath.Join(Dir(a), "tone.md"), "tone\n")
-	write(t, filepath.Join(Dir(a), Index), "- [Role](role.md): the user\n- [Tone](tone.md): tone\n")
-	Commit(a, "Update the orchestrator's memory")
+	// Each machine's own notes in Claude Code's folder.
+	upgrade := func(crew, machine, text, own string) {
+		d := filepath.Join(t.TempDir(), "memory")
+		write(t, filepath.Join(d, Index), "- [Role](user_role.md): "+text+"\n- ["+own+"]("+own+".md): "+own+"\n")
+		write(t, filepath.Join(d, "user_role.md"), "---\nname: user_role\n---\n"+text+"\n")
+		write(t, filepath.Join(d, own+".md"), own+"\n")
+		if _, err := MoveIn(crew, []string{d}, machine); err != nil {
+			t.Fatal(err)
+		}
+		Attributes(crew)
+	}
+	upgrade(a, "a", "the user designs", "tone")
+	upgrade(b, "b", "the user codes", "status")
+	// The notice session on B: its notes are untracked, and a pull would
+	// stop on them once A pushed, which is why the orchestrator skips it.
+	if !Commit(a, "Update the orchestrator's memory") {
+		t.Fatal("a didn't commit")
+	}
 	gitIn(t, a, "push", "-q")
-	write(t, filepath.Join(Dir(b), "status.md"), "status\n")
-	write(t, filepath.Join(Dir(b), Index), "- [Role](role.md): the user\n- [Status](status.md): status\n")
-	Commit(b, "Update the orchestrator's memory")
+	if err := exec.Command("git", "-C", b, "pull", "-q", "--rebase", "--autostash").Run(); err == nil {
+		t.Error("a pull over untracked notes went through; the notice session's skip isn't needed")
+	}
+	// B's next session: committed, then the pull and the push.
+	if !Commit(b, "Update the orchestrator's memory") {
+		t.Fatal("b didn't commit")
+	}
 	gitIn(t, b, "pull", "-q", "--rebase", "--autostash")
 	gitIn(t, b, "push", "-q")
 	gitIn(t, a, "pull", "-q", "--rebase", "--autostash")
 	for _, dir := range []string{a, b} {
-		if got := names(t, Dir(dir)); !slices.Equal(got, []string{Index, "role.md", "status.md", "tone.md"}) {
+		if got := names(t, Dir(dir)); !slices.Equal(got, []string{Index, "status.md", "tone.md", "user_role.md"}) {
 			t.Errorf("%s: %v", dir, got)
 		}
-		idx := read(t, filepath.Join(Dir(dir), Index))
-		for _, l := range []string{"(role.md)", "(tone.md)", "(status.md)"} {
-			if !strings.Contains(idx, l) || strings.Contains(idx, "<<<<<<<") {
-				t.Errorf("%s index:\n%s", dir, idx)
+		role, idx := read(t, filepath.Join(Dir(dir), "user_role.md")), read(t, filepath.Join(Dir(dir), Index))
+		for _, want := range []string{"the user designs", "the user codes"} {
+			if !strings.Contains(role, want) || !strings.Contains(idx, want) {
+				t.Errorf("%s lost %q:\n%s\n%s", dir, want, role, idx)
 			}
 		}
+		if strings.Contains(role+idx, "<<<<<<<") {
+			t.Errorf("%s has conflict marks", dir)
+		}
 	}
-	// The same fact, rewritten on both: the rebase stops, and aborting it
-	// keeps each machine's own.
-	write(t, filepath.Join(Dir(a), "role.md"), "role from a\n")
+	// The same note, rewritten on both.
+	write(t, filepath.Join(Dir(a), "tone.md"), "short answers\n")
 	Commit(a, "Update the orchestrator's memory")
 	gitIn(t, a, "push", "-q")
-	write(t, filepath.Join(Dir(b), "role.md"), "role from b\n")
+	write(t, filepath.Join(Dir(b), "tone.md"), "long answers\n")
 	Commit(b, "Update the orchestrator's memory")
-	cmd := exec.Command("git", "-C", b, "pull", "-q", "--rebase", "--autostash")
-	if err := cmd.Run(); err == nil {
+	gitIn(t, b, "pull", "-q", "--rebase", "--autostash")
+	if tone := read(t, filepath.Join(Dir(b), "tone.md")); !strings.Contains(tone, "short answers") || !strings.Contains(tone, "long answers") {
+		t.Errorf("a note both rewrote: %q", tone)
+	}
+	// A clash outside the memory still stops.
+	gitIn(t, b, "push", "-q")
+	gitIn(t, a, "pull", "-q", "--rebase")
+	write(t, filepath.Join(a, "playbook.md"), "from a\n")
+	gitIn(t, a, "commit", "-qam", "a")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(b, "playbook.md"), "from b\n")
+	gitIn(t, b, "commit", "-qam", "b")
+	if err := exec.Command("git", "-C", b, "pull", "-q", "--rebase", "--autostash").Run(); err == nil {
 		t.Fatal("the rebase went through a clash")
 	}
+	write(t, filepath.Join(Dir(b), "new.md"), "new\n")
 	if Busy(b) == "" || Commit(b, "x") {
 		t.Error("a commit during the stopped rebase")
 	}
 	gitIn(t, b, "rebase", "--abort")
-	if read(t, filepath.Join(Dir(b), "role.md")) != "role from b\n" {
-		t.Error("b lost its own fact")
+	if read(t, filepath.Join(b, "playbook.md")) != "from b\n" {
+		t.Error("b lost its own change")
+	}
+}
+
+// A machine that keeps its memory on itself pushes the folder's removal;
+// the other machine's clone brings the notes back from the history into
+// its own folder for the crew.
+func TestFromHistory(t *testing.T) {
+	crew := repo(t)
+	write(t, filepath.Join(Dir(crew), Index), "- [Role](role.md): the user\n")
+	write(t, filepath.Join(Dir(crew), "role.md"), "role\n")
+	Commit(crew, "Update the orchestrator's memory")
+	os.RemoveAll(Dir(crew))
+	CommitRemoval(crew, "Keep the orchestrator's memory on this machine")
+	d := filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(d, Index), Pointer(crew))
+	res, err := FromHistory(crew, d, "m")
+	if err != nil || res.Moved != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got := names(t, d); !slices.Equal(got, []string{Index, "role.md"}) || read(t, filepath.Join(d, Index)) != "- [Role](role.md): the user\n" {
+		t.Errorf("D %v", got)
+	}
+	if res, err := FromHistory(repo(t), t.TempDir(), "m"); err != nil || res.Moved != 0 {
+		t.Errorf("no removal: %+v %v", res, err)
+	}
+}
+
+// The memory commit takes only the union line from .gitattributes: the
+// user's own edit there stays theirs, uncommitted.
+func TestCommitTakesOnlyTheUnionLine(t *testing.T) {
+	crew := repo(t)
+	write(t, filepath.Join(crew, ".gitattributes"), "*.png binary\n")
+	gitIn(t, crew, "add", ".gitattributes")
+	gitIn(t, crew, "commit", "-qm", "attributes")
+	write(t, filepath.Join(crew, ".gitattributes"), "*.png binary\n*.pdf binary\n")
+	Attributes(crew)
+	write(t, filepath.Join(Dir(crew), "a.md"), "a\n")
+	if !Commit(crew, "Update the orchestrator's memory") {
+		t.Fatal("no commit")
+	}
+	if got := gitIn(t, crew, "show", "HEAD:.gitattributes"); got != strings.TrimSpace("*.png binary\n"+attributesText) {
+		t.Errorf("committed attributes:\n%s", got)
+	}
+	if got := read(t, filepath.Join(crew, ".gitattributes")); !strings.Contains(got, "*.pdf binary") || !strings.Contains(got, UnionLine) {
+		t.Errorf("the user's file: %q", got)
+	}
+	if got := gitIn(t, crew, "status", "--porcelain"); got != "M .gitattributes" {
+		t.Errorf("status: %q", got)
+	}
+	// With the line committed, a later memory commit leaves the file alone.
+	write(t, filepath.Join(Dir(crew), "b.md"), "b\n")
+	Commit(crew, "Update the orchestrator's memory")
+	if got := gitIn(t, crew, "show", "--name-only", "--format=", "HEAD"); got != ".memory/b.md" {
+		t.Errorf("the next commit: %q", got)
+	}
+}
+
+// L1: a note Claude Code saved under cadrei's pointer moves in, and the
+// pointer's own line never reaches the crew's index.
+func TestThePointerLineStaysOut(t *testing.T) {
+	crew, d := t.TempDir(), filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(Dir(crew), Index), "- [Role](role.md): the user\n")
+	write(t, filepath.Join(Dir(crew), "role.md"), "role\n")
+	write(t, filepath.Join(d, Index), Pointer(crew)+"- [Tone](tone.md): tone\n")
+	write(t, filepath.Join(d, "tone.md"), "tone\n")
+	if res, err := MoveIn(crew, []string{d}, "m"); err != nil || res.Moved != 1 {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if got := read(t, filepath.Join(Dir(crew), Index)); got != "- [Role](role.md): the user\n- [Tone](tone.md): tone\n" {
+		t.Errorf("index:\n%s", got)
+	}
+	if read(t, filepath.Join(d, Index)) != Pointer(crew) {
+		t.Error("D's pointer")
+	}
+	// Only the pointer, with a blank line: no notes.
+	write(t, filepath.Join(d, Index), Pointer(crew)+"\n")
+	if holds, _ := Holds(d); holds {
+		t.Error("a pointer and a blank line count as notes")
+	}
+}
+
+// L3: a note that changed after merge read it stays in D, for the next
+// move, and isn't lost.
+func TestANoteSavedDuringTheMoveStays(t *testing.T) {
+	crew, d := t.TempDir(), filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(d, "a.md"), "a\n")
+	write(t, filepath.Join(d, "b.md"), "b\n")
+	_, taken, err := merge(d, Dir(crew), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(d, "b.md"), "b, rewritten\n")
+	write(t, filepath.Join(d, "c.md"), "c\n")
+	if err := clear(d, taken); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, d); !slices.Equal(got, []string{"b.md", "c.md"}) {
+		t.Errorf("D %v", got)
+	}
+}
+
+// L4: with two folders, a stop on the second leaves the first as it was.
+func TestAStopLeavesEveryFolder(t *testing.T) {
+	crew, d1, d2 := t.TempDir(), filepath.Join(t.TempDir(), "memory"), filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(d1, "a.md"), "a\n")
+	write(t, filepath.Join(d2, "b.md"), "b\n")
+	os.MkdirAll(filepath.Join(d2, "sub"), 0o755)
+	if _, err := MoveIn(crew, []string{d1, d2}, "m"); err == nil {
+		t.Fatal("no stop")
+	}
+	if got := names(t, d1); !slices.Equal(got, []string{"a.md"}) {
+		t.Errorf("the first folder: %v", got)
 	}
 }
