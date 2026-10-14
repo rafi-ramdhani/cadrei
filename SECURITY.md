@@ -81,6 +81,14 @@ Cadrei writes no tokens into a crew, and a new crew's `.gitignore` leaves out `.
 
 The hook is a safety net, not a guarantee. It does not see a token split across lines or encoded (for example in base64), the content of a file over 8 MB, or a push made with `git push --no-verify` (the skill tells the orchestrator never to use it). A session with shell access in the crew can also change or remove the hook; one without cadrei's marker line is then reported as your own, not restored. Keep credentials out of the crew's folder.
 
+### Your orchestrator's memory
+
+Your orchestrator's memory (the notes Claude Code saves for it, and their index) lives in the crew's `.memory/` folder, so it goes into the crew's backup. It holds what the orchestrator chose to remember: who you are and how you like to work, corrections, where projects stand, decisions, and pointers to outside resources. That can include personal things you've told it. Chats, your members' memory, Claude Code's settings, and the crew's `.claude/local/` and `.claude/build/` never go in. The backup repository is private, and the same pre-push check runs on every push, but a private repository is still a copy on GitHub. To keep the memory off it, set `MEMORY=machine` (or say "keep my memory on this machine"): cadrei moves the notes back into Claude Code's own folder and removes `.memory/` from the crew with a commit. Earlier commits still have them, and the orchestrator takes them out of the history only on your yes.
+
+Nothing of the memory is committed before cadrei has told you once, in the terminal and in the orchestrator's greeting, and that session passes.
+
+The notes load into every session of your orchestrator, so a note a member planted would read as the orchestrator's own: a lasting prompt injection. Two layers keep members out. Each member's settings copy denies `Edit` and `Write` on every crew's `.memory/`, and the guard refuses a member's shell command that writes into a `.memory` folder in a form it can read: a redirection, `tee`, `cp`, `mv`, `rm`, `ln`, `sed -i` and other programs that write files, `xargs` or `find` running one, a shell's `-c` code, or a short script for `python -c` or `node -e` that names the folder and writes. It counts any folder named `.memory`, and copying out of one too. Like the rest of the guard, it can't see into a script file a member writes and then runs. That's no worse than before, when any program could write into Claude Code's own memory folder.
+
 ### Resumed conversations
 
 Members and the orchestrator continue their last conversation when they start again. Only the members' own session hook updates a member's record; the orchestrator resumes only a conversation cadrei itself started. At the same user id a record cannot be authenticated, so a member can point another member that works in the same folder at a different conversation from that folder.

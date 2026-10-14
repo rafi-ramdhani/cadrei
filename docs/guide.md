@@ -128,6 +128,8 @@ When `~/.cadrei` holds crews but `~/.cadrei/config` is gone (after `cadrei unins
     protocol.md               optional house rules for every member
     members/<team>/<role>.md  one member per file
     teams/<team>/             working folders of teams without a project (tracked)
+    .memory/                  your orchestrator's memory: its notes and their MEMORY.md index (tracked)
+    .gitattributes            keeps both machines' lines when two merge that index
     .claude/
       member-settings.json    the grants every member starts with (tracked)
       member-settings.once    which grants are one-time (tracked)
@@ -159,6 +161,8 @@ Here's the full list, and what `cadrei uninstall` does with each. If you've set 
 |---|---|---|---|
 | The `cadrei` program | Homebrew's `bin`, or `~/.local/bin/cadrei` | you install it | With Homebrew, removed last (`--keep-program` keeps it). Otherwise kept: it prints the command that removes it |
 | Your crews: members, playbook, projects list, `cadrei.conf`, permissions and `teams/` | `~/.cadrei/<name>/`, each one a git repo | the first run, `cadrei new`, or when you ask your orchestrator | Kept |
+| Your orchestrator's memory: the notes it keeps about you and your work | `~/.cadrei/<name>/.memory/`, tracked, so your backup carries it | the first `cadrei` of 0.2.2 moves it in from Claude Code's folder, then your orchestrator saves there | Kept, with the crew (`--all` deletes it with the crew) |
+| A one-line pointer to that memory, for a Claude Code chat that isn't cadrei's | `MEMORY.md` in Claude Code's own memory folder for the crew (`~/.claude/projects/<crew's folder>/memory/`) | when the memory moves into the crew | Kept (`--all` removes it, only when it's exactly cadrei's) |
 | This machine's notes about a crew: where its projects are, and its chat record | `~/.cadrei/<name>/.claude/local/`, left out of git | every crew | Kept, with the crew |
 | Files made for each start: prompts, settings copies, chat records, member states, locks | `~/.cadrei/<name>/.claude/build/`, left out of git | every start | Kept, with the crew |
 | A check that stops passwords, keys and files over 50 MB from going into your backup (a git pre-push hook) | `~/.cadrei/<name>/.git/hooks/pre-push` | the first run, and put back by every `cadrei` | Removed |
@@ -445,6 +449,21 @@ More:
 - In `dontAsk`, `bypassPermissions` or `plan` mode, Claude Code can't ask you about your orchestrator's answer, so it doesn't run it: type the `!` line yourself.
 - Some things still need the member's window (`cadrei attach`): a question that takes more than one pick or holds several questions, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command too long for cadrei's record to hold whole), a prompt taller than the member's window (its top isn't on the screen, so cadrei can't see it whole), a file whose path the window shows cut short, a member in `dontAsk` mode (it can't ask you at all), and the orchestrator the every-chat hook opens, where `cadrei answer` doesn't run.
 
+### Your orchestrator's memory
+
+Claude Code lets your orchestrator keep notes for itself: who you are, how you like to work, what you corrected, where projects stand, and where to find things. That's its memory, a folder of short notes and an index, `MEMORY.md`, that loads at the start of each of its chats.
+
+Cadrei keeps that memory in your crew, in `.memory/`, so your crew's private backup carries it and a restore on another machine brings it back, whatever your username or the crew's folder is there. It works like this:
+
+- **Moving in.** The first time `cadrei` opens your orchestrator with 0.2.2, it moves the notes from Claude Code's own folder for the crew into `.memory/`, checks each copy, and leaves a one-line pointer behind for a Claude Code chat that isn't cadrei's. When both places have notes (a second machine, say), nothing is lost: a note with the same name but other text is kept beside the crew's as `<name>.from-<machine>.md`, and the index gets both lines.
+- **One notice first.** That open prints `✓ Your orchestrator's memory now lives in your crew (.memory/), so your backup keeps it`, and your orchestrator says so in its greeting, with how to say no. Nothing of it is committed until the next session, so you have this one to decide.
+- **Saved with your crew.** After that, cadrei commits the memory as `Update the orchestrator's memory` when it opens your orchestrator and when a chat starts (never while git is busy), and your orchestrator pushes it with your crew's other changes.
+- **Two machines.** After each greeting, your orchestrator pulls what your other machines pushed. Both machines' index lines are kept. If both changed the same note, the pull stops, nothing is lost, and your orchestrator tells you which notes clash so you can pick. It never force-pushes. A note saved on one machine reaches the other at its next chat after the push, not live. Upgrade cadrei on both: an older one keeps saving in Claude Code's folder.
+- **What's in it, and what isn't.** It holds the notes your orchestrator saved, which can include personal things you've told it. Chats, your members' memory and Claude Code's settings never go in.
+- **Members can't write there.** Its notes load into every chat of your orchestrator, so a member writing one would be putting words in its mouth. Members' settings deny editing `.memory/`, and their command check refuses shell commands that write into a `.memory` folder ([SECURITY.md](../SECURITY.md) says what it can't catch).
+
+**Keeping it on this machine.** Say "keep my memory on this machine". Your orchestrator sets `MEMORY=machine` in `cadrei.conf`. The next time `cadrei` opens it, cadrei moves the notes back into Claude Code's folder, removes `.memory/` from your crew with a commit (`Keep the orchestrator's memory on this machine`), and says `✓ Your orchestrator's memory is back on this machine only. Earlier backups still have it in their history.` Your orchestrator can take it out of that history too, only on your yes. "Keep my memory in the crew" moves it back in.
+
 ## The every-chat hook
 
 The every-chat hook is a SessionStart hook in `~/.claude/settings.json` that makes every new Claude Code chat open as your orchestrator. It isn't offered on the first run. Instead, your orchestrator offers it once, right after your first finished task. Say no, and it doesn't ask again (you can still ask it anytime).
@@ -508,9 +527,9 @@ Projects with no repo are listed as missing until you link them. Your orchestrat
 
 | Travels with the crew | Stays on each machine |
 |---|---|
-| members, playbook, `projects.yaml`, `cadrei.conf` (with your tmux choice), `protocol.md`, grants, `teams/` | project folders and where they are (`.claude/local/`), `~/.cadrei/config`, `.claude/build` |
+| members, playbook, `projects.yaml`, `cadrei.conf` (with your tmux choice), `protocol.md`, grants, `teams/`, your orchestrator's memory (`.memory/`) | project folders and where they are (`.claude/local/`), `~/.cadrei/config`, `.claude/build` |
 
-Claude Code's chats and memory live in Claude Code's own folder, not in the crew, so on a new machine members start fresh chats with the same setup. Grants that name a local path travel as written and apply only where that path exists.
+Chats, and your members' memory, live in Claude Code's own folder, not in the crew, so on a new machine members start fresh chats with the same setup. Your orchestrator's memory comes along ([Your orchestrator's memory](#your-orchestrators-memory)), and the restore's last line says how many notes it brought. Grants that name a local path travel as written and apply only where that path exists.
 
 **No credentials in a backup.** Cadrei writes no tokens into a crew. A pre-push hook in each crew repository (`.git/hooks/pre-push`, running `cadrei hook pre-push`) refuses a push that carries files that look like credentials (`.credentials.json`, `.env` files, private keys, tokens such as `sk-ant-`, `ghp_` or `github_pat_`, and a password or token in a URL), files over 50 MB, or this machine's own `.claude/local/` files, and names each one. A pre-push hook of your own is left alone, and the health check says so. Members follow the same idea: they never write a real-looking secret, not even a fake one, and use a placeholder instead.
 
@@ -535,9 +554,10 @@ Cadrei reads configuration only from `~/.cadrei` or `CADREI_HOME`, never from th
 | `ORCHESTRATOR` | `terminal` (the first run sets `tmux`, or `terminal` when you press `p`) | where `cadrei` opens your orchestrator: `tmux` or `terminal`. `cadrei tmux on\|off` sets it. |
 | `MODEL`, `EFFORT` | none (Claude Code's own) | the members' model and effort, unless a member's file sets its own (see Models and effort) |
 | `ORCHESTRATOR_MODEL`, `ORCHESTRATOR_EFFORT` | none (Claude Code's own) | your orchestrator's model and effort; `MODEL` and `EFFORT` don't apply to it |
+| `MEMORY` | `crew` | where your orchestrator keeps its memory: `crew` (in `.memory/`, so your backup carries it) or `machine` (in Claude Code's own folder on this machine only). Say "keep my memory on this machine" to your orchestrator to switch. |
 | `FORMAT` | none (format 1) | set by cadrei, not by you: a later cadrei that changes how a crew is laid out writes its number here, and an older one then only reads the crew (see Upgrading). Read only from the crew's own `cadrei.conf`, never from `.claude/local/` |
 
-**Settings for this machine only.** A crew's `.claude/local/cadrei.conf`, which git leaves out, wins over `cadrei.conf` on this machine. Today it's used for `ORCHESTRATOR`, through `cadrei tmux on|off --here`, and it may set the model and effort keys for this machine too. Crews from 0.2.0 have no `ORCHESTRATOR`, so they keep opening in the terminal until you ask. An old `ORCHESTRATOR_TMUX=1` still counts as `tmux`.
+**Settings for this machine only.** A crew's `.claude/local/cadrei.conf`, which git leaves out, wins over `cadrei.conf` on this machine. Today it's used for `ORCHESTRATOR`, through `cadrei tmux on|off --here`, and it may set the model and effort keys and `MEMORY` for this machine too. Crews from 0.2.0 have no `ORCHESTRATOR`, so they keep opening in the terminal until you ask. An old `ORCHESTRATOR_TMUX=1` still counts as `tmux`.
 
 Keys cadrei doesn't know, and lines that aren't `KEY=VALUE`, are left as they are and ignored. `cadrei --check` lists them once.
 
@@ -575,7 +595,7 @@ Coming from 0.2.0, there's nothing to do: on its first run, 0.2.1 moves each cre
 
 It looks for your teams on every tmux server your crews' teams were started on, whatever `CADREI_TMUX_SOCKET` or `TMUX_TMPDIR` say now, and stops before changing anything while a team runs where it can't stop it, or where tmux can't say.
 
-It keeps every crew and project, trust entries and backups, and ends like this:
+It keeps every crew and project (your orchestrator's memory stays in each crew's `.memory/`), trust entries and backups, and ends like this:
 
 ```text
 ✓ Uninstalled. Your crews and projects are still here.
@@ -632,6 +652,7 @@ Bring it all back later with cadrei restore, or press o on cadrei's first run.
 `cadrei uninstall --all` does what `cadrei uninstall` does, and also deletes every crew, `~/.cadrei` (cadrei's settings and state) and `~/.cadrei-archive` with every archive in it, and removes your crews' trust marks in Claude Code. With Homebrew it removes the program too, last, as every uninstall does (`--keep-program` keeps it); otherwise it ends with the command that removes the program. Nothing of cadrei is left. It can't be undone, so it's never the default: plain `cadrei uninstall` keeps your crews.
 
 - **Your projects stay.** Their folders are your work, and cadrei only links them, so `--all` never deletes one. If a project's folder is inside `~/.cadrei`, it stops before deleting anything and asks you to move it out first. It checks again after you type, and it stops too if it can't read a crew's notes of where its projects are. Claude Code's own chat history stays too.
+- **Your orchestrator's memory goes with its crew.** The plan names it for each crew that has one (`and your orchestrator's memory (.memory/, 14 notes)`), and the pointer cadrei left in Claude Code's folder goes too.
 - **Look first:** `cadrei uninstall --all --dry-run` lists each crew with what it holds, and warns about any crew with changes that aren't committed, commits that aren't in its backup, or no backup at all. Push or archive what you want to keep first.
 - **Type to confirm.** In a terminal it asks you to type `delete everything`. Anything else stops it, and `--yes` isn't enough. Without a terminal it needs `--confirm "delete everything"`, which is how your orchestrator runs it after you type that phrase in the chat.
 - It stops every member first, as `cadrei uninstall` does. If a team won't stop, tmux can't say which teams run, or an orchestrator is open in another terminal, nothing is deleted.
