@@ -597,6 +597,16 @@ func TestFromHistory(t *testing.T) {
 	if _, err := os.Stat(d); err == nil {
 		t.Error("the cleared folder came back")
 	}
+	// Re-review 3, M7: notes the user cleared while the crew kept them
+	// never come back from that emptying.
+	crew = repo(t)
+	write(t, filepath.Join(Dir(crew), "role.md"), "role\n")
+	Commit(crew, "Update the orchestrator's memory")
+	os.RemoveAll(Dir(crew))
+	Commit(crew, "Update the orchestrator's memory")
+	if res, removal, err := FromHistory(crew, d, "m", ""); err != nil || res.Moved != 0 || removal != "" {
+		t.Errorf("an emptying came back: %+v %q %v", res, removal, err)
+	}
 }
 
 // The memory commit takes only the union line from .gitattributes: the
@@ -807,6 +817,63 @@ func TestPullAfterAnOptOut(t *testing.T) {
 		t.Errorf("%+v %v", res, err)
 	}
 	gone(t, aside)
+}
+
+// Re-review 3, M7: a crew that only emptied its memory isn't an opt-out.
+// The emptying reaches the other machine as one: nothing set aside, no
+// commit rewritten. An opt-out made by hand while cadrei.conf says
+// MEMORY=machine still counts.
+func TestPullAfterAnEmptying(t *testing.T) {
+	a, b := twoClones(t)
+	os.RemoveAll(Dir(a))
+	Commit(a, "Update the orchestrator's memory")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(b, "playbook.md"), "b's playbook\n")
+	gitIn(t, b, "add", "playbook.md")
+	gitIn(t, b, "commit", "-qm", "b's playbook")
+	aside := filepath.Join(t.TempDir(), "aside")
+	pulled, err := Pull(b, "b", aside)
+	if err != nil || pulled.SetAside != 0 {
+		t.Fatalf("%+v %v", pulled, err)
+	}
+	gone(t, aside)
+	gone(t, Dir(b))
+	if got := gitIn(t, b, "reflog", "--format=%gs"); strings.Contains(got, "set the memory aside") {
+		t.Errorf("b's commits were rewritten:\n%s", got)
+	}
+	if LastOptOut(b) != "" {
+		t.Error("the emptying counts as an opt-out")
+	}
+
+	a, b = twoClones(t)
+	os.RemoveAll(Dir(a))
+	write(t, filepath.Join(a, "cadrei.conf"), "MEMORY=machine\n")
+	gitIn(t, a, "add", "-A")
+	gitIn(t, a, "commit", "-qm", "My own words")
+	gitIn(t, a, "push", "-q")
+	if pulled, err := Pull(b, "b", aside); err != nil || pulled.SetAside != 2 {
+		t.Fatalf("by hand: %+v %v", pulled, err)
+	}
+	if LastOptOut(b) == "" {
+		t.Error("by hand: no opt-out")
+	}
+
+	// Emptied, then MEMORY=machine: this machine's notes stay out too.
+	a, b = twoClones(t)
+	os.RemoveAll(Dir(a))
+	Commit(a, "Update the orchestrator's memory")
+	write(t, filepath.Join(a, "cadrei.conf"), "MEMORY=machine\n")
+	gitIn(t, a, "add", "cadrei.conf")
+	gitIn(t, a, "commit", "-qm", "Set MEMORY=machine")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(Dir(b), "role.md"), "b's role\n")
+	Commit(b, "Update the orchestrator's memory")
+	if pulled, err := Pull(b, "b", t.TempDir()); err != nil || pulled.SetAside != 2 {
+		t.Fatalf("emptied, then machine: %+v %v", pulled, err)
+	}
+	if got := gitIn(t, b, "log", "--format=%s", "@{upstream}..HEAD"); got != "" {
+		t.Errorf("unpushed: %q", got)
+	}
 }
 
 // Re-review 2, L14: a pull stopped at its limit says where it left the

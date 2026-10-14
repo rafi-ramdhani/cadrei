@@ -24,7 +24,7 @@ const envMemoryNotice = "CADREI_MEMORY_NOTICE"
 // The crew's memory commits.
 const (
 	memoryCommit = "Update the orchestrator's memory"
-	memoryLeft   = "Keep the orchestrator's memory on this machine"
+	memoryLeft   = memory.OptOut
 )
 
 // crewMemory gets the orchestrator's memory ready for an open: with
@@ -75,7 +75,7 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 		memory.RemovePointer(folders[0])
 		// A removal that wasn't committed yet (git was busy).
 		if memory.CommitRemoval(crew, memoryLeft) {
-			cadreis.SetMemoryRestored(c, memory.LastRemoval(crew))
+			cadreis.SetMemoryRestored(c, memory.LastOptOut(crew))
 		}
 		// Notes cadrei pull set aside, this machine's latest, first.
 		moved := 0
@@ -108,7 +108,7 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 	}
 	// This machine's own removal is never brought back here.
 	if memory.CommitRemoval(crew, memoryLeft) {
-		cadreis.SetMemoryRestored(c, memory.LastRemoval(crew))
+		cadreis.SetMemoryRestored(c, memory.LastOptOut(crew))
 	}
 	cadreis.SetMemoryNotice(c, "")
 	e.note("", markDone, "Your orchestrator's memory is back on this machine only. Earlier backups still have it in their history.")
