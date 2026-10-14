@@ -9,6 +9,7 @@ import (
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
+	"github.com/rafi-ramdhani/cadrei/internal/memory"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
@@ -112,6 +113,12 @@ func runUninstall(e *env) int {
 			names = append(names, c.Name)
 		}
 		e.show("", "It keeps your crews ("+joinNames(names)+", in "+unbroken(display(cadreis.Root()))+") and every project.")
+		for _, c := range list {
+			if _, err := os.Stat(memory.Dir(c.Path)); err == nil {
+				e.show("", "Your orchestrator's memory stays in each crew (.memory/).")
+				break
+			}
+		}
 	} else {
 		e.show("", "It keeps every project.")
 	}

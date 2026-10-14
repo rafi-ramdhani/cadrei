@@ -712,12 +712,16 @@ func TestFirstRunRestore(t *testing.T) {
 	exec.Command("git", "-C", home+"/blog-src", "push", "-q", "origin", "HEAD").Run()
 	backup := backupOf(t, "work", app, func(src string) {
 		os.WriteFile(src+"/projects.yaml", []byte("app:\n  repo: "+app+"\n  team: dev\nblog:\n  repo: "+blog+"\n  team: dev\n"), 0o644)
+		// The orchestrator's memory travels with the crew.
+		os.MkdirAll(src+"/.memory", 0o755)
+		os.WriteFile(src+"/.memory/MEMORY.md", []byte("- [Role](role.md): the user\n"), 0o644)
+		os.WriteFile(src+"/.memory/role.md", []byte("role\n"), 0o644)
 	})
 	code, out, errOut := callIn("r\n" + backup + "\np\n\n")
 	if code != 0 {
 		t.Fatalf("exit %d\n%s%s", code, out, errOut)
 	}
-	for _, want := range []string{"Restore your crew from GitHub", "  - Copy " + backup + " into ~/.cadrei/work", "+ Restored your crew work into ~/.cadrei/work",
+	for _, want := range []string{"Restore your crew from GitHub", "  - Copy " + backup + " into ~/.cadrei/work", "+ Restored your crew work into ~/.cadrei/work, with your orchestrator's memory (1 note)",
 		"+ Cloned app into ~/Developer/app and trusted it", "! Cloned blog into ~/Developer/blog. It has its own Claude Code settings (.mcp.json), so it isn't trusted yet.",
 		"Claude Code will ask you to trust ~/.cadrei/work. It holds what you restored from " + backup + ", so say yes only if that's your backup."} {
 		if !strings.Contains(flat(out), flat(want)) {

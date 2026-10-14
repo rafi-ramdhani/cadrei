@@ -133,6 +133,11 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 	line("One-time grants left over", fmt.Sprint(onceGrants(rt, r.Path)))
 	line("Every-chat hook", everyChatHook(rt))
 	line("Git identity", identity(r.Path))
+	// The every-chat hook's chat keeps its own folder's memory.
+	if o.in != "hook" {
+		line("Memory", memoryLine(r.Cadrei))
+	}
+	line("Backup", backupLine(r.Cadrei))
 	return b.String()
 }
 
@@ -277,23 +282,25 @@ func runHookSnapshot(e *env) int {
 	if err != nil {
 		return 0
 	}
+	commitMemory(r.Cadrei)
 	e.stdout.Write(rt.Hooks().Output(snapshotOf(rt, r, openingFromEnv(), time.Now())))
 	return 0
 }
 
-// snapshotSettings writes the orchestrator's settings file, with the
-// snapshot hook, when this binary may be named in a hook. Otherwise it
-// returns "", and the snapshot goes into the prompt file instead (fresh
-// at startup only).
-func (e *env) snapshotSettings(rt runtime.Runtime, build string) string {
+// snapshotSettings writes the orchestrator's settings file: the snapshot
+// hook and cadrei's other hooks, when this binary may be named in a hook,
+// and the folder its memory lives in, when there is one. hooks reports
+// that the hooks are in it; without them the snapshot goes into the
+// prompt file instead (fresh at startup only). path is "" for no file.
+func (e *env) snapshotSettings(rt runtime.Runtime, build, memory string) (path string, hooks bool) {
 	bin := framework.Binary()
 	if e.hookPlaced(bin) != nil {
-		return ""
+		bin = ""
 	}
-	path, err := rt.Hooks().SnapshotSettings(build, bin)
+	path, err := rt.Hooks().SnapshotSettings(build, bin, memory)
 	if err != nil {
 		os.Remove(filepath.Join(build, "orchestrator-settings.json"))
-		return ""
+		return "", false
 	}
-	return path
+	return path, path != "" && bin != ""
 }

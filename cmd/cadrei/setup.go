@@ -15,6 +15,7 @@ import (
 	cadrei "github.com/rafi-ramdhani/cadrei"
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
+	"github.com/rafi-ramdhani/cadrei/internal/memory"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/project"
 	rtpkg "github.com/rafi-ramdhani/cadrei/internal/runtime"
@@ -555,7 +556,11 @@ func (e *env) restoreCrew(rt rtpkg.Runtime, repo string) bool {
 	if was, _ := cadreis.OpensIn(c); was != where {
 		cadreis.SetOpensIn(c, where, false)
 	}
-	e.work(markDone, "Restored your crew "+accent(c.Name)+" into "+unbroken(display(c.Path)))
+	restored := "Restored your crew " + accent(c.Name) + " into " + unbroken(display(c.Path))
+	if _, err := os.Stat(memory.Dir(c.Path)); err == nil {
+		restored += ", with your orchestrator's memory (" + count(memory.Count(c.Path), "note") + ")"
+	}
+	e.work(markDone, restored)
 	if set := modelSettings(c.Path); len(set) > 0 {
 		e.note("  ", markWarn, "Its cadrei.conf sets the model and effort your team and orchestrator start with: "+strings.Join(set, ", ")+". Change them there if you'd rather not.")
 	}

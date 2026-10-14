@@ -97,7 +97,7 @@ func init() {
 }
 
 // knownKeys are the cadrei.conf keys cadrei reads, besides cutKeys.
-var knownKeys = []string{"FORMAT", "PERMISSION_MODE", "ORCHESTRATOR", "ORCHESTRATOR_TMUX", keyModel, keyEffort, keyOrchestratorModel, keyOrchestratorEffort}
+var knownKeys = []string{"FORMAT", "PERMISSION_MODE", "ORCHESTRATOR", "ORCHESTRATOR_TMUX", "MEMORY", keyModel, keyEffort, keyOrchestratorModel, keyOrchestratorEffort}
 
 // unknownConf lists what a cadrei.conf holds that cadrei doesn't use: keys
 // it doesn't know, and lines that aren't KEY=VALUE. They're kept as they

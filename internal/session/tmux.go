@@ -110,7 +110,7 @@ func (t Tmux) command(args ...string) *exec.Cmd {
 // window gets what it needs with its own command.
 var keptOut = []string{
 	"CADREI_HOME", "CADREI_MEMBER", "CADRE_PERSONA", "CADREI_ORCHESTRATOR",
-	"CADREI_OPENS_IN", "CADREI_OPENED_FROM", "CADREI_OPENED_PROJECT",
+	"CADREI_OPENS_IN", "CADREI_OPENED_FROM", "CADREI_OPENED_PROJECT", "CADREI_MEMORY_NOTICE",
 }
 
 // KeepOut adds a runtime's session variables to what tmux clients don't

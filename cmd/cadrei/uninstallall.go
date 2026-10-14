@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
+	"github.com/rafi-ramdhani/cadrei/internal/memory"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/registry"
@@ -223,6 +224,13 @@ func runUninstallAll(e *env) int {
 		}
 		if _, note := rt.Trust().Unmark(folders); note != "" {
 			e.note("", markWarn, note)
+		}
+		// The pointers to each crew's memory, only where they're exactly
+		// cadrei's.
+		for _, c := range list {
+			for _, d := range rt.Memory().Folders(c.Path) {
+				memory.RemovePointer(d)
+			}
 		}
 	}
 	var deleted []string
@@ -441,7 +449,11 @@ func holds(c cadreis.Cadrei) string {
 	if reg, err := registry.Load(c.Registry()); err == nil {
 		n = len(reg.Entries())
 	}
-	return count(teams, "team") + ", " + count(members, "member") + ", " + count(n, "project") + " (their folders stay)"
+	out := count(teams, "team") + ", " + count(members, "member") + ", " + count(n, "project") + " (their folders stay)"
+	if _, err := os.Stat(memory.Dir(c.Path)); err == nil {
+		out += ", and your orchestrator's memory (.memory/, " + count(memory.Count(c.Path), "note") + ")"
+	}
+	return out
 }
 
 // count is n with its noun: "1 team", "2 teams".

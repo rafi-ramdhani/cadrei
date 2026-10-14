@@ -21,6 +21,7 @@ var realHome string
 var cleared = []string{
 	"CLAUDE_CONFIG_DIR", "TMUX", "TMUX_PANE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
 	"CADREI_HOME", "CADREI_MEMBER", "CADRE_PERSONA", "CADREI_OFF", "CADREI_ORCHESTRATOR", "CADREI_TEST_TTY",
+	"CADREI_MEMORY_NOTICE",
 }
 
 // Environment a guarded test binary passes to the test binaries it runs as

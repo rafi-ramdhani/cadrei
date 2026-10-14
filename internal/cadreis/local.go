@@ -117,6 +117,42 @@ func SetOrchestratorID(c Cadrei, id string) error {
 	return writeLocal(path, m)
 }
 
+// MemoryNotice is when cadrei first told the user that the crew keeps the
+// orchestrator's memory, or "": nothing of it is committed before.
+func MemoryNotice(c Cadrei) string {
+	m, err := readLocal(filepath.Join(LocalDir(c.Path), "state.json"))
+	if err != nil {
+		return ""
+	}
+	var when string
+	json.Unmarshal(m["memory_notice"], &when)
+	return when
+}
+
+// SetMemoryNotice records when the user was told; "" forgets it, so a
+// later move into the crew tells them again.
+func SetMemoryNotice(c Cadrei, when string) error {
+	l, err := lockLocal(c)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	path := filepath.Join(LocalDir(c.Path), "state.json")
+	m, err := readLocal(path)
+	if err != nil {
+		return err
+	}
+	if when == "" {
+		if _, ok := m["memory_notice"]; !ok {
+			return nil
+		}
+		delete(m, "memory_notice")
+	} else {
+		m["memory_notice"], _ = json.Marshal(when)
+	}
+	return writeLocal(path, m)
+}
+
 // RecordServer notes the tmux server (its socket's path) a session of the
 // crew was started on, so the commands that move or delete crews look
 // for its teams there whatever server the environment names then.

@@ -42,6 +42,29 @@ func OpensIn(c Cadrei) (where string, here bool) {
 
 func valid(where string) bool { return where == OpensInTmux || where == OpensInTerminal }
 
+// Where the orchestrator's memory lives (MEMORY in cadrei.conf).
+const (
+	MemoryInCrew    = "crew"
+	MemoryOnMachine = "machine"
+)
+
+// MemoryIn is where a cadrei's orchestrator keeps its memory: MEMORY in
+// the local cadrei.conf (this machine only), else in its cadrei.conf, else
+// the crew. A value it doesn't know counts as the crew.
+func MemoryIn(c Cadrei) string {
+	for _, file := range []string{filepath.Join(LocalDir(c.Path), "cadrei.conf"), filepath.Join(c.Path, "cadrei.conf")} {
+		raw, _ := os.ReadFile(file)
+		values, _ := conf.Parse(string(raw))
+		switch strings.ToLower(strings.TrimSpace(values["MEMORY"])) {
+		case MemoryOnMachine:
+			return MemoryOnMachine
+		case MemoryInCrew:
+			return MemoryInCrew
+		}
+	}
+	return MemoryInCrew
+}
+
 // SetOpensIn records where a cadrei's orchestrator opens: in its
 // cadrei.conf, committed, or with here in its local cadrei.conf, for this
 // machine only.

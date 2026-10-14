@@ -27,6 +27,7 @@ func (t testRuntime) Health(bool, []string) []Problem    { return nil }
 func (t testRuntime) Instructions() InstructionOps       { return nil }
 func (t testRuntime) Hooks() HookOps                     { return nil }
 func (t testRuntime) Sessions() SessionOps               { return nil }
+func (t testRuntime) Memory() MemoryOps                  { return nil }
 
 func TestTheDefaultRuntime(t *testing.T) {
 	RegisterDefault(testRuntime{})

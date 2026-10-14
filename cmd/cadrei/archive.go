@@ -24,6 +24,7 @@ import (
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/gitx"
+	"github.com/rafi-ramdhani/cadrei/internal/memory"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/project"
@@ -396,8 +397,14 @@ func stoppedArchive() *cadreis.Archive {
 const pushLimit = 60 * time.Second
 
 // commitChanges commits the changes to files git already tracks in crew,
-// with none of the crew's own hooks or fsmonitor: they're the user's.
+// and the orchestrator's memory, new notes too, with none of the crew's
+// own hooks or fsmonitor: they're the user's.
 func commitChanges(crew string) ([]byte, error) {
+	if _, err := os.Lstat(memory.Dir(crew)); err == nil {
+		if out, err := gitx.Reading(crew, "add", "-A", "--", memory.Folder).CombinedOutput(); err != nil {
+			return out, err
+		}
+	}
 	if out, err := gitx.Reading(crew, "add", "-u").CombinedOutput(); err != nil {
 		return out, err
 	}
