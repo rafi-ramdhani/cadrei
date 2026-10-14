@@ -535,6 +535,9 @@ func (o resumableOps) StateEvent(io.Reader) runtime.StateEvent {
 	return runtime.StateEvent{}
 }
 func (o resumableOps) TranscriptFile(string, string) string { return "" }
+func (o resumableOps) Context(string, string) (runtime.ContextUse, bool) {
+	return runtime.ContextUse{}, false
+}
 func (o resumableOps) UnansweredPrompt(string, string) bool { return false }
 func (o resumableOps) Ready(string) bool                    { return true }
 func (o resumableOps) Waiting(string) bool                  { return false }

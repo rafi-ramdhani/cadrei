@@ -246,6 +246,28 @@ type HookOps interface {
 	SnapshotSettings(dir, binary string) (string, error)
 }
 
+// ContextUse is how full a session's context is, as its transcript says.
+type ContextUse struct {
+	// Tokens is the size of the request behind the session's last reply:
+	// the context it has in use.
+	Tokens int
+	// Window is the model's context window, when it's certain, else 0.
+	Window int
+	// At is when that reply came.
+	At time.Time
+	// Compacted is when the conversation was compacted, when nothing was
+	// said since: Tokens is then 0, the new size not known yet.
+	Compacted time.Time
+}
+
+// Percent is how full the window is, or -1 when the window isn't known.
+func (c ContextUse) Percent() int {
+	if c.Window <= 0 || !c.Compacted.IsZero() {
+		return -1
+	}
+	return c.Tokens * 100 / c.Window
+}
+
 // StateEvent is one of a member's hook events, as cadrei's member states
 // read it.
 type StateEvent struct {
@@ -334,6 +356,11 @@ type SessionOps interface {
 	StateEvent(input io.Reader) StateEvent
 	// TranscriptFile is the conversation's transcript, or "".
 	TranscriptFile(id, dir string) string
+	// Context reads how full a session's context is from its transcript,
+	// for a session started with model (cadrei's setting for it, or "").
+	// It reports false with nothing to say: no transcript, or no reply
+	// yet.
+	Context(transcript, model string) (ContextUse, bool)
 	// UnansweredPrompt reports whether the last prompt in a transcript is
 	// text, with no reply after it.
 	UnansweredPrompt(transcript, text string) bool
