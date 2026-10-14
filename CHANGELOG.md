@@ -12,6 +12,14 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 - The README's demo GIF is a third of its old size, so it loads faster on a phone.
 
+### Fixed
+
+- **A first run that isn't logged in to Claude Code**: if Claude Code was set up before but is logged out now, it skipped its login screen, so your orchestrator's first message only got "Not logged in" back and never greeted you. Now the setup logs you in first, with `claude auth login` right in your terminal (it opens your browser), and opens your orchestrator once that's done. If the login doesn't go through, your crew is still made, and cadrei says to log in and run `cadrei` again. `cadrei --check` says how to log in too.
+- **Every later `cadrei` checks your login too**, in the background while it gets ready (the login question waits 3 seconds at most). If Claude Code says you're logged out, it logs you in the same way before your orchestrator opens. If it can't tell (offline, or an older Claude Code), it opens as before. If your orchestrator is open already, cadrei switches to it without waiting for the check. Your orchestrator now always uses the Claude Code config folder (`CLAUDE_CONFIG_DIR`) of the terminal you run `cadrei` from, where the login was checked, even in a tmux server started with another one. Members use the one of whatever starts them, so the members your orchestrator starts share its folder, with its login and trusted folders.
+- `cadrei up` says when a member it started is stuck on Claude Code's login or setup screen, and how to open its window to answer it, instead of only "Started".
+- The first run's checks no longer show a stray blank line under git.
+- **The members' guard no longer blocks commands that only mention uninstall or restore.** It used to refuse any command with those words next to a shell's name or a `$`, so a member couldn't `grep` for them, write code with a `restore()` in it, or open a pull request that talks about them. It now reads a command the way the shell does: running cadrei's `uninstall` or `restore` is still refused in every form it was before (`env`, `sh -c`, `eval`, a full path, quotes, variables, a pipe or heredoc into a shell), while text sent to a program that never runs it goes through.
+
 ## 0.2.1 - 2026-10-11
 
 Your folder of teams, members and settings is now called your **crew** everywhere (the folder layout still says cadrei: `~/.cadrei/<name>`, `cadrei.conf`).

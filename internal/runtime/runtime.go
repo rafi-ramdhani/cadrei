@@ -7,6 +7,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -341,14 +342,14 @@ func (p Probe) Says(title string) string {
 	case p.Login == LoggedIn:
 		return title + " " + p.Version + ", logged in"
 	case p.Login == LoggedOut:
-		return title + " " + p.Version + ", not logged in yet. It'll ask you when it opens."
+		return title + " " + p.Version + ", not logged in yet"
 	}
 	return title + " " + p.Version + ". Couldn't check your login. If it asks, log in."
 }
 
 // InstallHelp is how to install the runtime: its Homebrew commands and its
-// web page.
-type InstallHelp struct{ Install, Reinstall, URL string }
+// web page. Login is the command that logs the user in.
+type InstallHelp struct{ Install, Reinstall, URL, Login string }
 
 // Login states.
 const (
@@ -381,10 +382,13 @@ type Runtime interface {
 	// folders changes what their sessions load.
 	Health(full bool, cadreis []string) []Problem
 	// Probe runs the runtime to say whether it works, its version and
-	// whether the user is logged in.
-	Probe() Probe
+	// whether the user is logged in. Ending ctx stops what it runs.
+	Probe(ctx context.Context) Probe
 	// Help is how to install or reinstall it.
 	Help() InstallHelp
+	// Login builds the command that logs the user in, run in their own
+	// terminal.
+	Login() (Command, error)
 	// Launch builds the command for a session; the caller runs it.
 	Launch(LaunchSpec) (Command, error)
 	// BuildDir is where cadrei writes a cadrei's generated prompts and

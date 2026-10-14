@@ -12,6 +12,7 @@ import (
 	"runtime/debug"
 
 	"github.com/rafi-ramdhani/cadrei/internal/framework"
+	rtpkg "github.com/rafi-ramdhani/cadrei/internal/runtime"
 )
 
 // version is stamped at build time with -ldflags "-X main.version=...".
@@ -55,6 +56,9 @@ type env struct {
 	// changes is set for a command that writes to its crew or starts its
 	// members (changesCrew): resolve refuses a crew of a newer format.
 	changes bool
+	// logIn is the runtime the first run's checks found logged out: the
+	// setup logs the user in before the orchestrator opens.
+	logIn rtpkg.Runtime
 }
 
 // say prints a line on stdout as it is, styled for the stream but never

@@ -527,6 +527,42 @@ func TestTheSecretsRuleReachesEveryMember(t *testing.T) {
 var chatMarks = []string{"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET",
 	"CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_CODE_BRIDGE_SESSION_ID", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_CODE_SSE_PORT", "CADREI_ORCHESTRATOR", "CADREI_OPENS_IN"}
 
+// A member Claude Code shows its login screen to (logged out, say) started,
+// but sits there: up says so, and where to answer it.
+func TestUpSaysWhenAMemberWaitsOnALogin(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+"[ -n \"$TMUX\" ] && echo ' Select login method:'\nexec sleep 300\n")
+	must(t, "init", "work")
+	out := flat(must(t, "up", "dev/engineer"))
+	want := "+ Started the engineer (fresh chat) It's waiting on a login or setup screen and won't get going until you answer it: cadrei attach dev"
+	if out != want {
+		t.Errorf("up: %q", out)
+	}
+}
+
+// Final read of 07a9dd4 (N2): a member reads the config dir of the cadrei
+// that starts it, as the orchestrator does, not a tmux server's that
+// started with another one: trust marks and the login are where both look.
+func TestAMemberReadsCadreisConfigDir(t *testing.T) {
+	home := sandbox(t)
+	socket := withTmux(t, home)
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+"env > \""+home+"/env-$CADREI_MEMBER\"\n"+stubReady+"exec sleep 300\n")
+	must(t, "init", "work")
+	t.Setenv("CLAUDE_CONFIG_DIR", home+"/old-config")
+	tmuxIn(socket, "new-session", "-d", "-s", "older")
+	t.Setenv("CLAUDE_CONFIG_DIR", home+"/.claude")
+	must(t, "up", "dev/engineer")
+	var env string
+	for i := 0; i < 100 && !strings.Contains(env, "CLAUDE_CONFIG_DIR="); i++ {
+		time.Sleep(50 * time.Millisecond)
+		env = readFile(t, home+"/env-work-dev-engineer")
+	}
+	if !strings.Contains(env, "\nCLAUDE_CONFIG_DIR="+home+"/.claude\n") {
+		t.Errorf("the member's config dir:\n%s", env)
+	}
+}
+
 // Started from inside a chat (the orchestrator's cadrei up), a member
 // doesn't take that chat's session marks as its own, and keeps the user's
 // own settings. Audit sec-exposure-1 and sec-trust-3: the tmux server

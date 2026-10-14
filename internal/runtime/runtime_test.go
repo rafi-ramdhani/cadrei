@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -9,8 +10,9 @@ type testRuntime struct{ caps Capabilities }
 
 func (t testRuntime) Name() string                       { return "test" }
 func (t testRuntime) Title() string                      { return "Test" }
-func (t testRuntime) Probe() Probe                       { return Probe{} }
+func (t testRuntime) Probe(context.Context) Probe        { return Probe{} }
 func (t testRuntime) Help() InstallHelp                  { return InstallHelp{} }
+func (t testRuntime) Login() (Command, error)            { return Command{}, nil }
 func (t testRuntime) Model() string                      { return "Test" }
 func (t testRuntime) ModelHint() string                  { return "a test model" }
 func (t testRuntime) SessionVars() []string              { return nil }
@@ -73,7 +75,7 @@ func TestProbeSays(t *testing.T) {
 		{}:                "X isn't installed.",
 		{Installed: true}: "X is installed but won't start.",
 		{Installed: true, Runs: true, Version: "1.2.3", Login: LoggedIn}:    "X 1.2.3, logged in",
-		{Installed: true, Runs: true, Version: "1.2.3", Login: LoggedOut}:   "X 1.2.3, not logged in yet. It'll ask you when it opens.",
+		{Installed: true, Runs: true, Version: "1.2.3", Login: LoggedOut}:   "X 1.2.3, not logged in yet",
 		{Installed: true, Runs: true, Version: "1.2.3", Login: LoginUnsure}: "X 1.2.3. Couldn't check your login. If it asks, log in.",
 	} {
 		if got := p.Says("X"); got != want {

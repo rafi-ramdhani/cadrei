@@ -11,6 +11,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -203,9 +204,353 @@ func TestFirstRunChecksTheTools(t *testing.T) {
 		})
 	}
 	home := firstMachine(t)
-	stub(t, home, "claude", "case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo '{\"loggedIn\": false}'; exit 1;; esac\nexit 0\n")
-	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(out, "! Claude Code 2.1.300, not logged in yet. It'll ask you when it opens.") {
+	loggedOut(t, home, 0)
+	if code, out, _ := callIn("p\n"); code != 0 || !strings.Contains(flat(out), "! Claude Code 2.1.300, not logged in yet The setup logs you in before your orchestrator opens.") {
 		t.Errorf("not logged in: %d\n%s", code, out)
+	}
+}
+
+// loggedOut makes the claude stub logged out, with a login that ends
+// with exit, and that logs in (auth status says so after it) when exit is
+// 0. Each call is noted in home/calls, the login's environment in
+// home/login-env and the orchestrator's in home/orch-ran. In tmux, the
+// orchestrator stays, as a session does.
+func loggedOut(t *testing.T, home string, exit int) { loggedOutStub(t, home, exit, exit == 0) }
+
+// loggedOutStub is loggedOut with a login that works or not, whatever it
+// ends with.
+func loggedOutStub(t *testing.T, home string, exit int, works bool) {
+	t.Helper()
+	in := ""
+	if works {
+		in = "touch \"" + home + "/logged-in\"; "
+	}
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+
+		"case \"$1 $2\" in\n"+
+		"  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n"+
+		"  'auth status') [ -e \""+home+"/logged-in\" ] && { echo '{\"loggedIn\": true}'; exit 0; }; echo '{\"loggedIn\": false}'; exit 1 ;;\n"+
+		"  'auth login') echo login >> \""+home+"/calls\"; env > \""+home+"/login-env\"; printf 'Paste code here if prompted > '; "+in+"exit "+strconv.Itoa(exit)+" ;;\n"+
+		"esac\n"+
+		"echo orchestrator >> \""+home+"/calls\"\n"+
+		"{ printf '%s\\n' \"$@\"; env; } > \""+home+"/orch-ran\"\n"+
+		"[ -n \"$TMUX\" ] && { "+stubReady+"exec sleep 300; }\n"+
+		"exit 0\n")
+}
+
+// A Claude Code that ran before but is logged out now opens on its prompt,
+// so the orchestrator's first message would only get "Not logged in" back.
+// The first run logs the user in first, in this terminal, and opens the
+// orchestrator once that went through.
+func TestFirstRunLogsInBeforeTheOrchestratorOpens(t *testing.T) {
+	home := firstMachine(t)
+	loggedOut(t, home, 0)
+	code, out, errOut := callIn("p\n")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+	}
+	for _, want := range []string{
+		"- Log in to Claude Code (it opens your browser)",
+		"Now log in to Claude Code.",
+		"+ Logged in to Claude Code",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("lacks %q:\n%s", want, out)
+		}
+	}
+	if got := readFile(t, home+"/calls"); got != "login\norchestrator\n" {
+		t.Errorf("calls:\n%s", got)
+	}
+	// The checks are one block: no blank line inside it.
+	checks := out[strings.Index(out, "Checking your setup"):strings.Index(out, "Here's the plan")]
+	if strings.Count(checks, "\n\n") != 1 || !strings.HasSuffix(checks, "\n\n  ") {
+		t.Errorf("a blank line in the checks:\n%q", checks)
+	}
+}
+
+// Every later open asks too: logged out for sure, plain cadrei logs the
+// user in first and opens the orchestrator once that went through. A
+// login that fails, or no terminal to log in from, opens nothing.
+func TestPlainCadreiLogsInBeforeTheOrchestratorOpens(t *testing.T) {
+	setup := func(t *testing.T, exit int, tty bool) string {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		loggedOut(t, home, exit)
+		ttyForTests = tty
+		t.Cleanup(func() { ttyForTests = false })
+		return home
+	}
+	t.Run("ok", func(t *testing.T) {
+		home := setup(t, 0, true)
+		code, out, errOut := callIn("", "--no-tmux")
+		if code != 0 || !strings.Contains(flat(out), "You're not logged in to Claude Code, so log in first.") || !strings.Contains(out, "+ Logged in to Claude Code") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if got := readFile(t, home+"/calls"); got != "login\norchestrator\n" {
+			t.Errorf("calls:\n%s", got)
+		}
+	})
+	for _, exit := range []int{1, 130} {
+		t.Run(strconv.Itoa(exit), func(t *testing.T) {
+			home := setup(t, exit, true)
+			code, out, errOut := callIn("", "--no-tmux")
+			all := flat(out + errOut)
+			if code != 1 || !strings.Contains(all, "not logged in to Claude Code yet, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") || strings.Contains(all, "is ready") {
+				t.Errorf("exit %d:\n%s%s", code, out, errOut)
+			}
+			// The login's own prompt line ends, then a blank line.
+			if !strings.HasSuffix(out, "prompted > \n\n") {
+				t.Errorf("no blank line before the failure: %q", out)
+			}
+			if got := readFile(t, home+"/calls"); got != "login\n" {
+				t.Errorf("calls:\n%s", got)
+			}
+		})
+	}
+	t.Run("no terminal", func(t *testing.T) {
+		home := setup(t, 0, false)
+		code, out, errOut := callIn("", "--no-tmux")
+		// Review recheck (L2): no "log in first" when it can't.
+		if code != 1 || !strings.Contains(flat(errOut), "not logged in to Claude Code, so your orchestrator didn't open. Log in with claude auth login, then run cadrei.") || strings.Contains(out+errOut, "log in first") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if _, err := os.Stat(home + "/calls"); err == nil {
+			t.Errorf("calls:\n%s", readFile(t, home+"/calls"))
+		}
+	})
+}
+
+// An orchestrator that's open already is only switched to, logged out or
+// not; and a login that can't be checked (no answer in 3 seconds, as
+// offline) doesn't hold an open up.
+func TestPlainCadreiOpensWhenTheLoginIsNoMatter(t *testing.T) {
+	t.Run("open already", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		loggedOut(t, home, 0)
+		ttyForTests = true
+		t.Cleanup(func() { ttyForTests = false })
+		if code, out, errOut := call("--tmux", "--detach"); code != 0 || strings.Contains(out+errOut, "log in") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if _, err := os.Stat(home + "/calls"); err == nil {
+			t.Errorf("calls:\n%s", readFile(t, home+"/calls"))
+		}
+	})
+	// Review recheck (M1): a switch to one that's open doesn't wait for
+	// the check, which offline takes its whole 3 seconds.
+	t.Run("open already, slow check", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') sleep 60 ;;\nesac\nexec sleep 300\n")
+		start := time.Now()
+		code, out, errOut := call("--tmux", "--detach")
+		if took := time.Since(start); code != 0 || took > 2500*time.Millisecond {
+			t.Errorf("exit %d after %s:\n%s%s", code, took, out, errOut)
+		}
+	})
+	// Final read (N1): a check still going when cadrei is done ends with
+	// it: in a process group of its own, nothing else would stop it. The
+	// switch here takes half a second, so the check has started.
+	t.Run("open already, check stopped", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		must(t, "init", "work")
+		must(t, "--tmux", "--detach")
+		real, _ := exec.LookPath("tmux")
+		os.MkdirAll(home+"/stub-tmux", 0o755)
+		writeStub(t, home+"/stub-tmux/tmux", "#!/bin/sh\n[ \"$3\" = attach ] && { sleep 0.5; exit 0; }\nexec "+real+" \"$@\"\n")
+		t.Setenv("PATH", home+"/stub-tmux:"+os.Getenv("PATH"))
+		pid := home + "/check-pid"
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') echo $$ > \""+pid+"\"; exec sleep 60 ;;\nesac\nexec sleep 300\n")
+		ttyForTests = true
+		t.Cleanup(func() { ttyForTests = false })
+		if code, out, errOut := call("--tmux"); code != 0 {
+			t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(readFile(t, pid)))
+		if err != nil {
+			t.Fatalf("the check didn't start: %v", err)
+		}
+		t.Cleanup(func() { syscall.Kill(n, syscall.SIGKILL) })
+		alive := true
+		for i := 0; i < 20 && alive; i++ {
+			alive = syscall.Kill(n, 0) == nil
+			time.Sleep(50 * time.Millisecond)
+		}
+		if alive {
+			t.Error("the login check outlived cadrei")
+		}
+	})
+	// Review recheck (L1): every open, not only one that logged in, has
+	// the orchestrator read the config dir the check read, not an older
+	// tmux server's.
+	t.Run("config dir", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		stubClaude(t, home)
+		must(t, "init", "work")
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/old-config")
+		tmuxIn(os.Getenv("CADREI_TMUX_SOCKET"), "new-session", "-d", "-s", "older")
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/.claude")
+		must(t, "--tmux", "--detach")
+		var ran string
+		for i := 0; i < 100 && !strings.Contains(ran, "CLAUDE_CONFIG_DIR="); i++ {
+			time.Sleep(50 * time.Millisecond)
+			ran = readFile(t, home+"/orch-ran")
+		}
+		if !strings.Contains(ran, "\nCLAUDE_CONFIG_DIR="+home+"/.claude\n") {
+			t.Errorf("the orchestrator's config dir:\n%s", ran)
+		}
+	})
+	t.Run("unsure", func(t *testing.T) {
+		home := sandbox(t)
+		withTmux(t, home)
+		stubClaude(t, home)
+		must(t, "init", "work")
+		os.WriteFile(home+"/release", nil, 0o644)
+		writeStub(t, home+"/bin/claude", "#!/bin/sh\ncase \"$1 $2\" in\n  '--version '*) echo '2.1.300 (Claude Code)'; exit 0 ;;\n  'auth status') sleep 60 ;;\n  'auth login') echo login >> \""+home+"/calls\"; exit 0 ;;\nesac\necho orchestrator >> \""+home+"/calls\"\n")
+		start := time.Now()
+		code, out, errOut := callIn("", "--no-tmux")
+		took := time.Since(start)
+		if code != 0 || readFile(t, home+"/calls") != "orchestrator\n" {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		limit := 3*time.Second + 2*time.Second
+		if raceOn {
+			limit += 5 * time.Second
+		}
+		if took > limit {
+			t.Errorf("took %s", took)
+		}
+	})
+}
+
+// Review of 9342d00 (4): every first-run path that opens the orchestrator
+// has the login line in its plan and logs in before it opens: Enter (in
+// tmux), a restore from GitHub (r), a plug-in, an archived setup (o).
+func TestEveryFirstRunPathLogsIn(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, home string) string // the keys to press
+	}{
+		{"enter", func(t *testing.T, home string) string {
+			os.Remove(home + "/release")
+			stubAttach(t, home)
+			claudeConfig(t, home)
+			return "\n\n"
+		}},
+		{"github", func(t *testing.T, home string) string {
+			claudeConfig(t, home)
+			return "r\n" + backupOf(t, "work", bareRepo(t, "app")) + "\np\n\n"
+		}},
+		{"plug-in", func(t *testing.T, home string) string {
+			must(t, "init", "work")
+			must(t, "init", "life")
+			os.RemoveAll(home + "/.cadrei/config")
+			os.RemoveAll(home + "/.claude/skills/cadrei")
+			return "p\n"
+		}},
+		{"archive", func(t *testing.T, home string) string {
+			must(t, "init", "main")
+			must(t, "uninstall", "--archive", "--yes")
+			return "o\n\n"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := firstMachine(t)
+			keys := tc.setup(t, home)
+			loggedOut(t, home, 0)
+			code, out, errOut := callIn(keys)
+			// The path's own plan: r and o show theirs after the first one.
+			plan := out[max(strings.LastIndex(out, "Here's the plan"), 0):]
+			if code != 0 || !strings.Contains(plan, "- Log in to Claude Code (it opens your browser)") || !strings.Contains(plan, "+ Logged in to Claude Code") {
+				t.Errorf("exit %d:\n%s%s", code, out, errOut)
+			}
+			if got := readFile(t, home+"/calls"); got != "login\norchestrator\n" {
+				t.Errorf("calls:\n%s", got)
+			}
+		})
+	}
+}
+
+// Review of 9342d00 (1, 2 and 4): the login runs without Claude Code's
+// session variables; a login that ends well but leaves no login opens
+// nothing; and after a login, the orchestrator in tmux reads Claude Code's
+// config dir as the login did, not as an older tmux server says.
+func TestTheFirstRunsLoginHoldsUp(t *testing.T) {
+	t.Run("session variables", func(t *testing.T) {
+		home := firstMachine(t)
+		loggedOut(t, home, 0)
+		t.Setenv("CLAUDECODE", "1")
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "cli")
+		if code, out, errOut := callIn("p\n"); code != 0 {
+			t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if env := readFile(t, home+"/login-env"); strings.Contains(env, "CLAUDECODE=") || strings.Contains(env, "CLAUDE_CODE_ENTRYPOINT=") {
+			t.Errorf("the login got the session's variables:\n%s", env)
+		}
+	})
+	t.Run("no login after all", func(t *testing.T) {
+		home := firstMachine(t)
+		loggedOutStub(t, home, 0, false)
+		code, out, errOut := callIn("p\n")
+		if code != 1 || strings.Contains(out, "Logged in to") || !strings.Contains(flat(errOut), "not logged in to Claude Code yet, so your orchestrator didn't open.") {
+			t.Errorf("exit %d:\n%s%s", code, out, errOut)
+		}
+		if got := readFile(t, home+"/calls"); got != "login\n" {
+			t.Errorf("calls:\n%s", got)
+		}
+	})
+	t.Run("config dir", func(t *testing.T) {
+		home := firstMachine(t)
+		os.Remove(home + "/release")
+		stubAttach(t, home)
+		// A tmux server started earlier, with another config dir.
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/old-config")
+		tmuxIn(os.Getenv("CADREI_TMUX_SOCKET"), "new-session", "-d", "-s", "older")
+		t.Setenv("CLAUDE_CONFIG_DIR", home+"/.claude")
+		loggedOut(t, home, 0)
+		if code, out, errOut := callIn("\n\n"); code != 0 {
+			t.Fatalf("exit %d:\n%s%s", code, out, errOut)
+		}
+		var ran string
+		for i := 0; i < 100 && !strings.Contains(ran, "CLAUDE_CONFIG_DIR="); i++ {
+			time.Sleep(50 * time.Millisecond)
+			ran = readFile(t, home+"/orch-ran")
+		}
+		if !strings.Contains(ran, "\nCLAUDE_CONFIG_DIR="+home+"/.claude\n") {
+			t.Errorf("the orchestrator's config dir:\n%s", ran)
+		}
+	})
+}
+
+// A login that fails or is cancelled (Ctrl-C ends it with 130) leaves the
+// crew made and says how to log in and go on. The orchestrator doesn't
+// open: it would only answer "Not logged in".
+func TestFirstRunSaysHowToLogInWhenTheLoginFails(t *testing.T) {
+	for _, exit := range []int{1, 130} {
+		t.Run(strconv.Itoa(exit), func(t *testing.T) {
+			home := firstMachine(t)
+			loggedOut(t, home, exit)
+			code, out, errOut := callIn("p\n")
+			all := flat(out + errOut)
+			if code != 1 ||
+				!strings.Contains(all, "not logged in to Claude Code yet, so your orchestrator didn't open.") ||
+				!strings.Contains(all, "Your setup is ready. Log in with claude auth login, then run cadrei.") {
+				t.Errorf("exit %d:\n%s%s", code, out, errOut)
+			}
+			if got := readFile(t, home+"/calls"); got != "login\n" {
+				t.Errorf("calls:\n%s", got)
+			}
+			if _, err := os.Stat(home + "/.cadrei/main"); err != nil {
+				t.Errorf("no crew: %v", err)
+			}
+		})
 	}
 }
 
@@ -221,7 +566,7 @@ func TestTheFullCheckSaysWhatTheFirstRunSays(t *testing.T) {
 	}
 	for _, tc := range []struct{ script, want string }{
 		{"case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo '{\"loggedIn\": false}'; exit 1;; esac\nexit 0\n",
-			"! Claude Code 2.1.300, not logged in yet. It'll ask you when it opens."},
+			"! Claude Code 2.1.300, not logged in yet Log in with claude auth login."},
 		{"case \"$1 $2\" in '--version '*) echo '2.1.300 (Claude Code)';; 'auth status') echo 'unknown command'; exit 2;; esac\nexit 0\n",
 			"! Claude Code 2.1.300. Couldn't check your login. If it asks, log in."},
 		{"exit 1\n", "Claude Code is installed but won't start. Reinstall it with brew reinstall"},
@@ -640,10 +985,12 @@ func TestFirstRunAsksTheRuntimeOnce(t *testing.T) {
 		"case \"$1 $2\" in\n"+
 		"  '--version '*) echo version >> "+calls+"; echo '2.1.300 (Claude Code)'; exit 0 ;;\n"+
 		"  'auth status') echo auth >> "+calls+"; echo '{\"loggedIn\": false}'; exit 1 ;;\n"+
+		"  'auth login') echo login >> "+calls+"; exit 1 ;;\n"+
 		"esac\n")
 	_, out, errOut := callIn("p\n")
+	// Asked once before the login; the login then runs once.
 	got := readFile(t, calls)
-	if strings.Count(got, "auth") != 1 || strings.Count(got, "version") != 1 {
+	if got != "version\nauth\nlogin\n" {
 		t.Errorf("calls:\n%s", got)
 	}
 	if n := strings.Count(out+errOut, "not logged in yet"); n != 1 {

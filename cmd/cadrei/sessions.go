@@ -248,6 +248,11 @@ func (e *env) reportUp(u session.Up) func(session.Result) {
 				e.show("  ", why)
 			}
 		}
+		if res.Waiting {
+			// Logged out, say: up started it, but it sits there.
+			where := strings.TrimSpace(u.Team + " " + u.Project)
+			e.show("  ", "It's waiting on a login or setup screen and won't get going until you answer it: "+cmd("cadrei attach "+where))
+		}
 	}
 }
 

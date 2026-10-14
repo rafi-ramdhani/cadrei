@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -47,8 +48,9 @@ type stubRuntime struct{ bin string }
 
 func (s stubRuntime) Name() string                            { return "stub" }
 func (s stubRuntime) Title() string                           { return "Stub" }
-func (s stubRuntime) Probe() runtime.Probe                    { return runtime.Probe{} }
+func (s stubRuntime) Probe(context.Context) runtime.Probe     { return runtime.Probe{} }
 func (s stubRuntime) Help() runtime.InstallHelp               { return runtime.InstallHelp{} }
+func (s stubRuntime) Login() (runtime.Command, error)         { return runtime.Command{}, nil }
 func (s stubRuntime) Model() string                           { return "Stub" }
 func (s stubRuntime) ModelHint() string                       { return "a stub model" }
 func (s stubRuntime) SessionVars() []string                   { return nil }

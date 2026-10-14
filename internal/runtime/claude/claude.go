@@ -37,7 +37,17 @@ func (Claude) ModelHint() string {
 }
 
 func (Claude) Help() runtime.InstallHelp {
-	return runtime.InstallHelp{Install: "brew install --cask claude-code", Reinstall: "brew reinstall --cask claude-code", URL: "https://claude.com/claude-code"}
+	return runtime.InstallHelp{Install: "brew install --cask claude-code", Reinstall: "brew reinstall --cask claude-code", URL: "https://claude.com/claude-code", Login: "claude auth login"}
+}
+
+// Login is claude auth login: it opens the browser, or takes a pasted
+// code, in the user's own terminal.
+func (c Claude) Login() (runtime.Command, error) {
+	in, err := c.Detect()
+	if err != nil {
+		return runtime.Command{}, err
+	}
+	return runtime.Command{Argv: []string{in.Path, "auth", "login"}, Unset: sessionVars}, nil
 }
 
 func (Claude) Caps() runtime.Capabilities {
@@ -108,8 +118,21 @@ func (c Claude) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 		// IDE connection that terminal has (an IDE's built-in one).
 		unset = slices.DeleteFunc(slices.Clone(sessionVars), func(v string) bool { return v == ideVar })
 	}
-	return runtime.Command{Argv: argv, Dir: s.WorkDir, Unset: unset}, nil
+	// Every session reads Claude Code's config (its login, its trust
+	// marks, its transcripts) where cadrei checked the login and writes
+	// trust: cadrei's own config dir, set or not. In tmux, a server
+	// started earlier may have another one.
+	var env []string
+	if dir, ok := os.LookupEnv(configVar); ok {
+		env = append(env, configVar+"="+dir)
+	} else {
+		unset = append(slices.Clone(unset), configVar)
+	}
+	return runtime.Command{Argv: argv, Dir: s.WorkDir, Env: env, Unset: unset}, nil
 }
+
+// configVar is the folder Claude Code keeps its config and login in.
+const configVar = "CLAUDE_CONFIG_DIR"
 
 // ideVar is an IDE's connection: a member never takes the one of the
 // session that started it.
