@@ -2,6 +2,7 @@ package claude
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -462,5 +463,76 @@ func TestRiskyLooksBeyondAWorktreeOrASubmodule(t *testing.T) {
 	git(super+"/libs/sub", "worktree", "add", "-q", root+"/subwt")
 	if got := strings.Join((trust{}).Risky(root+"/subwt"), ","); got != "../super/libs/.claude/agents,../super/.claude/skills,../super/.claude/settings.json,../super/.claude/settings.local.json" {
 		t.Errorf("a worktree of a submodule: %q", got)
+	}
+}
+
+// Review of crew memory, H1: a member working inside its crew (a team
+// with no project) gets a settings copy naming a memory folder of its
+// own: not the crew's folder in Claude Code's (which moves into the
+// orchestrator's memory), and not in the crew. A member in a project
+// keeps its grants as they are, and its project's memory.
+func TestAMemberInsideTheCrewGetsItsOwnMemory(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "claude"), []byte("#!/bin/sh\n"), 0o755)
+	t.Setenv("PATH", bin)
+	cfg := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", cfg)
+	crew, _ := filepath.EvalSymlinks(t.TempDir())
+	build := filepath.Join(crew, ".claude", "build")
+	os.MkdirAll(build, 0o755)
+	os.MkdirAll(filepath.Join(crew, "teams", "research"), 0o755)
+	grants := filepath.Join(build, "member-settings-abc.json")
+	os.WriteFile(grants, []byte(`{"permissions": {"deny": ["Edit(//**/.cadrei/*/.memory/**)"]}}`), 0o400)
+	cmd, err := Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Member, Name: "work-research-researcher", Mode: "default", Cadrei: crew,
+		WorkDir: filepath.Join(crew, "teams", "research"), Grants: grants})
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := slices.Index(cmd.Argv, "--settings")
+	if k < 0 || cmd.Argv[k+1] == grants {
+		t.Fatalf("the grants as they were: %v", cmd.Argv)
+	}
+	var copy struct {
+		Memory      string `json:"autoMemoryDirectory"`
+		Permissions struct{ Deny []string }
+	}
+	raw, _ := os.ReadFile(cmd.Argv[k+1])
+	if err := json.Unmarshal(raw, &copy); err != nil {
+		t.Fatal(err)
+	}
+	if copy.Memory == "" || slices.Contains(memoryOps{}.Folders(crew), copy.Memory) || strings.HasPrefix(copy.Memory, crew+"/") || !strings.HasPrefix(copy.Memory, cfg+"/projects/") {
+		t.Errorf("its memory folder: %q", copy.Memory)
+	}
+	if len(copy.Permissions.Deny) != 1 {
+		t.Errorf("the copy lost the grants: %s", raw)
+	}
+	// Two members of the team: two folders.
+	other, _ := Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Member, Name: "work-research-editor", Mode: "default", Cadrei: crew,
+		WorkDir: filepath.Join(crew, "teams", "research"), Grants: grants})
+	if k2 := slices.Index(other.Argv, "--settings"); other.Argv[k2+1] == cmd.Argv[k+1] {
+		t.Error("two members share a copy")
+	}
+	// In a project outside the crew: the grants as they are.
+	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Member, Name: "work-dev-engineer", Mode: "default", Cadrei: crew,
+		WorkDir: t.TempDir(), Grants: grants})
+	if k := slices.Index(cmd.Argv, "--settings"); cmd.Argv[k+1] != grants {
+		t.Errorf("a member in a project: %v", cmd.Argv)
+	}
+}
+
+// Review of crew memory, L2: the folders for a crew reached through a
+// link are named after its real path and after the link.
+func TestMemoryFoldersForBothPaths(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/cfg")
+	real, _ := filepath.EvalSymlinks(t.TempDir())
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(real, link)
+	got := memoryOps{}.Folders(link)
+	want := []string{"/cfg/projects/" + projectFolder(real) + "/memory", "/cfg/projects/" + projectFolder(link) + "/memory"}
+	if !slices.Equal(got, want) {
+		t.Errorf("%v", got)
+	}
+	if got := (memoryOps{}).Folders(real); len(got) != 1 {
+		t.Errorf("one path, one folder: %v", got)
 	}
 }
