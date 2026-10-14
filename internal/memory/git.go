@@ -268,13 +268,12 @@ func FromHistory(crew, to, machine, done string) (Result, string, error) {
 }
 
 // LastOptOut is the last commit that removed notes from the crew's memory
-// folder, when it took the memory out for good: cadrei's OptOut commit,
-// or one made while the crew's cadrei.conf said MEMORY=machine. A crew
-// that only emptied its memory has none: the user cleared those notes.
-func LastOptOut(crew string) string { return lastOptOut(crew, "HEAD") }
-
-func lastOptOut(crew, rev string) string {
-	out, err := git(crew, "log", "-1", "--format=%H %s", "--diff-filter=D", rev, "--", Folder)
+// folder, when that commit took the memory out of the crew: cadrei's
+// OptOut commit, or one made while the crew's cadrei.conf said
+// MEMORY=machine. A crew that only emptied its memory has none: the user
+// cleared those notes.
+func LastOptOut(crew string) string {
+	out, err := git(crew, "log", "-1", "--format=%H %s", "--diff-filter=D", "--", Folder)
 	commit, subject, _ := strings.Cut(out, " ")
 	if err != nil || commit == "" || (subject != OptOut && !onMachine(crew, commit)) {
 		return ""
@@ -480,8 +479,8 @@ func dropAutostash(crew string) {
 
 // setAside handles an opt-out that came in: when this machine's crew
 // tracks the memory folder and its upstream took the whole folder out
-// (its cadrei.conf says MEMORY=machine, or its last removal is an opt-out,
-// not a crew that only emptied its memory), it sets this machine's notes
+// with its cadrei.conf saying MEMORY=machine (not a crew that only
+// emptied its memory, or opted back in), it sets this machine's notes
 // (as they are, committed or not) aside in aside, rewrites the unpushed
 // commits without the folder, so none of its notes is pushed again, and
 // takes the folder out of the crew. It returns how many notes it set
@@ -494,8 +493,10 @@ func setAside(crew, machine, aside string) (int, error) {
 	if has, _ := git(crew, "ls-tree", "-r", "--name-only", up, "--", Folder+"/"); has != "" {
 		return 0, nil
 	}
-	// An emptied memory reaches this machine as an emptying.
-	if !onMachine(crew, up) && lastOptOut(crew, up) == "" {
+	// An emptied memory reaches this machine as an emptying. An old
+	// opt-out in the history doesn't count: the crew may have opted back
+	// in since, and only the crew-wide setting removes the folder.
+	if !onMachine(crew, up) {
 		return 0, nil
 	}
 	base, err := git(crew, "merge-base", "HEAD", up)

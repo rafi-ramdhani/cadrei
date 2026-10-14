@@ -783,8 +783,7 @@ func TestPullWithUncommittedChanges(t *testing.T) {
 // tracking the folder, and this machine's other work keeps its commit.
 func TestPullAfterAnOptOut(t *testing.T) {
 	a, b := twoClones(t)
-	os.RemoveAll(Dir(a))
-	CommitRemoval(a, "Keep the orchestrator's memory on this machine")
+	optOut(t, a)
 	gitIn(t, a, "push", "-q")
 	write(t, filepath.Join(Dir(b), "role.md"), note("role", "the user", "2026-10-14T11:05:00Z", "The user manages."))
 	Commit(b, "Update the orchestrator's memory")
@@ -817,6 +816,66 @@ func TestPullAfterAnOptOut(t *testing.T) {
 		t.Errorf("%+v %v", res, err)
 	}
 	gone(t, aside)
+}
+
+// optOut does what keepOnMachine does after the orchestrator set
+// MEMORY=machine: the setting committed, the memory folder removed.
+func optOut(t *testing.T, crew string) {
+	t.Helper()
+	write(t, filepath.Join(crew, "cadrei.conf"), "MEMORY=machine\n")
+	gitIn(t, crew, "add", "cadrei.conf")
+	gitIn(t, crew, "commit", "-qm", "Set MEMORY=machine")
+	os.RemoveAll(Dir(crew))
+	CommitRemoval(crew, OptOut)
+}
+
+// Re-review 4, H3: after an opt-out and an opt-in (MEMORY=crew again),
+// the old opt-out commit doesn't make each pull strip the memory.
+func TestPullAfterAnOptIn(t *testing.T) {
+	a, b := twoClones(t)
+	optOut(t, a)
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(a, "cadrei.conf"), "MEMORY=crew\n")
+	gitIn(t, a, "commit", "-qam", "Set MEMORY=crew")
+	gitIn(t, a, "push", "-q")
+	// a, back in, commits its memory, and pulls from a crew that has none
+	// yet: the commit stays, and goes up.
+	write(t, filepath.Join(Dir(a), "tone.md"), "a's tone\n")
+	Commit(a, "Update the orchestrator's memory")
+	aside := filepath.Join(t.TempDir(), "aside")
+	if pulled, err := Pull(a, "a", aside); err != nil || pulled.SetAside != 0 || !tracked(a, Folder) {
+		t.Fatalf("a: %+v %v", pulled, err)
+	}
+	if got := gitIn(t, a, "log", "--format=%s", "@{upstream}..HEAD"); got != "Update the orchestrator's memory" {
+		t.Errorf("a's unpushed: %q", got)
+	}
+	gitIn(t, a, "push", "-q")
+	// b never saw the opt-out, and changed a note.
+	write(t, filepath.Join(Dir(b), "role.md"), "b's role\n")
+	Commit(b, "Update the orchestrator's memory")
+	if pulled, err := Pull(b, "b", aside); err != nil || pulled.SetAside != 0 || !tracked(b, Folder) {
+		t.Fatalf("b: %+v %v", pulled, err)
+	}
+	gone(t, aside)
+	if read(t, filepath.Join(Dir(b), "tone.md")) != "a's tone\n" || read(t, filepath.Join(Dir(b), "role.md")) != "b's role\n" {
+		t.Error("b's notes")
+	}
+	gitIn(t, b, "push", "-q")
+	if _, err := Pull(a, "a", aside); err != nil {
+		t.Fatal(err)
+	}
+	// Out again: a machine that brought the first opt-out's notes back
+	// gets the second one's, once; the first one's never again.
+	first := LastOptOut(a)
+	optOut(t, a)
+	d := filepath.Join(t.TempDir(), "memory")
+	res, removal, err := FromHistory(a, d, "a", first)
+	if err != nil || removal == "" || removal == first || res.Moved != 2 || read(t, filepath.Join(d, "tone.md")) != "a's tone\n" {
+		t.Errorf("the second opt-out: %+v %q %v", res, removal, err)
+	}
+	if res, again, _ := FromHistory(a, t.TempDir(), "a", removal); res.Moved != 0 || again != "" {
+		t.Errorf("brought back twice: %+v", res)
+	}
 }
 
 // Re-review 3, M7: a crew that only emptied its memory isn't an opt-out.
