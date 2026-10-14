@@ -5,6 +5,8 @@
 package claude
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -152,7 +154,8 @@ func MemberMemory(workDir, name string) string {
 }
 
 // ownMemory writes a copy of the member's grants with its own memory
-// folder (MemberMemory), beside them, and returns it.
+// folder (MemberMemory), beside them, named and written as Export names
+// and writes the grants' copy, and returns it.
 func ownMemory(s runtime.LaunchSpec) (string, error) {
 	raw, err := os.ReadFile(s.Grants)
 	if err != nil {
@@ -163,8 +166,10 @@ func ownMemory(s runtime.LaunchSpec) (string, error) {
 		return "", fmt.Errorf("%s: %w", s.Grants, err)
 	}
 	root.Set("autoMemoryDirectory", jsonx.String(MemberMemory(s.WorkDir, s.Name)))
-	path := filepath.Join(filepath.Dir(s.Grants), "member-settings-"+projectFolder(s.Name)+".json")
-	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
+	text := jsonx.Format(root, "  ")
+	sum := sha256.Sum256(text)
+	path := filepath.Join(filepath.Dir(s.Grants), "member-settings."+hex.EncodeToString(sum[:])[:16]+".json")
+	return path, fsx.WriteFile(path, text, 0o400)
 }
 
 // configVar is the folder Claude Code keeps its config and login in.
