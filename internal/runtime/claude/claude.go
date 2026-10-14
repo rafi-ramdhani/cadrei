@@ -84,11 +84,11 @@ func (c Claude) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 		argv = append(argv, "--append-system-prompt-file", s.PromptFile)
 	}
 	grants := s.Grants
-	if s.Role == runtime.Member && grants != "" && s.Cadrei != "" && s.WorkDir != "" && paths.Within(paths.Real(s.WorkDir), paths.Real(s.Cadrei)) {
+	if s.Role == runtime.Member && s.Settings == "" && s.Cadrei != "" && s.WorkDir != "" && paths.Within(paths.Real(s.WorkDir), paths.Real(s.Cadrei)) {
 		// A member working inside the crew (a team without a project)
 		// would save its own memory in the crew's folder of Claude Code's,
 		// which cadrei moves into the orchestrator's: it gets one of its
-		// own instead.
+		// own instead, with or without grants.
 		var err error
 		if grants, err = ownMemory(s); err != nil {
 			return runtime.Command{}, err
@@ -157,18 +157,26 @@ func MemberMemory(workDir, name string) string {
 // folder (MemberMemory), beside them, named by its text and read-only as
 // the grants' copy is, and returns it.
 func ownMemory(s runtime.LaunchSpec) (string, error) {
-	raw, err := os.ReadFile(s.Grants)
-	if err != nil {
-		return "", err
-	}
-	root, err := jsonx.Parse(raw)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", s.Grants, err)
+	// With no grants copy (cadrei couldn't write one), a file with only
+	// the memory folder, in the crew's build folder.
+	root, dir := jsonx.NewObject(), Claude{}.BuildDir(s.Cadrei)
+	if s.Grants != "" {
+		raw, err := os.ReadFile(s.Grants)
+		if err != nil {
+			return "", err
+		}
+		if root, err = jsonx.Parse(raw); err != nil {
+			return "", fmt.Errorf("%s: %w", s.Grants, err)
+		}
+		dir = filepath.Dir(s.Grants)
 	}
 	root.Set("autoMemoryDirectory", jsonx.String(MemberMemory(s.WorkDir, s.Name)))
 	text := jsonx.Format(root, "  ")
 	sum := sha256.Sum256(text)
-	path := filepath.Join(filepath.Dir(s.Grants), "member-settings-own."+hex.EncodeToString(sum[:])[:16]+".json")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "member-settings-own."+hex.EncodeToString(sum[:])[:16]+".json")
 	return path, fsx.WriteFile(path, text, 0o400)
 }
 

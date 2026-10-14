@@ -512,12 +512,28 @@ func TestAMemberInsideTheCrewGetsItsOwnMemory(t *testing.T) {
 	if k2 := slices.Index(other.Argv, "--settings"); other.Argv[k2+1] == cmd.Argv[k+1] {
 		t.Error("two members share a copy")
 	}
+	// Re-review L12: with no grants copy, still a memory folder of its own.
+	bare, err := Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Member, Name: "work-research-researcher", Mode: "default", Cadrei: crew,
+		WorkDir: filepath.Join(crew, "teams", "research")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := slices.Index(bare.Argv, "--settings"); k < 0 || !strings.Contains(readText(t, bare.Argv[k+1]), `"autoMemoryDirectory": "`+copy.Memory+`"`) {
+		t.Errorf("no grants: %v", bare.Argv)
+	}
 	// In a project outside the crew: the grants as they are.
 	cmd, _ = Claude{}.Launch(runtime.LaunchSpec{Role: runtime.Member, Name: "work-dev-engineer", Mode: "default", Cadrei: crew,
 		WorkDir: t.TempDir(), Grants: grants})
 	if k := slices.Index(cmd.Argv, "--settings"); cmd.Argv[k+1] != grants {
 		t.Errorf("a member in a project: %v", cmd.Argv)
 	}
+}
+
+// readText is a file's text, or "".
+func readText(t *testing.T, path string) string {
+	t.Helper()
+	raw, _ := os.ReadFile(path)
+	return string(raw)
 }
 
 // Review of crew memory, L2: the folders for a crew reached through a
