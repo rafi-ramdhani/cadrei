@@ -328,8 +328,9 @@ func everyChat(rt runtime.Runtime) (string, error) {
 	return hookOff, err
 }
 
-// statusOf gathers one cadrei's status.
-func statusOf(c cadreis.Cadrei, def string, t session.Tmux) cadreiStatus {
+// statusOf gathers one cadrei's status, with how full each running
+// member's context is when context is set: ls --watch leaves it out.
+func statusOf(c cadreis.Cadrei, def string, t session.Tmux, context bool) cadreiStatus {
 	s := cadreiStatus{Cadrei: cadreiView{Name: printable(c.Name), Path: c.Path, Default: c.Name == def, Missing: !c.Present()},
 		Running: []sessionView{}, Projects: []projectView{}, Teams: map[string][]memberView{}, Problems: problemsOf(c)}
 	scope := session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == def, T: t}
@@ -339,7 +340,9 @@ func statusOf(c cadreis.Cadrei, def string, t session.Tmux) cadreiStatus {
 	for _, i := range scope.Running() {
 		s.Running = append(s.Running, viewOf(t, i))
 	}
-	addContext(s.Running)
+	if context {
+		addContext(s.Running)
+	}
 	if p := projectsOf(c, true); p != nil {
 		s.Projects = p
 	}
@@ -461,7 +464,7 @@ func runLs(e *env) int {
 	def := cadreis.Default()
 	list, _ := cadreis.List()
 	if all {
-		st, unmarked := allJSON(t)
+		st, unmarked := allJSON(t, true)
 		if asJSON {
 			return e.printJSON(st)
 		}
@@ -511,7 +514,7 @@ func runLs(e *env) int {
 	if !asJSON {
 		e.conf(r) // a status screen says when cadrei.conf has lines it ignores
 	}
-	st := crewJSON(r, t)
+	st := crewJSON(r, t, true)
 	if asJSON {
 		return e.printJSON(st)
 	}
@@ -533,9 +536,10 @@ func runLs(e *env) int {
 	return 0
 }
 
-// crewJSON is cadrei ls --json for the crew r.
-func crewJSON(r *cadreis.Resolved, t session.Tmux) cadreiStatus {
-	st := statusOf(r.Cadrei, r.Default, t)
+// crewJSON is cadrei ls --json for the crew r, with context as statusOf
+// has it.
+func crewJSON(r *cadreis.Resolved, t session.Tmux, context bool) cadreiStatus {
+	st := statusOf(r.Cadrei, r.Default, t, context)
 	st.Version, st.Hook = jsonVersion, hookState()
 	st.OpensIn, _ = cadreis.OpensIn(r.Cadrei)
 	st.Cadrei.From, st.Cadrei.Project = r.From, r.Project
@@ -552,8 +556,8 @@ func crewJSON(r *cadreis.Resolved, t session.Tmux) cadreiStatus {
 }
 
 // allJSON is cadrei ls --json --all, and the sessions in it without
-// cadrei's markers.
-func allJSON(t session.Tmux) (allStatus, map[string]bool) {
+// cadrei's markers, with context as statusOf has it.
+func allJSON(t session.Tmux, context bool) (allStatus, map[string]bool) {
 	def := cadreis.Default()
 	list, _ := cadreis.List()
 	st := allStatus{Version: jsonVersion, OpensIn: opensInOf(def), Hook: hookState(), Cadreis: []cadreiStatus{}, Legacy: []sessionView{}, Unknown: []sessionView{}}
@@ -561,7 +565,7 @@ func allJSON(t session.Tmux) (allStatus, map[string]bool) {
 	for _, c := range list {
 		known[c.Path] = true
 		if c.Present() {
-			st.Cadreis = append(st.Cadreis, statusOf(c, def, t))
+			st.Cadreis = append(st.Cadreis, statusOf(c, def, t, context))
 		}
 	}
 	// A cadrei- session without markers (made by hand, or a start that

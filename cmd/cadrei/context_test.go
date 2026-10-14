@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
@@ -35,11 +36,11 @@ func TestLsShowsContextUse(t *testing.T) {
 		t.Errorf("tokens only: %q", r)
 	}
 	// A Haiku: a known window, its percent, and the hint past 80%.
-	at(contextReply("claude-haiku-5-5", 170000))
+	at(contextReply("claude-haiku-4-5-20251001", 170000))
 	if r := row(t, "engineer"); !strings.HasSuffix(r, " · context 170k (85%), compact soon") {
 		t.Errorf("a full Haiku: %q", r)
 	}
-	at(contextReply("claude-haiku-5-5", 100000))
+	at(contextReply("claude-haiku-4-5-20251001", 100000))
 	if r := row(t, "engineer"); !strings.HasSuffix(r, " · context 100k (50%)") {
 		t.Errorf("a Haiku at half: %q", r)
 	}
@@ -101,6 +102,12 @@ func TestLsShowsContextUse(t *testing.T) {
 	if r := row(t, "engineer"); !strings.Contains(r, " · context 142k (14%)") || strings.Contains(r, "compact soon") {
 		t.Errorf("a 1M setting: %q", r)
 	}
+	// Review M1: after /model to Sonnet, the 1M setting says nothing.
+	at(contextReply("claude-sonnet-5-5", 182000))
+	if r := row(t, "engineer"); !strings.Contains(r, " · context 182k · ") || strings.Contains(r, "%") {
+		t.Errorf("a 1M setting, then /model sonnet: %q", r)
+	}
+	at(contextReply("claude-opus-5-5", 142400))
 	// The snapshot has it; the team status line doesn't.
 	t.Setenv("CADREI_HOME", c)
 	t.Setenv("CADREI_ORCHESTRATOR", "1")
@@ -110,4 +117,47 @@ func TestLsShowsContextUse(t *testing.T) {
 	if out := must(t, "hook", "team-status"); strings.Contains(out, "context") {
 		t.Errorf("the team status line:\n%s", out)
 	}
+}
+
+// Review L2: after /clear, the member's session start hook names the new
+// conversation's transcript, so the old one's size doesn't show while
+// nothing was said in the new one.
+func TestContextAfterClear(t *testing.T) {
+	c := teamOf(t)
+	old := filepath.Join(t.TempDir(), "old.jsonl")
+	os.WriteFile(old, []byte(contextReply("claude-opus-5-5", 182000)+"\n"), 0o600)
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"Stop","transcript_path":"`+old+`"}`)
+	if r := row(t, "engineer"); !strings.HasSuffix(r, " · context 182k") {
+		t.Fatalf("before /clear: %q", r)
+	}
+	fresh := filepath.Join(t.TempDir(), "new.jsonl")
+	t.Setenv("CADREI_HOME", c)
+	t.Setenv("CADREI_MEMBER", "work-dev-engineer")
+	callIn(`{"hook_event_name":"SessionStart","source":"clear","session_id":"6f1c2b9e-4a5d-4e8f-9b3a-2c7d1e0f5a6b","transcript_path":"`+fresh+`"}`, "hook", "session")
+	t.Setenv("CADREI_HOME", "")
+	os.Unsetenv("CADREI_MEMBER")
+	if r := row(t, "engineer"); !strings.Contains(r, " idle since ") || strings.Contains(r, "context") {
+		t.Errorf("after /clear: %q", r)
+	}
+}
+
+// Review M2: ls --watch leaves context out, its snapshots included, so a
+// round that reads a member again never drops it: a new reply in an idle
+// member's chat gives no line.
+func TestTheStreamLeavesContextOut(t *testing.T) {
+	c := teamOf(t)
+	fastWatch(t)
+	transcript := filepath.Join(t.TempDir(), "t.jsonl")
+	os.WriteFile(transcript, []byte(contextReply("claude-opus-5-5", 142400)+"\n"), 0o600)
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"Stop","transcript_path":"`+transcript+`"}`)
+	t.Setenv("CADREI_HOME", c)
+	s := startWatch(t)
+	if l := s.expect(t, lineSnapshot)[0]; strings.Contains(l.raw, `"context"`) {
+		t.Errorf("the snapshot has context: %s", l.raw)
+	}
+	time.Sleep(200 * time.Millisecond)
+	f, _ := os.OpenFile(transcript, os.O_APPEND|os.O_WRONLY, 0o600)
+	f.WriteString(contextReply("claude-opus-5-5", 150000) + "\n")
+	f.Close()
+	s.quiet(t, 500*time.Millisecond)
 }

@@ -245,7 +245,7 @@ func (w *watcher) snapshot(reason string, now time.Time) error {
 	// shows as a change next round, never as nothing.
 	var status any
 	if w.all {
-		st, _ := allJSON(w.t)
+		st, _ := allJSON(w.t, false)
 		w.crews = nil
 		for i := range st.Cadreis {
 			w.crews = append(w.crews, w.pictureOf(&st.Cadreis[i]))
@@ -258,7 +258,7 @@ func (w *watcher) snapshot(reason string, now time.Time) error {
 		if _, err := os.Stat(c.Path); err != nil {
 			st = goneStatus(w.r)
 		} else {
-			st = crewJSON(w.r, w.t)
+			st = crewJSON(w.r, w.t, false)
 		}
 		cw := w.pictureOf(&st)
 		cw.c = c
