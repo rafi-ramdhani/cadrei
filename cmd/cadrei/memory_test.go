@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -248,12 +249,33 @@ func TestTheMemoryInPlansAndCommits(t *testing.T) {
 	if !strings.Contains(holds(cadreis.Cadrei{Name: "work", Path: c}), ", and your orchestrator's memory (.memory/, 1 note)") {
 		t.Errorf("--all plan: %s", holds(cadreis.Cadrei{Name: "work", Path: c}))
 	}
-	os.WriteFile(c+"/.memory/new.md", []byte("new\n"), 0o644)
-	if out, err := commitChanges(c); err != nil {
-		t.Fatal(string(out))
+	// M2: the archive's commit takes the memory only once the user was
+	// told, and never after MEMORY=machine; the warning about untracked
+	// files names the memory only when it stays out.
+	crew := cadreis.Cadrei{Name: "work", Path: c}
+	archived := func(note string) (committed, warned bool) {
+		t.Helper()
+		os.WriteFile(c+"/.memory/"+note, []byte(note+"\n"), 0o644)
+		warned = slices.Contains(checkBackup(crew).untracked, ".memory/"+note)
+		if out, err := commitChanges(c); err != nil {
+			t.Fatal(string(out))
+		}
+		files, _ := exec.Command("git", "-C", c, "show", "--name-only", "--format=", "HEAD").Output()
+		return strings.Contains(string(files), ".memory/"+note), warned
 	}
-	if files, _ := exec.Command("git", "-C", c, "show", "--name-only", "--format=", "HEAD").Output(); !strings.Contains(string(files), ".memory/new.md") {
-		t.Errorf("the archive's commit: %q", files)
+	cadreis.SetMemoryNotice(crew, "")
+	if committed, warned := archived("before.md"); committed || !warned {
+		t.Errorf("before the notice: committed %v, warned %v", committed, warned)
+	}
+	cadreis.SetMemoryNotice(crew, "2026-10-14T12:00:00Z")
+	if committed, warned := archived("new.md"); !committed || warned {
+		t.Errorf("after the notice: committed %v, warned %v", committed, warned)
+	}
+	f, _ := os.OpenFile(c+"/cadrei.conf", os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("MEMORY=machine\n")
+	f.Close()
+	if committed, warned := archived("after.md"); committed || !warned {
+		t.Errorf("after MEMORY=machine: committed %v, warned %v", committed, warned)
 	}
 	if !memory.RemovePointer(d) {
 		t.Error("cadrei's pointer stayed")
@@ -301,4 +323,101 @@ func TestAnOlderCrewGetsTheUnionLineWithItsMemory(t *testing.T) {
 		t.Errorf("the first memory commit holds %q", files)
 	}
 	_ = home
+}
+
+// Review of crew memory, L2: with ~/.cadrei a link, notes Claude Code
+// saved under the crew's path as written move in too.
+func TestTheMemoryMovesInThroughALink(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	stubClaude(t, home)
+	must(t, "init", "work")
+	os.Rename(home+"/.cadrei", home+"/elsewhere")
+	os.Symlink(home+"/elsewhere", home+"/.cadrei")
+	rt, _ := runtime.Get(runtimeName())
+	folders := rt.Memory().Folders(home + "/.cadrei/work")
+	if len(folders) != 2 {
+		t.Fatalf("folders: %v", folders)
+	}
+	d := folders[1] // named after the path as written
+	os.MkdirAll(d, 0o700)
+	os.WriteFile(d+"/role.md", []byte("role\n"), 0o644)
+	os.WriteFile(home+"/release", nil, 0o644)
+	must(t)
+	if readFile(t, home+"/elsewhere/work/.memory/role.md") != "role\n" {
+		t.Error("the note didn't move in")
+	}
+}
+
+// H1: a member of a team with no project, which works inside the crew,
+// starts with a memory folder of its own, not the crew's folder in Claude
+// Code's that moves into the orchestrator's memory.
+func TestAMemberInTheCrewKeepsItsOwnMemory(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	stubClaude(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	must(t, "up", "dev/engineer")
+	ran := readFile(t, home+"/orch-ran")
+	_, after, _ := strings.Cut(ran, "--settings\n")
+	file, _, _ := strings.Cut(after, "\n")
+	var copy map[string]any
+	json.Unmarshal([]byte(readFile(t, file)), &copy)
+	rt, _ := runtime.Get(runtimeName())
+	dir, _ := copy["autoMemoryDirectory"].(string)
+	if dir == "" || slices.Contains(rt.Memory().Folders(c), dir) || strings.HasPrefix(dir, c+"/") {
+		t.Errorf("the member's memory folder: %q (settings %s)", dir, file)
+	}
+}
+
+// M1: one machine keeps its memory on itself and pushes the removal; the
+// other machine's clone pulls it, and its next open brings the notes back
+// from the history into its own folder for the crew.
+func TestTheOtherMachineKeepsItsMemory(t *testing.T) {
+	home, c, _ := memoryCrew(t)
+	must(t)
+	must(t) // committed
+	// The crew's pre-push hook names the test binary, so the pushes here
+	// skip it: they only set the test up.
+	bare := filepath.Join(t.TempDir(), "backup.git")
+	for _, args := range [][]string{{"init", "-q", "--bare", bare}, {"-C", c, "remote", "add", "origin", bare}, {"-C", c, "push", "-q", "--no-verify", "-u", "origin", "HEAD"}} {
+		if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	other := home + "/.cadrei/life"
+	if out, err := exec.Command("git", "clone", "-q", bare, other).CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	// This machine opts out, and pushes.
+	f, _ := os.OpenFile(c+"/cadrei.conf", os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("MEMORY=machine\n")
+	f.Close()
+	exec.Command("git", "-C", c, "commit", "-qam", "Set MEMORY=machine").Run()
+	must(t)
+	if out, err := exec.Command("git", "-C", c, "push", "-q", "--no-verify").CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	// The other clone pulls, and opens.
+	if out, err := exec.Command("git", "-C", other, "pull", "-q").CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	if _, err := os.Stat(other + "/.memory"); err == nil {
+		t.Fatal("the pull kept .memory")
+	}
+	t.Chdir(other)
+	out := must(t)
+	if !strings.Contains(flat(out), "+ Brought your orchestrator's memory back to this machine from your crew's history (1 note).") {
+		t.Errorf("no word:\n%s", out)
+	}
+	rt, _ := runtime.Get(runtimeName())
+	d := rt.Memory().Folders(other)[0]
+	if readFile(t, d+"/user_role.md") != "The user is a developer.\n" {
+		t.Error("the note didn't come back")
+	}
+	// Once back, never again.
+	if out := must(t); strings.Contains(out, "Brought") {
+		t.Errorf("again:\n%s", out)
+	}
 }

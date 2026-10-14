@@ -5,6 +5,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ const (
 // "". notice reports that this open tells the user, once per crew.
 func (e *env) crewMemory(rt runtime.Runtime, c cadreis.Cadrei) (dir string, notice bool) {
 	crew := paths.Real(c.Path)
-	folders := rt.Memory().Folders(crew)
+	folders := memoryFolders(rt, c)
 	if cadreis.MemoryIn(c) == cadreis.MemoryOnMachine {
 		e.keepOnMachine(c, crew, folders)
 		return "", false
@@ -71,6 +73,16 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 		memory.RemovePointer(folders[0])
 		// A removal that wasn't committed yet (git was busy).
 		memory.CommitRemoval(crew, memoryLeft)
+		// Another machine kept the memory on its own and pushed the
+		// removal: this one brings the notes back from the history.
+		if holds, err := memory.Holds(folders[0]); err == nil && !holds {
+			if res, err := memory.FromHistory(crew, folders[0], memory.Machine()); err != nil {
+				e.warn("", "Your orchestrator's memory couldn't come back from your crew's history: "+strings.TrimSuffix(err.Error(), ".")+".",
+					"It's still in the history: ask your orchestrator to bring it back.")
+			} else if res.Moved > 0 {
+				e.note("", markDone, "Brought your orchestrator's memory back to this machine from your crew's history ("+count(res.Moved, "note")+"). It stays on this machine only now.")
+			}
+		}
 		return
 	}
 	if _, err := memory.MoveOut(crew, folders[0], memory.Machine()); err != nil {
@@ -81,6 +93,28 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 	memory.CommitRemoval(crew, memoryLeft)
 	cadreis.SetMemoryNotice(c, "")
 	e.note("", markDone, "Your orchestrator's memory is back on this machine only. Earlier backups still have it in their history.")
+}
+
+// memoryFolders are the runtime's own memory folders for the crew, the
+// one it writes to first: for its real path, and for ~/.cadrei/<name>
+// when that's a link to it, since Claude Code may have named its folder
+// after either.
+func memoryFolders(rt runtime.Runtime, c cadreis.Cadrei) []string {
+	out := rt.Memory().Folders(c.Path)
+	if written := filepath.Join(cadreis.Root(), c.Name); c.Name != "" && written != c.Path && paths.Real(written) == paths.Real(c.Path) {
+		for _, f := range rt.Memory().Folders(written) {
+			if !slices.Contains(out, f) {
+				out = append(out, f)
+			}
+		}
+	}
+	return out
+}
+
+// memoryShared reports whether the crew's memory may go into its backup:
+// the crew keeps it, and the user was told.
+func memoryShared(c cadreis.Cadrei) bool {
+	return cadreis.MemoryIn(c) == cadreis.MemoryInCrew && cadreis.MemoryNotice(c) != ""
 }
 
 // commitMemory is the session start hook's commit: once the user was told

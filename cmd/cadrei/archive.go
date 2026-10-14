@@ -73,7 +73,13 @@ func checkBackup(c cadreis.Cadrei) crewBackup {
 		b.uncommitted = true
 	}
 	if out, err := git("ls-files", "--others", "--exclude-standard"); err == nil && out != "" {
-		b.untracked = strings.Split(out, "\n")
+		for _, f := range strings.Split(out, "\n") {
+			// The memory's new notes go in with it (commitChanges).
+			if memoryShared(c) && strings.HasPrefix(f, memory.Folder+"/") {
+				continue
+			}
+			b.untracked = append(b.untracked, f)
+		}
 	}
 	// Where a push really goes: origin's push URL, which can differ from
 	// the one it fetches from.
@@ -397,10 +403,11 @@ func stoppedArchive() *cadreis.Archive {
 const pushLimit = 60 * time.Second
 
 // commitChanges commits the changes to files git already tracks in crew,
-// and the orchestrator's memory, new notes too, with none of the crew's
-// own hooks or fsmonitor: they're the user's.
+// and the orchestrator's memory, new notes too, once the user was told
+// the crew keeps it (memoryShared), with none of the crew's own hooks or
+// fsmonitor: they're the user's.
 func commitChanges(crew string) ([]byte, error) {
-	if _, err := os.Lstat(memory.Dir(crew)); err == nil {
+	if _, err := os.Lstat(memory.Dir(crew)); err == nil && memoryShared(cadreis.Cadrei{Path: crew}) {
 		if out, err := gitx.Reading(crew, "add", "-A", "--", memory.Folder).CombinedOutput(); err != nil {
 			return out, err
 		}

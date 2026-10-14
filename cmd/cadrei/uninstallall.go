@@ -228,7 +228,7 @@ func runUninstallAll(e *env) int {
 		// The pointers to each crew's memory, only where they're exactly
 		// cadrei's.
 		for _, c := range list {
-			for _, d := range rt.Memory().Folders(c.Path) {
+			for _, d := range memoryFolders(rt, c) {
 				memory.RemovePointer(d)
 			}
 		}
