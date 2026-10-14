@@ -57,11 +57,15 @@ func (memoryRule) outputs(files []shWord, line *lineText) bool {
 	return false
 }
 
-// elsewhere reports whether a redirection's target is a full path, or a
-// file descriptor (2>&1, >&-), so it doesn't land in the folder a line
-// went into.
+// elsewhere reports whether a redirection's target doesn't land in the
+// folder a line went into: a full path, a file descriptor (2>&1, >&-), or
+// a relative path that leaves the folder (../list.txt).
 func elsewhere(path string) bool {
-	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") || path == "-" || strings.Trim(path, "0123456789") == ""
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") || path == "-" || strings.Trim(path, "0123456789") == "" {
+		return true
+	}
+	in := filepath.Clean(filepath.Join(".memory", path))
+	return in != ".memory" && !strings.HasPrefix(in, ".memory/")
 }
 
 // crewRoot matches a crew's own folder, ~/.cadrei/<name>, as a path ends.

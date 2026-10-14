@@ -31,6 +31,7 @@ func TestTheGuardKeepsMembersOutOfTheMemory(t *testing.T) {
 		// Re-review M4: a redirection after cd, and a .memory folder copied
 		// into a crew.
 		`cd ~/.cadrei/main/.memory && echo "fact" > a.md`, `cd .memory; printf 'x' >> MEMORY.md`,
+		`cd .memory && echo x > ./a.md`, `cd .memory && echo x > sub/../a.md`,
 		`cp -r ~/proj/notes/.memory ~/.cadrei/main/`, `rsync -a ~/proj/notes/.memory ~/.cadrei/main`,
 		// A line it can't read whole is read word by word.
 		`echo "x > .memory/a.md`, `cat <<EOF > .memory/a.md`,
@@ -53,6 +54,8 @@ func TestTheGuardKeepsMembersOutOfTheMemory(t *testing.T) {
 		// After cd into the folder, writes elsewhere, and a .memory copied
 		// anywhere but a crew.
 		`cd .memory && cat a.md > /tmp/a.md`, `cd .memory && ls 2>&1 >/dev/null`, `cp -r ~/proj/notes/.memory /tmp/backup/`,
+		// Re-review 2, L13: a relative target that leaves the folder.
+		`cd .memory && ls > ../list.txt`, `cd ~/.cadrei/main/.memory && wc -l *.md > ../../counts.txt`,
 		`rsync -a ~/.cadrei/main/.memory ~/backups/`,
 	} {
 		if guardLine(memoryRule{}, c, 0) {
