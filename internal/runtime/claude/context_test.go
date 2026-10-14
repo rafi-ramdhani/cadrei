@@ -47,7 +47,15 @@ func TestContext(t *testing.T) {
 		{"compacted, nothing said since", "", []string{reply("claude-opus-5-5", 1, 0, 180000, 1, false, at), boundary, user}, 0, 0, true},
 		{"compacted, then a reply", "", []string{reply("claude-opus-5-5", 1, 0, 180000, 1, false, at), boundary, user, reply("claude-opus-5-5", 3, 2000, 18000, 400, false, at)}, 20403, 0, false},
 		{"a 1M setting", "opus[1m]", []string{reply("claude-opus-5-5", 0, 0, 580000, 0, false, at)}, 580000, millionWindow, false},
-		{"a Haiku", "", []string{reply("claude-haiku-5-5", 0, 0, 170000, 0, false, at)}, 170000, haikuWindow, false},
+		{"a 1M setting by its id", "claude-opus-5-5[1m]", []string{reply("claude-opus-5-5-20260901", 0, 0, 580000, 0, false, at)}, 580000, millionWindow, false},
+		// Review M1: /model to another model, the setting says nothing.
+		{"a 1M setting, then /model sonnet", "opus[1m]", []string{reply("claude-sonnet-5-5", 0, 0, 182000, 0, false, at)}, 182000, 0, false},
+		{"a 1M id setting, then /model to another", "claude-opus-5-5[1m]", []string{reply("claude-opus-4-6", 0, 0, 182000, 0, false, at)}, 182000, 0, false},
+		{"a 1M setting, then /model haiku", "sonnet[1m]", []string{reply("claude-haiku-4-5-20251001", 0, 0, 170000, 0, false, at)}, 170000, haikuWindow, false},
+		{"a Haiku", "", []string{reply("claude-haiku-4-5-20251001", 0, 0, 170000, 0, false, at)}, 170000, haikuWindow, false},
+		{"an older Haiku", "", []string{reply("claude-3-5-haiku-20241022", 0, 0, 170000, 0, false, at)}, 170000, haikuWindow, false},
+		// Review L1: a Haiku cadrei doesn't know the window of.
+		{"a later Haiku", "", []string{reply("claude-haiku-5-5", 0, 0, 170000, 0, false, at)}, 170000, 0, false},
 		{"no reply yet", "", []string{user}, -1, 0, false},
 		{"a line it can't read", "", []string{reply("claude-opus-5-5", 1, 0, 9000, 1, false, at), `{"type":"assistant", broken`}, 9002, 0, false},
 	} {
@@ -118,7 +126,7 @@ func TestContextAcrossAChunkEdge(t *testing.T) {
 }
 
 func TestContextPercent(t *testing.T) {
-	c, _ := sessions{}.Context(transcript(t, reply("claude-haiku-5-5", 0, 0, 170000, 0, false, "2026-10-14T10:30:00Z")), "")
+	c, _ := sessions{}.Context(transcript(t, reply("claude-haiku-4-5", 0, 0, 170000, 0, false, "2026-10-14T10:30:00Z")), "")
 	if c.Percent() != 85 {
 		t.Errorf("percent %d", c.Percent())
 	}

@@ -20,12 +20,17 @@ const (
 )
 
 // Windows cadrei can be sure of: a model setting with Claude Code's
-// [1m] suffix, and a Haiku. Any other model's window depends on the
-// account and the version, so it isn't guessed.
+// [1m] suffix, while that model is the one replying, and the Haikus in
+// haikus. Any other model's window depends on the account and the
+// version, so it isn't guessed.
 const (
 	millionWindow = 1_000_000
 	haikuWindow   = 200_000
 )
+
+// haikus are the Haiku models known to have haikuWindow, by the start of
+// their id. A later Haiku shows tokens only until it's added here.
+var haikus = []string{"claude-haiku-4-5", "claude-3-5-haiku", "claude-3-haiku"}
 
 // Context reads the last main-chain reply's usage from the end of the
 // transcript: input, cache writes, cache reads and output, the size of
@@ -35,7 +40,8 @@ const (
 // Claude Code's own stand-ins for errors (model "<synthetic>") don't
 // count.
 func (sessions) Context(transcript, model string) (runtime.ContextUse, bool) {
-	if transcript == "" {
+	// Only a regular file: opening a named pipe would wait for a writer.
+	if st, err := os.Lstat(transcript); transcript == "" || err != nil || !st.Mode().IsRegular() {
 		return runtime.ContextUse{}, false
 	}
 	f, err := os.Open(transcript)
@@ -110,13 +116,20 @@ func contextOf(line []byte, model string) (runtime.ContextUse, bool) {
 
 // window is a model's context window when it's certain, else 0: setting
 // is cadrei's model setting for the session, used the model the reply
-// names.
+// names. A [1m] setting counts only while the reply comes from that
+// model: an alias's family (opus[1m], a claude-opus-* reply), or the id
+// itself. After /model to another one, it says nothing about the window.
 func window(setting, used string) int {
-	switch {
-	case strings.HasSuffix(strings.ToLower(setting), "[1m]"):
-		return millionWindow
-	case strings.Contains(strings.ToLower(used), "haiku"):
-		return haikuWindow
+	setting, used = strings.ToLower(setting), strings.ToLower(used)
+	if base, ok := strings.CutSuffix(setting, "[1m]"); ok && base != "" {
+		if strings.HasPrefix(base, "claude-") && strings.HasPrefix(used, base) || strings.HasPrefix(used, "claude-"+base+"-") {
+			return millionWindow
+		}
+	}
+	for _, h := range haikus {
+		if used == h || strings.HasPrefix(used, h+"-") {
+			return haikuWindow
+		}
 	}
 	return 0
 }
