@@ -63,7 +63,7 @@ cadrei use work
 
 ### `cadrei pull`
 
-Brings in what your crew's other machines backed up, with git (`pull --rebase --autostash`). Your orchestrator runs it after its greeting. Your orchestrator's notes are never merged into one: when both machines changed a note, the other machine's keeps its name and this one's is kept beside it as `<name>.from-<machine>.md`, and when one deleted a note the other changed, the changed one stays. A clash in any other file stops it, changes nothing, and names the files. Members can't run it.
+Brings in what your crew's other machines backed up, with a git pull that replays your own commits on top. Your orchestrator runs it after its greeting. Your orchestrator's notes are never merged into one: when both machines changed a note, the other machine's keeps its name and this one's is kept beside it as `<name>.from-<machine>.md`, and when one deleted a note the other changed, the changed one stays. A clash in any other file stops it, changes nothing, and names the files. Members can't run it.
 
 ```bash
 cadrei pull
