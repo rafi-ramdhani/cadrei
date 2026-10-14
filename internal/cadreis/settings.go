@@ -48,21 +48,38 @@ const (
 	MemoryOnMachine = "machine"
 )
 
-// MemoryIn is where a cadrei's orchestrator keeps its memory: MEMORY in
-// the local cadrei.conf (this machine only), else in its cadrei.conf, else
-// the crew. A value it doesn't know counts as the crew.
+// MemoryIn is where a cadrei's orchestrator keeps its memory: the machine
+// when MEMORY=machine is in the local cadrei.conf (this machine only) or
+// in its cadrei.conf, else the crew. A local MEMORY=crew doesn't put the
+// memory back in a crew that keeps it out of its backup.
 func MemoryIn(c Cadrei) string {
-	for _, file := range []string{filepath.Join(LocalDir(c.Path), "cadrei.conf"), filepath.Join(c.Path, "cadrei.conf")} {
-		raw, _ := os.ReadFile(file)
-		values, _ := conf.Parse(string(raw))
-		switch strings.ToLower(strings.TrimSpace(values["MEMORY"])) {
-		case MemoryOnMachine:
-			return MemoryOnMachine
-		case MemoryInCrew:
-			return MemoryInCrew
-		}
+	if local, shared := memorySettings(c); local == MemoryOnMachine || shared == MemoryOnMachine {
+		return MemoryOnMachine
 	}
 	return MemoryInCrew
+}
+
+// MemoryOnlyHere reports whether MEMORY=machine is this machine's own: in
+// the local cadrei.conf, while the crew's still keeps the memory. The
+// crew's .memory/ then stays, for its other machines.
+func MemoryOnlyHere(c Cadrei) bool {
+	local, shared := memorySettings(c)
+	return local == MemoryOnMachine && shared != MemoryOnMachine
+}
+
+// memorySettings is MEMORY in the local cadrei.conf and in the crew's, ""
+// for a value it doesn't know.
+func memorySettings(c Cadrei) (local, shared string) {
+	read := func(file string) string {
+		raw, _ := os.ReadFile(file)
+		values, _ := conf.Parse(string(raw))
+		switch v := strings.ToLower(strings.TrimSpace(values["MEMORY"])); v {
+		case MemoryOnMachine, MemoryInCrew:
+			return v
+		}
+		return ""
+	}
+	return read(filepath.Join(LocalDir(c.Path), "cadrei.conf")), read(filepath.Join(c.Path, "cadrei.conf"))
 }
 
 // SetOpensIn records where a cadrei's orchestrator opens: in its

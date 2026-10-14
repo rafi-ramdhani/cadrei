@@ -212,6 +212,71 @@ func TestMemorySettingForThisMachine(t *testing.T) {
 	if strings.Contains(strings.Join(unknownConf(c.Path), ","), "MEMORY") {
 		t.Error("MEMORY counts as unknown")
 	}
+	if !cadreis.MemoryOnlyHere(c) {
+		t.Error("this machine only")
+	}
+	// Re-review 3, M8: a local MEMORY=crew doesn't put the memory back in a
+	// crew that keeps it out, or the two settings would undo each other.
+	raw := strings.Replace(readFile(t, c.Path+"/cadrei.conf"), "MEMORY=crew", "MEMORY=machine", 1)
+	os.WriteFile(c.Path+"/cadrei.conf", []byte(raw), 0o644)
+	os.WriteFile(filepath.Join(cadreis.LocalDir(c.Path), "cadrei.conf"), []byte("MEMORY=crew\n"), 0o644)
+	if cadreis.MemoryIn(c) != cadreis.MemoryOnMachine || cadreis.MemoryOnlyHere(c) {
+		t.Error("a local MEMORY=crew won")
+	}
+	os.WriteFile(filepath.Join(cadreis.LocalDir(c.Path), "cadrei.conf"), []byte("MEMORY=machine\n"), 0o644)
+	if cadreis.MemoryOnlyHere(c) {
+		t.Error("both say machine: the crew's own")
+	}
+}
+
+// Re-review 3, M8: MEMORY=machine for this machine only leaves the crew's
+// memory as it is, tracked, for the other machines: nothing moves out of
+// it, nothing is committed, and this machine's orchestrator doesn't use it.
+func TestMemoryOnThisMachineOnly(t *testing.T) {
+	_, c, d := memoryCrew(t)
+	must(t)
+	must(t) // committed
+	before := gitLog(t, c)
+	os.MkdirAll(cadreis.LocalDir(c), 0o700)
+	os.WriteFile(filepath.Join(cadreis.LocalDir(c), "cadrei.conf"), []byte("MEMORY=machine\n"), 0o644)
+	out := must(t)
+	if strings.Contains(out, "memory") {
+		t.Errorf("said:\n%s", out)
+	}
+	if memory.Count(c) != 1 || gitLog(t, c) != before {
+		t.Errorf("the crew's memory changed:\n%s", gitLog(t, c))
+	}
+	if st, _ := exec.Command("git", "-C", c, "status", "--porcelain").Output(); len(st) != 0 {
+		t.Errorf("status:\n%s", st)
+	}
+	if _, err := os.Stat(d + "/user_role.md"); err == nil {
+		t.Error("the crew's note moved out")
+	}
+	if _, err := os.Stat(d + "/MEMORY.md"); err == nil {
+		t.Error("the pointer to the crew's memory stayed")
+	}
+	var settings map[string]any
+	json.Unmarshal([]byte(readFile(t, c+"/.claude/build/orchestrator-settings.json")), &settings)
+	if _, ok := settings["autoMemoryDirectory"]; ok {
+		t.Errorf("settings: %v", settings)
+	}
+	t.Setenv("CADREI_ORCHESTRATOR", "1")
+	t.Setenv("CADREI_HOME", c)
+	t.Chdir(c)
+	if out := must(t, "hook", "snapshot"); !strings.Contains(out, "- Memory: kept on this machine only (MEMORY=machine in .claude/local/cadrei.conf), apart from the crew's .memory/\\n") {
+		t.Errorf("snapshot:\n%s", out)
+	}
+	// The snapshot and another open change nothing either.
+	if must(t); memory.Count(c) != 1 || gitLog(t, c) != before {
+		t.Error("again")
+	}
+	// Notes cadrei pull set aside come into this machine's memory.
+	aside := memoryAside(cadreis.Cadrei{Name: "work", Path: c})
+	os.MkdirAll(aside, 0o700)
+	os.WriteFile(aside+"/tone.md", []byte("Short answers.\n"), 0o644)
+	if out := must(t); !strings.Contains(flat(out), "+ Brought your orchestrator's memory back to this machine (1 note).") || readFile(t, d+"/tone.md") != "Short answers.\n" {
+		t.Errorf("set aside:\n%s", out)
+	}
 }
 
 // Members' settings deny writing into each crew's memory.

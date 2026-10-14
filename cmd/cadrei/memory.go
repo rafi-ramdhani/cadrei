@@ -21,20 +21,22 @@ import (
 // committed until a later session.
 const envMemoryNotice = "CADREI_MEMORY_NOTICE"
 
-// The crew's memory commits.
-const (
-	memoryCommit = "Update the orchestrator's memory"
-	memoryLeft   = memory.OptOut
-)
+// memoryCommit is the crew's memory commit.
+const memoryCommit = "Update the orchestrator's memory"
 
 // crewMemory gets the orchestrator's memory ready for an open: with
 // MEMORY=crew, it moves the notes on this machine into the crew and
 // commits them (once the user was told), and returns the crew's memory
 // folder; with MEMORY=machine, it moves them back out once and returns
-// "". notice reports that this open tells the user, once per crew.
+// "", or, with MEMORY=machine for this machine only, leaves the crew's
+// as it is. notice reports that this open tells the user, once per crew.
 func (e *env) crewMemory(rt runtime.Runtime, c cadreis.Cadrei) (dir string, notice bool) {
 	crew := paths.Real(c.Path)
 	folders := memoryFolders(rt, c)
+	if cadreis.MemoryOnlyHere(c) {
+		e.leaveCrewMemory(c, folders)
+		return "", false
+	}
 	if cadreis.MemoryIn(c) == cadreis.MemoryOnMachine {
 		e.keepOnMachine(c, crew, folders)
 		return "", false
@@ -74,17 +76,11 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 	if _, err := os.Stat(memory.Dir(crew)); err != nil {
 		memory.RemovePointer(folders[0])
 		// A removal that wasn't committed yet (git was busy).
-		if memory.CommitRemoval(crew, memoryLeft) {
+		if memory.CommitRemoval(crew, memory.OptOut) {
 			cadreis.SetMemoryRestored(c, memory.LastOptOut(crew))
 		}
 		// Notes cadrei pull set aside, this machine's latest, first.
-		moved := 0
-		if res, err := memory.Move(memoryAside(c), folders[0], memory.Machine()); err != nil {
-			e.warn("", "Your orchestrator's notes set aside couldn't move into its memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
-				"They're still in "+unbroken(display(memoryAside(c)))+".")
-		} else {
-			moved += res.Moved
-		}
+		moved := e.bringAside(c, folders[0])
 		// Another machine kept the memory on its own and pushed the
 		// removal: this one brings in the notes it lacks from the history,
 		// once per removal, so notes the user cleared later stay cleared.
@@ -107,11 +103,36 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 		return
 	}
 	// This machine's own removal is never brought back here.
-	if memory.CommitRemoval(crew, memoryLeft) {
+	if memory.CommitRemoval(crew, memory.OptOut) {
 		cadreis.SetMemoryRestored(c, memory.LastOptOut(crew))
 	}
 	cadreis.SetMemoryNotice(c, "")
 	e.note("", markDone, "Your orchestrator's memory is back on this machine only. Earlier backups still have it in their history.")
+}
+
+// leaveCrewMemory is MEMORY=machine for this machine only: the
+// orchestrator here keeps its memory in the runtime's own folder, and the
+// crew's .memory/ stays as it is, for its other machines. Nothing moves
+// out of it, and nothing is committed.
+func (e *env) leaveCrewMemory(c cadreis.Cadrei, folders []string) {
+	for _, d := range folders {
+		memory.RemovePointer(d)
+	}
+	if moved := e.bringAside(c, folders[0]); moved > 0 {
+		e.note("", markDone, "Brought your orchestrator's memory back to this machine ("+count(moved, "note")+"). It stays on this machine only now.")
+	}
+}
+
+// bringAside moves the notes cadrei pull set aside into to, and returns
+// how many moved.
+func (e *env) bringAside(c cadreis.Cadrei, to string) int {
+	res, err := memory.Move(memoryAside(c), to, memory.Machine())
+	if err != nil {
+		e.warn("", "Your orchestrator's notes set aside couldn't move into its memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
+			"They're still in "+unbroken(display(memoryAside(c)))+".")
+		return 0
+	}
+	return res.Moved
 }
 
 // runPull is cadrei pull: git pull --rebase --autostash in the crew, which
@@ -201,6 +222,9 @@ func commitMemory(c cadreis.Cadrei) {
 
 // memoryLine is the snapshot's word on the orchestrator's memory.
 func memoryLine(c cadreis.Cadrei) string {
+	if cadreis.MemoryOnlyHere(c) {
+		return "kept on this machine only (MEMORY=machine in .claude/local/cadrei.conf), apart from the crew's .memory/"
+	}
 	if cadreis.MemoryIn(c) == cadreis.MemoryOnMachine {
 		return "kept on this machine only (MEMORY=machine)"
 	}
