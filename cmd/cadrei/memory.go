@@ -223,7 +223,7 @@ func commitMemory(c cadreis.Cadrei) {
 // memoryLine is the snapshot's word on the orchestrator's memory.
 func memoryLine(c cadreis.Cadrei) string {
 	if cadreis.MemoryOnlyHere(c) {
-		return "kept on this machine only (MEMORY=machine in .claude/local/cadrei.conf), apart from the crew's .memory/"
+		return "kept on this machine only (MEMORY=machine for this machine), apart from the crew's .memory/"
 	}
 	if cadreis.MemoryIn(c) == cadreis.MemoryOnMachine {
 		return "kept on this machine only (MEMORY=machine)"

@@ -263,7 +263,7 @@ func TestMemoryOnThisMachineOnly(t *testing.T) {
 	t.Setenv("CADREI_ORCHESTRATOR", "1")
 	t.Setenv("CADREI_HOME", c)
 	t.Chdir(c)
-	if out := must(t, "hook", "snapshot"); !strings.Contains(out, "- Memory: kept on this machine only (MEMORY=machine in .claude/local/cadrei.conf), apart from the crew's .memory/\\n") {
+	if out := must(t, "hook", "snapshot"); !strings.Contains(out, "- Memory: kept on this machine only (MEMORY=machine for this machine), apart from the crew's .memory/\\n") {
 		t.Errorf("snapshot:\n%s", out)
 	}
 	// The snapshot and another open change nothing either.
