@@ -39,7 +39,9 @@ func (e *env) crewMemory(rt runtime.Runtime, c cadreis.Cadrei) (dir string, noti
 		e.keepOnMachine(c, crew, folders)
 		return "", false
 	}
-	res, err := memory.MoveIn(crew, folders, memory.Machine())
+	// Notes cadrei pull set aside come in with the rest; the pointer goes
+	// to Claude Code's folder, the first of folders.
+	res, err := memory.MoveIn(crew, append(slices.Clone(folders), memoryAside(c)), memory.Machine())
 	if err != nil {
 		e.warn("", "Your orchestrator's memory couldn't move into your crew: "+strings.TrimSuffix(err.Error(), ".")+".",
 			"It stays where it was, and your orchestrator keeps using it there.")
@@ -75,20 +77,27 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 		if memory.CommitRemoval(crew, memoryLeft) {
 			cadreis.SetMemoryRestored(c, memory.LastRemoval(crew))
 		}
+		// Notes cadrei pull set aside, this machine's latest, first.
+		moved := 0
+		if res, err := memory.Move(memoryAside(c), folders[0], memory.Machine()); err != nil {
+			e.warn("", "Your orchestrator's notes set aside couldn't move into its memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
+				"They're still in "+unbroken(display(memoryAside(c)))+".")
+		} else {
+			moved += res.Moved
+		}
 		// Another machine kept the memory on its own and pushed the
-		// removal: this one brings the notes back from the history, once
-		// per removal, so notes the user cleared later stay cleared.
-		if holds, err := memory.Holds(folders[0]); err == nil && !holds {
-			res, removal, err := memory.FromHistory(crew, folders[0], memory.Machine(), cadreis.MemoryRestored(c))
-			if removal != "" && err == nil {
-				cadreis.SetMemoryRestored(c, removal)
-			}
-			if err != nil {
-				e.warn("", "Your orchestrator's memory couldn't come back from your crew's history: "+strings.TrimSuffix(err.Error(), ".")+".",
-					"It's still in the history: ask your orchestrator to bring it back.")
-			} else if res.Moved > 0 {
-				e.note("", markDone, "Brought your orchestrator's memory back to this machine from your crew's history ("+count(res.Moved, "note")+"). It stays on this machine only now.")
-			}
+		// removal: this one brings in the notes it lacks from the history,
+		// once per removal, so notes the user cleared later stay cleared.
+		res, removal, err := memory.FromHistory(crew, folders[0], memory.Machine(), cadreis.MemoryRestored(c))
+		if removal != "" && err == nil {
+			cadreis.SetMemoryRestored(c, removal)
+		}
+		if err != nil {
+			e.warn("", "Your orchestrator's memory couldn't come back from your crew's history: "+strings.TrimSuffix(err.Error(), ".")+".",
+				"It's still in the history: ask your orchestrator to bring it back.")
+		}
+		if moved += res.Moved; moved > 0 {
+			e.note("", markDone, "Brought your orchestrator's memory back to this machine ("+count(moved, "note")+"). It stays on this machine only now.")
 		}
 		return
 	}
@@ -123,13 +132,20 @@ func runPull(e *env) int {
 	if !memory.HasRemote(crew) {
 		return e.failWith(r.Name+" has no backup to pull from.", "Ask your orchestrator to back up your crew first.")
 	}
-	got, err := memory.Pull(crew, memory.Machine())
+	// The memory goes in first, once it may: a note is never stashed then.
+	if memoryShared(r.Cadrei) {
+		memory.Commit(crew, memoryCommit)
+	}
+	got, err := memory.Pull(crew, memory.Machine(), memoryAside(r.Cadrei))
 	switch {
 	case err != nil:
-		return e.failWith("Couldn't pull "+r.Name+"'s backup: "+strings.TrimSuffix(err.Error(), ".")+".", "Nothing was changed.")
+		return e.failWith("Couldn't pull "+r.Name+"'s backup: "+strings.TrimSuffix(err.Error(), ".")+".", "Run "+cmd("git -C "+display(crew)+" status")+" to see where it is.")
 	case len(got.Conflicts) > 0:
 		return e.failWith(andList(got.Conflicts)+" changed here and on another machine, so nothing was pulled.",
 			"Nothing was lost: each machine keeps its own. Pick which to keep, then run "+cmd("cadrei pull")+" again.")
+	}
+	if got.SetAside > 0 {
+		e.note("", markWarn, fmt.Sprintf("Another machine keeps your orchestrator's memory on its own now, so this one's %s were set aside, out of the backup. The next %s moves them into its memory here.", count(got.SetAside, "note"), cmd("cadrei")))
 	}
 	for _, k := range got.Kept {
 		e.note("", markWarn, "Both machines changed one of your orchestrator's notes, so both are kept: the other machine's under its name, and this one's as "+k+".")
@@ -137,8 +153,19 @@ func runPull(e *env) int {
 	for _, f := range got.Restored {
 		e.note("", markWarn, f+" was deleted on one machine and changed on the other, so the changed one is kept.")
 	}
+	if len(got.Stashed) > 0 {
+		return e.failWith("Pulled "+r.Name+"'s backup, but your changes to "+andList(got.Stashed)+" that weren't committed clash with what came in.",
+			"Nothing was lost: git marked both versions in those files and kept your changes in its stash. Pick what to keep, then "+cmd("git -C "+display(crew)+" add")+" the files.")
+	}
 	e.note("", markDone, "Pulled "+r.Name+"'s backup")
 	return 0
+}
+
+// memoryAside is where cadrei pull sets a crew's notes aside when another
+// machine keeps the memory on its own: in the crew's local folder, which
+// git ignores, until the next open moves them.
+func memoryAside(c cadreis.Cadrei) string {
+	return filepath.Join(cadreis.LocalDir(paths.Real(c.Path)), "memory-aside")
 }
 
 // memoryFolders are the runtime's own memory folders for the crew, the

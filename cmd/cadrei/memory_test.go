@@ -408,7 +408,7 @@ func TestTheOtherMachineKeepsItsMemory(t *testing.T) {
 	}
 	t.Chdir(other)
 	out := must(t)
-	if !strings.Contains(flat(out), "+ Brought your orchestrator's memory back to this machine from your crew's history (1 note).") {
+	if !strings.Contains(flat(out), "+ Brought your orchestrator's memory back to this machine (1 note).") {
 		t.Errorf("no word:\n%s", out)
 	}
 	rt, _ := runtime.Get(runtimeName())
@@ -461,8 +461,9 @@ func TestCadreiPull(t *testing.T) {
 			t.Fatalf("git %v: %s", args, out)
 		}
 	}
+	// Re-review 2, M5: this machine's change isn't committed yet; cadrei
+	// pull commits the memory first, so it's settled, never stashed.
 	os.WriteFile(c+"/.memory/user_role.md", []byte("The user is a manager.\n"), 0o644)
-	exec.Command("git", "-C", c, "commit", "-qam", "here").Run()
 	out := must(t, "pull")
 	if !strings.Contains(flat(out), "Both machines changed one of your orchestrator's notes, so both are kept: the other machine's under its name, and this one's as user_role.from-") ||
 		!strings.Contains(flat(out), "+ Pulled work's backup") {
@@ -471,9 +472,78 @@ func TestCadreiPull(t *testing.T) {
 	if readFile(t, c+"/.memory/user_role.md") != "The user is a designer.\n" || memory.Count(c) != 2 {
 		t.Error("a side was lost")
 	}
+	if st, _ := exec.Command("git", "-C", c, "stash", "list").Output(); len(st) != 0 || memory.Busy(c) != "" {
+		t.Errorf("a stash (%q) or busy (%q)", st, memory.Busy(c))
+	}
+	if st, _ := exec.Command("git", "-C", c, "status", "--porcelain", "--", ".memory").Output(); len(st) != 0 {
+		t.Errorf("the memory wasn't committed before the pull: %q", st)
+	}
+	push := func(dir, msg string) {
+		t.Helper()
+		for _, args := range [][]string{{"-C", dir, "add", "-A"}, {"-C", dir, "commit", "-qm", msg}, {"-C", dir, "push", "-q", "--no-verify"}} {
+			if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %s", args, out)
+			}
+		}
+	}
+	exec.Command("git", "-C", c, "push", "-q", "--no-verify").Run()
+	exec.Command("git", "-C", other, "pull", "-q").Run()
+	// An uncommitted change to another file that clashes: named, not
+	// "Pulled".
+	os.WriteFile(other+"/playbook.md", []byte("from the other machine\n"), 0o644)
+	push(other, "the other's playbook")
+	os.WriteFile(c+"/playbook.md", []byte("from here\n"), 0o644)
+	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(flat(errOut), "your changes to playbook.md that weren't committed clash with what came in.") {
+		t.Errorf("an uncommitted clash: %d %q", code, errOut)
+	}
+	exec.Command("git", "-C", c, "checkout", "-q", "--theirs", "playbook.md").Run()
+	exec.Command("git", "-C", c, "reset", "-q").Run()
+	exec.Command("git", "-C", c, "checkout", "-q", "--", "playbook.md").Run()
+	exec.Command("git", "-C", c, "stash", "drop", "-q").Run()
+	// Re-review 2, M6: the other machine keeps its memory on itself now,
+	// while this one has a note change of its own: it's set aside, never
+	// pushed again, and the next open brings every note here.
+	os.RemoveAll(other + "/.memory")
+	f, _ := os.OpenFile(other+"/cadrei.conf", os.O_APPEND|os.O_WRONLY, 0o644)
+	f.WriteString("MEMORY=machine\n")
+	f.Close()
+	push(other, "Keep the orchestrator's memory on this machine")
+	os.WriteFile(c+"/.memory/tone.md", []byte("Short answers.\n"), 0o644)
+	out = must(t, "pull")
+	if !strings.Contains(flat(out), "Another machine keeps your orchestrator's memory on its own now, so this one's 3 notes were set aside, out of the backup.") {
+		t.Errorf("the opt-out:\n%s", out)
+	}
+	if ls, _ := exec.Command("git", "-C", c, "ls-files", ".memory").Output(); len(ls) != 0 {
+		t.Errorf("the crew tracks the memory again: %s", ls)
+	}
+	out = must(t)
+	rt, _ := runtime.Get(runtimeName())
+	d := rt.Memory().Folders(c)[0]
+	if !strings.Contains(flat(out), "+ Brought your orchestrator's memory back to this machine (") || readFile(t, d+"/tone.md") != "Short answers.\n" || readFile(t, d+"/user_role.md") != "The user is a designer.\n" {
+		t.Errorf("the next open:\n%s", out)
+	}
 	t.Setenv("CADREI_MEMBER", "work-dev-engineer")
 	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(errOut, "team members can't pull the crew's backup.") {
 		t.Errorf("a member: %d %q", code, errOut)
 	}
 	_ = home
+}
+
+// Re-review 2, M6: notes cadrei pull set aside come in at the next open,
+// with MEMORY=crew too (another machine kept its memory on itself only
+// in its own .claude/local/cadrei.conf).
+func TestSetAsideNotesComeIn(t *testing.T) {
+	_, c, _ := memoryCrew(t)
+	must(t)
+	must(t)
+	aside := memoryAside(cadreis.Cadrei{Name: "work", Path: c})
+	os.MkdirAll(aside, 0o700)
+	os.WriteFile(aside+"/tone.md", []byte("Short answers.\n"), 0o644)
+	must(t)
+	if readFile(t, c+"/.memory/tone.md") != "Short answers.\n" {
+		t.Error("the note set aside didn't come in")
+	}
+	if _, err := os.Stat(aside + "/tone.md"); err == nil {
+		t.Error("it stayed aside")
+	}
 }
