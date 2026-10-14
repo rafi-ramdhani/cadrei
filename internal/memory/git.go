@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
@@ -75,6 +76,11 @@ func Busy(crew string) string {
 		if _, err := os.Lstat(filepath.Join(dir, f)); err == nil {
 			return f
 		}
+	}
+	// Files git marked as clashing (an autostash that didn't apply
+	// cleanly, say): a commit would record their conflict marks.
+	if out, err := git(crew, "ls-files", "-u"); err != nil || out != "" {
+		return "unmerged files"
 	}
 	return ""
 }
@@ -308,10 +314,18 @@ type Pulled struct {
 	// Conflicts are files outside the memory that clash. The pull was
 	// aborted, and nothing changed.
 	Conflicts []string
+	// SetAside is how many notes were set aside because another machine
+	// keeps the memory on its own now: they wait in the aside folder for
+	// the next open.
+	SetAside int
+	// Stashed are files whose uncommitted changes clashed with what came
+	// in: git marked them, and kept the changes in its stash.
+	Stashed []string
 }
 
-// pullLimit is how long the pull from the backup may take.
-const pullLimit = 60 * time.Second
+// pullLimit is how long the pull from the backup may take. Tests shorten
+// it.
+var pullLimit = 60 * time.Second
 
 // Pull brings in what the crew's other machines pushed: git pull --rebase
 // --autostash, with the crew's hooks off. A clash inside the memory never
@@ -320,19 +334,56 @@ const pullLimit = 60 * time.Second
 // (<name>.from-<machine>.md, with its index line), and when one deleted a
 // note the other changed, the changed one stays. A clash in any other file
 // aborts the pull, so nothing changes, and names the files.
-func Pull(crew, machine string) (Pulled, error) {
+//
+// When the other machine removed the whole memory folder (it keeps its
+// memory on itself now), this machine's notes, committed or not, are set
+// aside in aside, outside git, for the next open, and its unpushed commits
+// lose their memory changes before they're replayed: a note never goes
+// back into the backup after an opt-out. An uncommitted change that
+// clashes with what came in (git's autostash) is settled like a commit's
+// when it's a note, and named in Stashed when it's anything else.
+func Pull(crew, machine, aside string) (Pulled, error) {
 	var out Pulled
 	if why := Busy(crew); why != "" {
 		return out, fmt.Errorf("git is busy in the crew (%s)", why)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), pullLimit)
 	defer cancel()
-	pinned := gitx.Reading(crew, "pull", "-q", "--rebase", "--autostash")
-	c := exec.CommandContext(ctx, pinned.Path, pinned.Args[1:]...)
-	c.Env = append(pinned.Env, "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
-	text, err := c.CombinedOutput()
+	run := func(args ...string) ([]byte, error) {
+		pinned := gitx.Reading(crew, args...)
+		c := exec.CommandContext(ctx, pinned.Path, pinned.Args[1:]...)
+		c.Env = append(pinned.Env, "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true")
+		// At the limit, git and everything it started (ssh, the rebase)
+		// stop together.
+		c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		c.Cancel = func() error { return syscall.Kill(-c.Process.Pid, syscall.SIGKILL) }
+		c.WaitDelay = 2 * time.Second
+		return c.CombinedOutput()
+	}
+	// A pull stopped at the limit says where it left the crew.
+	late := func() (Pulled, error) {
+		if rebasing(crew) {
+			git(crew, "rebase", "--abort")
+		}
+		if why := Busy(crew); why != "" {
+			return Pulled{}, fmt.Errorf("the pull took longer than %d seconds and was stopped, and git is still busy in the crew (%s)", int(pullLimit.Seconds()), why)
+		}
+		return Pulled{SetAside: out.SetAside}, fmt.Errorf("the pull took longer than %d seconds and was stopped, before anything came in", int(pullLimit.Seconds()))
+	}
+	if text, err := run("fetch", "-q"); err != nil {
+		if ctx.Err() != nil {
+			return late()
+		}
+		return out, errors.New(firstLine(string(text)))
+	}
+	n, err := setAside(crew, machine, aside)
+	if err != nil {
+		return out, err
+	}
+	out.SetAside = n
+	text, err := run("pull", "-q", "--rebase", "--autostash")
 	if ctx.Err() != nil {
-		return out, fmt.Errorf("the pull took longer than %d seconds", int(pullLimit.Seconds()))
+		return late()
 	}
 	// A rebase that stopped: each stop is settled, or the whole pull is
 	// aborted. Never more stops than commits it can replay.
@@ -371,7 +422,142 @@ func Pull(crew, machine string) (Pulled, error) {
 		}
 		return out, errors.New(firstLine(string(text)))
 	}
+	// Uncommitted changes git put back after the rebase (its autostash),
+	// where one clashed: the stash stays, and the files are marked.
+	files, _ := git(crew, "diff", "--name-only", "--diff-filter=U")
+	if files == "" {
+		return out, nil
+	}
+	for _, f := range strings.Split(files, "\n") {
+		if !strings.HasPrefix(f, Folder+"/") {
+			out.Stashed = append(out.Stashed, f)
+			continue
+		}
+		// Stage 2 is what came in, stage 3 the stashed change: a note is
+		// settled as in a rebase.
+		if err := settle(crew, f, machine, &out); err != nil {
+			return out, err
+		}
+	}
+	if len(out.Stashed) == 0 {
+		// Every clash was a note, now settled: the stash holds nothing more.
+		dropAutostash(crew)
+	}
 	return out, nil
+}
+
+// dropAutostash drops the newest stash entry git's autostash left.
+func dropAutostash(crew string) {
+	list, _ := git(crew, "stash", "list", "--format=%gd %gs")
+	for _, l := range strings.Split(list, "\n") {
+		if ref, what, ok := strings.Cut(l, " "); ok && strings.Contains(what, "autostash") {
+			git(crew, "stash", "drop", "-q", ref)
+			return
+		}
+	}
+}
+
+// setAside handles an opt-out that came in: when this machine's crew
+// tracks the memory folder and its upstream removed the whole folder, it
+// sets this machine's notes (as they are, committed or not) aside in
+// aside, rewrites the unpushed commits without the folder, so none of its
+// notes is pushed again, and takes the folder out of the crew. It returns
+// how many notes it set aside.
+func setAside(crew, machine, aside string) (int, error) {
+	up, err := git(crew, "rev-parse", "-q", "--verify", "@{upstream}")
+	if err != nil || up == "" || !tracked(crew, Folder) {
+		return 0, nil
+	}
+	if has, _ := git(crew, "ls-tree", "-r", "--name-only", up, "--", Folder+"/"); has != "" {
+		return 0, nil
+	}
+	// It had the folder once, and removed it: an opt-out, not a crew that
+	// never kept its memory.
+	if removed, _ := git(crew, "log", "-1", "--format=%H", "--diff-filter=D", up, "--", Folder); removed == "" {
+		return 0, nil
+	}
+	base, err := git(crew, "merge-base", "HEAD", up)
+	if err != nil {
+		return 0, err
+	}
+	if merges, _ := git(crew, "rev-list", "--merges", base+"..HEAD"); merges != "" {
+		return 0, errors.New("another machine keeps the memory on its own now, and this crew's unpushed commits include a merge, so cadrei can't take the notes out of them")
+	}
+	_, taken, err := merge(Dir(crew), aside, machine)
+	if err != nil {
+		return 0, err
+	}
+	head, _ := git(crew, "rev-parse", "HEAD")
+	commits, _ := git(crew, "rev-list", "--reverse", base+"..HEAD")
+	index := filepath.Join(gitDir(crew), "cadrei-memory-index")
+	defer os.Remove(index)
+	in := func(env []string, stdin string, args ...string) (string, error) {
+		c := gitx.Reading(crew, args...)
+		c.Env = append(append(c.Env, "GIT_INDEX_FILE="+index), env...)
+		c.Stdin = strings.NewReader(stdin)
+		b, err := c.Output()
+		return strings.TrimSpace(string(b)), err
+	}
+	parent := base
+	for _, c := range strings.Fields(commits) {
+		if _, err := in(nil, "", "read-tree", c); err != nil {
+			return 0, err
+		}
+		if _, err := in(nil, "", "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", Folder); err != nil {
+			return 0, err
+		}
+		tree, err := in(nil, "", "write-tree")
+		if err != nil {
+			return 0, err
+		}
+		if was, _ := git(crew, "rev-parse", parent+"^{tree}"); was == tree {
+			continue // it only changed the memory
+		}
+		meta, err := git(crew, "log", "-1", "--format=%an%x00%ae%x00%aI", c)
+		if err != nil {
+			return 0, err
+		}
+		who := strings.Split(meta, "\x00")
+		msg, _ := gitx.Reading(crew, "log", "-1", "--format=%B", c).Output()
+		var env []string
+		if len(who) == 3 {
+			env = []string{"GIT_AUTHOR_NAME=" + who[0], "GIT_AUTHOR_EMAIL=" + who[1], "GIT_AUTHOR_DATE=" + who[2]}
+		}
+		next, err := in(env, string(msg), "commit-tree", tree, "-p", parent, "-F", "-")
+		if err != nil {
+			return 0, err
+		}
+		parent = next
+	}
+	if _, err := git(crew, "update-ref", "-m", "cadrei: set the memory aside", "HEAD", parent, head); err != nil {
+		return 0, err
+	}
+	git(crew, "reset", "-q", "--", Folder)
+	if err := clear(Dir(crew), taken); err != nil {
+		return 0, err
+	}
+	return len(notesIn(taken)), nil
+}
+
+// notesIn is the notes among files merge took, the index not counted.
+func notesIn(taken map[string][]byte) []string {
+	var out []string
+	for name := range taken {
+		if name != Index {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// Move moves the notes in from into to, merged as MoveIn merges, and
+// clears from: the notes Pull set aside, into the next open's folder.
+func Move(from, to, machine string) (Result, error) {
+	res, taken, err := merge(from, to, machine)
+	if err != nil {
+		return res, err
+	}
+	return res, clear(from, taken)
 }
 
 // rebasing reports whether a rebase is under way in the crew.

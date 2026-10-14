@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, path, text string) {
@@ -471,7 +472,7 @@ func TestTwoMachines(t *testing.T) {
 	gitIn(t, a, "push", "-q")
 	// B's notice session: its notes are untracked, and a pull would stop
 	// on them, which is why the orchestrator skips it.
-	if _, err := Pull(b, "b"); err == nil {
+	if _, err := Pull(b, "b", filepath.Join(b, ".aside")); err == nil {
 		t.Error("a pull over untracked notes went through; the notice session's skip isn't needed")
 	}
 	if Busy(b) != "" {
@@ -480,12 +481,12 @@ func TestTwoMachines(t *testing.T) {
 	if !Commit(b, "Update the orchestrator's memory") {
 		t.Fatal("b didn't commit")
 	}
-	pulled, err := Pull(b, "b")
+	pulled, err := Pull(b, "b", filepath.Join(b, ".aside"))
 	if err != nil || !slices.Equal(pulled.Kept, []string{"user_role.from-b.md"}) {
 		t.Fatalf("b's pull: %+v %v", pulled, err)
 	}
 	gitIn(t, b, "push", "-q")
-	if _, err := Pull(a, "a"); err != nil {
+	if _, err := Pull(a, "a", filepath.Join(a, ".aside")); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{a, b} {
@@ -517,7 +518,7 @@ func TestTwoMachines(t *testing.T) {
 	write(t, filepath.Join(Dir(b), "tone.md"), note("tone", "long answers", "2026-10-14T11:05:00Z", "Long answers."))
 	os.Remove(filepath.Join(Dir(b), "status.md"))
 	Commit(b, "Update the orchestrator's memory")
-	pulled, err = Pull(b, "b")
+	pulled, err = Pull(b, "b", filepath.Join(b, ".aside"))
 	if err != nil || !slices.Equal(pulled.Kept, []string{"tone.from-b.md"}) || !slices.Equal(pulled.Restored, []string{"status.md"}) {
 		t.Fatalf("b's second pull: %+v %v", pulled, err)
 	}
@@ -528,14 +529,14 @@ func TestTwoMachines(t *testing.T) {
 	}
 	// A clash outside the memory aborts the pull, and nothing changes.
 	gitIn(t, b, "push", "-q")
-	Pull(a, "a")
+	Pull(a, "a", filepath.Join(a, ".aside"))
 	write(t, filepath.Join(a, "playbook.md"), "from a\n")
 	gitIn(t, a, "commit", "-qam", "a")
 	gitIn(t, a, "push", "-q")
 	write(t, filepath.Join(b, "playbook.md"), "from b\n")
 	gitIn(t, b, "commit", "-qam", "b")
 	before := gitIn(t, b, "rev-parse", "HEAD")
-	pulled, err = Pull(b, "b")
+	pulled, err = Pull(b, "b", filepath.Join(b, ".aside"))
 	if err != nil || !slices.Equal(pulled.Conflicts, []string{"playbook.md"}) {
 		t.Errorf("a clash outside the memory: %+v %v", pulled, err)
 	}
@@ -692,5 +693,133 @@ func TestAStopLeavesEveryFolder(t *testing.T) {
 	}
 	if got := names(t, d1); !slices.Equal(got, []string{"a.md"}) {
 		t.Errorf("the first folder: %v", got)
+	}
+}
+
+// twoClones is a crew with a backup and a second machine's clone, both
+// with a committed, pushed memory of two notes.
+func twoClones(t *testing.T) (a, b string) {
+	t.Helper()
+	bare := t.TempDir()
+	gitIn(t, bare, "init", "-q", "--bare", "-b", "main")
+	a = repo(t)
+	Attributes(a)
+	write(t, filepath.Join(Dir(a), Index), "- [Role](role.md): the user\n- [Tone](tone.md): tone\n")
+	write(t, filepath.Join(Dir(a), "role.md"), note("role", "the user", "2026-10-14T10:00:00Z", "The user codes."))
+	write(t, filepath.Join(Dir(a), "tone.md"), note("tone", "tone", "2026-10-14T10:00:00Z", "Short answers."))
+	Commit(a, "Update the orchestrator's memory")
+	gitIn(t, a, "remote", "add", "origin", bare)
+	gitIn(t, a, "push", "-q", "-u", "origin", "main")
+	b = filepath.Join(t.TempDir(), "b")
+	gitIn(t, filepath.Dir(b), "clone", "-q", bare, b)
+	gitIn(t, b, "config", "user.name", "T")
+	gitIn(t, b, "config", "user.email", "t@example.invalid")
+	return a, b
+}
+
+// Re-review 2, M5: an uncommitted change to a note the other machine
+// changed, or deleted, is settled like a committed one: no conflict marks,
+// nothing marked unmerged, no stash left. One to another file is named,
+// stays marked, and blocks the memory's commit.
+func TestPullWithUncommittedChanges(t *testing.T) {
+	a, b := twoClones(t)
+	write(t, filepath.Join(Dir(a), "role.md"), note("role", "the user", "2026-10-14T11:00:00Z", "The user designs."))
+	os.Remove(filepath.Join(Dir(a), "tone.md"))
+	Commit(a, "Update the orchestrator's memory")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(Dir(b), "role.md"), note("role", "the user", "2026-10-14T11:05:00Z", "The user manages."))
+	write(t, filepath.Join(Dir(b), "tone.md"), note("tone", "tone", "2026-10-14T11:05:00Z", "Long answers."))
+	pulled, err := Pull(b, "b", t.TempDir())
+	if err != nil || !slices.Equal(pulled.Kept, []string{"role.from-b.md"}) || !slices.Equal(pulled.Restored, []string{"tone.md"}) || len(pulled.Stashed) != 0 {
+		t.Fatalf("%+v %v", pulled, err)
+	}
+	for _, f := range []string{"role.md", "role.from-b.md", "tone.md"} {
+		oneFrontMatter(t, f, read(t, filepath.Join(Dir(b), f)))
+	}
+	if !strings.Contains(read(t, filepath.Join(Dir(b), "role.md")), "designs") || !strings.Contains(read(t, filepath.Join(Dir(b), "role.from-b.md")), "manages") ||
+		!strings.Contains(read(t, filepath.Join(Dir(b), "tone.md")), "Long answers.") {
+		t.Error("a side was lost")
+	}
+	if Busy(b) != "" || gitIn(t, b, "stash", "list") != "" {
+		t.Errorf("left busy (%q) or a stash: %q", Busy(b), gitIn(t, b, "stash", "list"))
+	}
+	if !Commit(b, "Update the orchestrator's memory") {
+		t.Error("the settled notes weren't committed")
+	}
+	// Another file: named, marked, and the memory waits.
+	gitIn(t, b, "push", "-q")
+	Pull(a, "a", t.TempDir())
+	write(t, filepath.Join(a, "playbook.md"), "from a\n")
+	gitIn(t, a, "commit", "-qam", "a")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(b, "playbook.md"), "from b\n")
+	pulled, err = Pull(b, "b", t.TempDir())
+	if err != nil || !slices.Equal(pulled.Stashed, []string{"playbook.md"}) {
+		t.Fatalf("another file: %+v %v", pulled, err)
+	}
+	write(t, filepath.Join(Dir(b), "new.md"), "new\n")
+	if Busy(b) != "unmerged files" || Commit(b, "x") {
+		t.Errorf("a commit with marked files: busy %q", Busy(b))
+	}
+	if gitIn(t, b, "stash", "list") == "" {
+		t.Error("the stash with b's change went")
+	}
+}
+
+// Re-review 2, M6: the other machine keeps its memory on itself now and
+// pushed the folder's removal, while this one has a committed, unpushed
+// note change and an uncommitted new note. Every note of this machine's is
+// set aside, no unpushed commit carries a note any more, the crew stops
+// tracking the folder, and this machine's other work keeps its commit.
+func TestPullAfterAnOptOut(t *testing.T) {
+	a, b := twoClones(t)
+	os.RemoveAll(Dir(a))
+	CommitRemoval(a, "Keep the orchestrator's memory on this machine")
+	gitIn(t, a, "push", "-q")
+	write(t, filepath.Join(Dir(b), "role.md"), note("role", "the user", "2026-10-14T11:05:00Z", "The user manages."))
+	Commit(b, "Update the orchestrator's memory")
+	write(t, filepath.Join(b, "playbook.md"), "b's playbook\n")
+	gitIn(t, b, "commit", "-qam", "b's playbook")
+	write(t, filepath.Join(Dir(b), "fresh.md"), "fresh\n")
+	aside := filepath.Join(t.TempDir(), "aside")
+	pulled, err := Pull(b, "b", aside)
+	if err != nil || pulled.SetAside != 3 {
+		t.Fatalf("%+v %v", pulled, err)
+	}
+	if tracked(b, Folder) {
+		t.Error("the crew tracks the memory again")
+	}
+	if got := gitIn(t, b, "log", "--format=%s", "@{upstream}..HEAD", "--", Folder); got != "" {
+		t.Errorf("unpushed commits carry notes: %q", got)
+	}
+	if got := gitIn(t, b, "log", "-1", "--format=%s %an %ae"); got != "b's playbook T t@example.invalid" || read(t, filepath.Join(b, "playbook.md")) != "b's playbook\n" {
+		t.Errorf("b's other work: %q", got)
+	}
+	if _, err := os.Stat(Dir(b)); err == nil {
+		t.Error("the folder stayed")
+	}
+	if got := names(t, aside); !slices.Equal(got, []string{Index, "fresh.md", "role.md", "tone.md"}) || !strings.Contains(read(t, filepath.Join(aside, "role.md")), "manages") {
+		t.Errorf("aside: %v", got)
+	}
+	// The next open moves them into its own folder.
+	d := filepath.Join(t.TempDir(), "memory")
+	if res, err := Move(aside, d, "b"); err != nil || res.Moved != 3 {
+		t.Errorf("%+v %v", res, err)
+	}
+	gone(t, aside)
+}
+
+// Re-review 2, L14: a pull stopped at its limit says where it left the
+// crew.
+func TestAPullThatTakesTooLong(t *testing.T) {
+	_, b := twoClones(t)
+	was := pullLimit
+	pullLimit = time.Nanosecond
+	defer func() { pullLimit = was }()
+	if _, err := Pull(b, "b", t.TempDir()); err == nil || !strings.Contains(err.Error(), "was stopped, before anything came in") {
+		t.Errorf("%v", err)
+	}
+	if Busy(b) != "" {
+		t.Error("left busy")
 	}
 }
