@@ -10,22 +10,34 @@ import (
 // memoryRule looks for a command that writes into a .memory folder: the
 // orchestrator's memory, which loads into each of its sessions, so a
 // note a member planted there would be read as the orchestrator's own.
-// It reads the forms it can see: a redirection, a program that writes or
-// removes files (tee, cp, mv, rm, ln, sed -i and the like), xargs or find
-// running one, and code another program runs that names the folder and
-// writes. Copying out of the folder counts too.
+// It reads the forms it can see: a redirection, a program that writes,
+// moves or removes the files it names when one of them is in the folder
+// (cp, ln, rsync and the like only by their destination), sed -i and the
+// like, xargs or find running one on the folder's files, a line that
+// goes into the folder first, and code another program runs that names
+// the folder and writes. Reading the folder, copying out of it included,
+// is never refused.
 type memoryRule struct{}
 
-// memoryWriters are programs that write, move or remove the files they
-// name.
-var memoryWriters = setOf("tee", "cp", "mv", "rm", "ln", "touch", "install", "rsync", "dd", "truncate", "mkdir", "rmdir", "chmod", "chown",
-	"unlink", "shred", "patch", "tar", "unzip", "curl", "wget", "split", "csplit", "ditto", "scp")
+// memoryWriters write, move or remove every file they name.
+var memoryWriters = setOf("tee", "mv", "rm", "touch", "truncate", "mkdir", "rmdir", "chmod", "chown", "unlink", "shred", "patch", "split", "csplit")
+
+// toWriters copy or link into the last file they name (or -t's folder).
+var toWriters = setOf("cp", "ln", "install", "rsync", "ditto", "scp")
+
+// optionWriters write where one of their options says.
+var optionWriters = map[string][]string{
+	"dd": {"of="}, "tar": {"-C", "--directory"}, "unzip": {"-d"}, "curl": {"-o", "--output"}, "wget": {"-O", "-P", "--output-document", "--directory-prefix"},
+}
 
 // inPlace are programs that write the files they name only with -i.
 var inPlace = setOf("sed", "gsed", "perl", "ruby")
 
 // memoryPath matches .memory as a folder in a path or a word.
 var memoryPath = regexp.MustCompile(`(^|[\s/'"=:(,;<>])\.memory($|[/\s'"*,;)|&<>])`)
+
+// goesIn matches a line that changes into the folder (cd .memory && ...).
+var goesIn = regexp.MustCompile(`(^|[\s;&|(])(cd|pushd)\s+[^;&|]*\.memory($|[/\s'";&|)])`)
 
 // writesCode matches code that writes or removes files.
 var writesCode = regexp.MustCompile(`(?i)open\([^)]*,\s*['"]?[^'")]*[wax+]|write|unlink|rename|remove|rmtree|copy|truncate|symlink|>|\btee\b|\bcp\b|\bmv\b|\brm\b|\bln\b|sed\s+-i`)
@@ -40,31 +52,107 @@ func (memoryRule) outputs(files []shWord) bool {
 }
 
 func (memoryRule) writes(words []shWord, p int, fed bool, line *lineText) bool {
-	writer := false
-	for k, w := range words[p:] {
-		name := wordName(w)
-		switch {
-		case memoryWriters[name]:
-			writer = true
-		case inPlace[name]:
-			writer = writer || inPlaceFlag(words[p+k+1:])
-		case name == "find" || name == "fd":
-			for _, a := range words[p+k+1:] {
-				writer = writer || a.bare == "-delete" || a.bare == "--exec" || a.bare == "-X"
+	// sudo -u someone tee ...: the option's value isn't the program.
+	if !writer(wordName(words[p]), words[p+1:]) && p+1 < len(words) {
+		for _, w := range words[:p] {
+			if runsAnother[wordName(w)] {
+				p++
+				break
 			}
 		}
 	}
-	if !writer {
+	name := wordName(words[p])
+	if writer(name, words[p+1:]) && (writesInto(name, words[p+1:]) || (goesIn.MatchString(line.text) && staysIn(name, words[p+1:]))) {
+		return true
+	}
+	if !runners[name] {
 		return false
 	}
-	for _, w := range words {
-		if memoryPath.MatchString(w.text) {
+	// xargs, parallel or find -exec running a writer: on what came down
+	// the pipe (ls .memory | xargs rm), or on what find finds there.
+	found := false
+	for _, w := range words[p+1:] {
+		if strings.HasPrefix(w.bare, "-") {
+			break
+		}
+		found = found || memoryPath.MatchString(w.text)
+	}
+	for k := p + 1; k < len(words); k++ {
+		if w := wordName(words[k]); writer(w, words[k+1:]) {
+			// A copy out of the folder isn't a write into it.
+			return ((fed || found) && !toWriters[w]) || writesInto(w, words[k+1:]) || (goesIn.MatchString(line.text) && staysIn(w, words[k+1:]))
+		}
+		if (name == "find" || name == "fd") && (words[k].bare == "-delete" || words[k].bare == "-X") && found {
 			return true
 		}
 	}
-	// What it writes came down the pipe (ls .memory | xargs rm), or the
-	// line went into the folder first (cd .memory && rm a.md).
-	return fed || line.mentions()
+	return false
+}
+
+// writer reports whether a program writes the files it names.
+func writer(name string, args []shWord) bool {
+	_, opt := optionWriters[name]
+	return memoryWriters[name] || toWriters[name] || opt || (inPlace[name] && inPlaceFlag(args))
+}
+
+// writesInto reports whether a writer's arguments put a file in the
+// folder: any it names, its destination, or its output option's value.
+func writesInto(name string, args []shWord) bool {
+	var files []shWord
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if flags, ok := optionWriters[name]; ok {
+			for _, f := range flags {
+				switch {
+				case a.bare == f && i+1 < len(args):
+					if memoryPath.MatchString(args[i+1].text) {
+						return true
+					}
+				case strings.HasPrefix(a.bare, f) && len(a.bare) > len(f) && memoryPath.MatchString(" "+strings.TrimPrefix(a.text, f)):
+					return true
+				}
+			}
+			continue
+		}
+		if toWriters[name] && (a.bare == "-t" || a.bare == "--target-directory") && i+1 < len(args) {
+			if memoryPath.MatchString(args[i+1].text) {
+				return true
+			}
+			i++
+			continue
+		}
+		if toWriters[name] && strings.HasPrefix(a.bare, "--target-directory=") && memoryPath.MatchString(" "+strings.TrimPrefix(a.text, "--target-directory=")) {
+			return true
+		}
+		if strings.HasPrefix(a.bare, "-") {
+			continue
+		}
+		files = append(files, a)
+	}
+	if toWriters[name] {
+		return len(files) > 0 && memoryPath.MatchString(files[len(files)-1].text)
+	}
+	for _, f := range files {
+		if memoryPath.MatchString(f.text) {
+			return true
+		}
+	}
+	return false
+}
+
+// staysIn reports whether a writer run inside the folder (after cd
+// .memory) writes there: any writer but a copy to a full path elsewhere.
+func staysIn(name string, args []shWord) bool {
+	if !toWriters[name] {
+		return true
+	}
+	var last string
+	for _, a := range args {
+		if !strings.HasPrefix(a.bare, "-") {
+			last = a.text
+		}
+	}
+	return !strings.HasPrefix(last, "/") && !strings.HasPrefix(last, "~")
 }
 
 // inPlaceFlag reports whether sed, perl or ruby's options edit in place.

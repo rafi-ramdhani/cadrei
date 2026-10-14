@@ -131,7 +131,7 @@ const (
 	strictRefused       = "Run cadrei answer <code> <choice> on its own, with nothing around it, so cadrei can ask you."
 	typingRefused       = "Cadrei sessions can't type into tmux windows. To compact a member, run cadrei compact <team>/<role> [project]."
 	keystrokeRefused    = "Cadrei sessions can't press keys in other apps."
-	memoryRefused       = "Team members can't write into a .memory folder: it holds the orchestrator's memory. Tell the orchestrator what to remember instead."
+	memoryRefused       = "Team members can't write into a .memory folder: it holds the orchestrator's memory."
 )
 
 // promptModes are the permission modes in which the runtime is known to
