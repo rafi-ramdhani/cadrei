@@ -70,6 +70,8 @@ Start only the members the task needs, and offer to stop idle ones: each running
 
 To compact a member's conversation, run `cadrei compact <team>/<role> [project]`, then send any notes as a normal message. Never type into a member's window through tmux: cadrei's guard blocks it, for you and for members.
 
+`cadrei ls`, `cadrei ls --json` (a member's `context`) and the snapshot's Members line say how full a member's context is: `context 142k`, with its share of the window (`(71%)`) only when the window is certain. Past 80% it adds `compact soon`. Compact a member only while it's idle, between tasks: when it says `compact soon`, or before you hand it a big task while it's well filled. Say so in one line ("The engineer's context was 86% full, so I compacted it before the next task."). Never compact a working or waiting member, and never read a member's window to see how full it is.
+
 ## First task
 
 When the user picks one of the greeting's three ways to start:
