@@ -73,6 +73,7 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 		Teams    map[string][]memberView
 		Running  []sessionView
 	}{projectsOf(r.Cadrei, false), teamsOf(r.Cadrei), runningOf(r.Cadrei, r.Default, session.Default())}
+	addContext(st.Running)
 	var projects []string
 	for _, p := range st.Projects {
 		desc := p.State

@@ -56,6 +56,8 @@ type memberView struct {
 	// While it waits: what it waits on the user for, as the runtime
 	// recorded it, with the code cadrei answer takes. Never consent.
 	Request *requestView `json:"request,omitempty"`
+	// How full its context is, when its transcript says.
+	Context *contextView `json:"context,omitempty"`
 	// The model and effort cadrei passed this member's start, and where
 	// each was set: start, member, machine or crew (7.11.4).
 	Model      string `json:"model,omitempty"`
@@ -89,6 +91,33 @@ func (m *memberView) fill() {
 			m.Request.Summary = r.Question
 		}
 	}
+	m.Context = nil
+	if c := m.status.Context; m.status.HasContext {
+		m.Context = &contextView{}
+		if !c.Compacted.IsZero() {
+			at := c.Compacted
+			m.Context.Compacted = &at
+		} else {
+			at := c.At
+			m.Context.Tokens, m.Context.Window, m.Context.At = c.Tokens, c.Window, &at
+			if p := c.Percent(); p >= 0 {
+				m.Context.Percent = &p
+			}
+		}
+	}
+}
+
+// contextView is how full a member's context is, from its transcript:
+// tokens is the size of its last reply's request, at when that reply
+// came. window and percent are there only when its model's window is
+// certain. compacted, alone, says it was compacted and hasn't replied
+// since.
+type contextView struct {
+	Tokens    int        `json:"tokens,omitempty"`
+	Window    int        `json:"window,omitempty"`
+	Percent   *int       `json:"percent,omitempty"`
+	At        *time.Time `json:"at,omitempty"`
+	Compacted *time.Time `json:"compacted,omitempty"`
 }
 
 // requestView is a waiting member's request in ls --json: kind is approval
@@ -310,11 +339,32 @@ func statusOf(c cadreis.Cadrei, def string, t session.Tmux) cadreiStatus {
 	for _, i := range scope.Running() {
 		s.Running = append(s.Running, viewOf(t, i))
 	}
+	addContext(s.Running)
 	if p := projectsOf(c, true); p != nil {
 		s.Projects = p
 	}
 	s.Teams = teamsOf(c)
 	return s
+}
+
+// addContext adds how full each running member's context is, for cadrei
+// ls and the snapshot (withContext).
+func addContext(views []sessionView) {
+	rt, err := runtime.Get(runtimeName())
+	if err != nil {
+		return
+	}
+	for i := range views {
+		home := views[i].info.Home
+		if home == "" {
+			continue
+		}
+		for j := range views[i].Members {
+			m := &views[i].Members[j]
+			m.status = withContext(rt, home, m.Name, m.status)
+			m.fill()
+		}
+	}
 }
 
 // teamsOf is a crew's teams and their members, from its members folder.
