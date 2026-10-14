@@ -339,6 +339,13 @@ func Point(crew, dir string) error {
 	return fsx.WriteFile(filepath.Join(dir, Index), want, 0o644)
 }
 
+// Copy copies the crew's notes into to, merged as MoveOut merges, and
+// leaves the crew's as they are.
+func Copy(crew, to, machine string) (Result, error) {
+	res, _, err := merge(Dir(crew), to, machine)
+	return res, err
+}
+
 // MoveOut moves the crew's notes into to, the runtime's own folder for
 // the crew, merging them with what's there (a pointer there goes), and
 // removes the crew's memory folder.

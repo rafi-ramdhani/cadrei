@@ -232,6 +232,8 @@ func TestMemorySettingForThisMachine(t *testing.T) {
 // Re-review 3, M8: MEMORY=machine for this machine only leaves the crew's
 // memory as it is, tracked, for the other machines: nothing moves out of
 // it, nothing is committed, and this machine's orchestrator doesn't use it.
+// Re-review 4: its notes are copied into this machine's memory once, so
+// the orchestrator here doesn't start with none.
 func TestMemoryOnThisMachineOnly(t *testing.T) {
 	_, c, d := memoryCrew(t)
 	must(t)
@@ -240,8 +242,8 @@ func TestMemoryOnThisMachineOnly(t *testing.T) {
 	os.MkdirAll(cadreis.LocalDir(c), 0o700)
 	os.WriteFile(filepath.Join(cadreis.LocalDir(c), "cadrei.conf"), []byte("MEMORY=machine\n"), 0o644)
 	out := must(t)
-	if strings.Contains(out, "memory") {
-		t.Errorf("said:\n%s", out)
+	if !strings.Contains(flat(out), "+ Your orchestrator's memory is on this machine only now (1 note copied from your crew). Your other machines keep the crew's.") {
+		t.Errorf("no word of the copy:\n%s", out)
 	}
 	if memory.Count(c) != 1 || gitLog(t, c) != before {
 		t.Errorf("the crew's memory changed:\n%s", gitLog(t, c))
@@ -249,11 +251,11 @@ func TestMemoryOnThisMachineOnly(t *testing.T) {
 	if st, _ := exec.Command("git", "-C", c, "status", "--porcelain").Output(); len(st) != 0 {
 		t.Errorf("status:\n%s", st)
 	}
-	if _, err := os.Stat(d + "/user_role.md"); err == nil {
-		t.Error("the crew's note moved out")
+	if readFile(t, d+"/user_role.md") != "The user is a developer.\n" || readFile(t, c+"/.memory/user_role.md") != "The user is a developer.\n" {
+		t.Error("the note wasn't copied, or moved")
 	}
-	if _, err := os.Stat(d + "/MEMORY.md"); err == nil {
-		t.Error("the pointer to the crew's memory stayed")
+	if readFile(t, d+"/MEMORY.md") != "- [Role](user_role.md): the user is a developer\n" {
+		t.Errorf("index: %q", readFile(t, d+"/MEMORY.md"))
 	}
 	var settings map[string]any
 	json.Unmarshal([]byte(readFile(t, c+"/.claude/build/orchestrator-settings.json")), &settings)
@@ -266,9 +268,22 @@ func TestMemoryOnThisMachineOnly(t *testing.T) {
 	if out := must(t, "hook", "snapshot"); !strings.Contains(out, "- Memory: kept on this machine only (MEMORY=machine for this machine), apart from the crew's .memory/\\n") {
 		t.Errorf("snapshot:\n%s", out)
 	}
-	// The snapshot and another open change nothing either.
-	if must(t); memory.Count(c) != 1 || gitLog(t, c) != before {
-		t.Error("again")
+	// The snapshot and another open change nothing either, and copy
+	// nothing again: a note the user cleared here stays cleared.
+	os.Remove(d + "/user_role.md")
+	if out := must(t); strings.Contains(out, "memory") || memory.Count(c) != 1 || gitLog(t, c) != before {
+		t.Errorf("again:\n%s", out)
+	}
+	if _, err := os.Stat(d + "/user_role.md"); err == nil {
+		t.Error("copied twice")
+	}
+	// Back in the crew, then this machine only again: a new copy.
+	local := filepath.Join(cadreis.LocalDir(c), "cadrei.conf")
+	os.WriteFile(local, nil, 0o644)
+	must(t)
+	os.WriteFile(local, []byte("MEMORY=machine\n"), 0o644)
+	if out := must(t); !strings.Contains(flat(out), "copied from your crew") {
+		t.Errorf("no copy the second time:\n%s", out)
 	}
 	// Notes cadrei pull set aside come into this machine's memory.
 	aside := memoryAside(cadreis.Cadrei{Name: "work", Path: c})

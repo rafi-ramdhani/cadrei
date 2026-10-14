@@ -181,6 +181,43 @@ func SetMemoryRestored(c Cadrei, commit string) error {
 	return writeLocal(path, m)
 }
 
+// MemoryCopied is when cadrei copied the crew's notes into the
+// orchestrator's own memory on this machine, for MEMORY=machine on this
+// machine only, or "".
+func MemoryCopied(c Cadrei) string {
+	m, err := readLocal(filepath.Join(LocalDir(c.Path), "state.json"))
+	if err != nil {
+		return ""
+	}
+	var when string
+	json.Unmarshal(m["memory_copied"], &when)
+	return when
+}
+
+// SetMemoryCopied records that copy; "" forgets it, so a later
+// MEMORY=machine here copies again.
+func SetMemoryCopied(c Cadrei, when string) error {
+	l, err := lockLocal(c)
+	if err != nil {
+		return err
+	}
+	defer l.Release()
+	path := filepath.Join(LocalDir(c.Path), "state.json")
+	m, err := readLocal(path)
+	if err != nil {
+		return err
+	}
+	if when == "" {
+		if _, ok := m["memory_copied"]; !ok {
+			return nil
+		}
+		delete(m, "memory_copied")
+	} else {
+		m["memory_copied"], _ = json.Marshal(when)
+	}
+	return writeLocal(path, m)
+}
+
 // RecordServer notes the tmux server (its socket's path) a session of the
 // crew was started on, so the commands that move or delete crews look
 // for its teams there whatever server the environment names then.

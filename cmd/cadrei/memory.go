@@ -37,6 +37,8 @@ func (e *env) crewMemory(rt runtime.Runtime, c cadreis.Cadrei) (dir string, noti
 		e.leaveCrewMemory(c, folders)
 		return "", false
 	}
+	// A later MEMORY=machine for this machine only copies again.
+	cadreis.SetMemoryCopied(c, "")
 	if cadreis.MemoryIn(c) == cadreis.MemoryOnMachine {
 		e.keepOnMachine(c, crew, folders)
 		return "", false
@@ -113,10 +115,21 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 // leaveCrewMemory is MEMORY=machine for this machine only: the
 // orchestrator here keeps its memory in the runtime's own folder, and the
 // crew's .memory/ stays as it is, for its other machines. Nothing moves
-// out of it, and nothing is committed.
+// out of it, and nothing is committed: its notes are copied in once, so
+// the orchestrator here doesn't start with none.
 func (e *env) leaveCrewMemory(c cadreis.Cadrei, folders []string) {
 	for _, d := range folders {
 		memory.RemovePointer(d)
+	}
+	if cadreis.MemoryCopied(c) == "" {
+		res, err := memory.Copy(paths.Real(c.Path), folders[0], memory.Machine())
+		switch {
+		case err != nil:
+			e.warn("", "Your crew's notes couldn't be copied into your orchestrator's memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
+				"They're still in your crew (.memory/), and cadrei tries again next time.")
+		case cadreis.SetMemoryCopied(c, time.Now().Format(time.RFC3339)) == nil && res.Moved > 0:
+			e.note("", markDone, "Your orchestrator's memory is on this machine only now ("+count(res.Moved, "note")+" copied from your crew). Your other machines keep the crew's.")
+		}
 	}
 	if moved := e.bringAside(c, folders[0]); moved > 0 {
 		e.note("", markDone, "Brought your orchestrator's memory back to this machine ("+count(moved, "note")+"). It stays on this machine only now.")
