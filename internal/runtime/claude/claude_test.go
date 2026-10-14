@@ -146,6 +146,36 @@ func TestAHangingLoginCheckGivesUp(t *testing.T) {
 	}
 }
 
+// 0.2.2: below 2.1.295, Claude Code skips the guard's onFailure, so the
+// probe says what that means. A version at the floor or past it, or one
+// it can't read, says nothing.
+func TestTheVersionNotice(t *testing.T) {
+	want := runtime.Problem{
+		What: "On Claude Code 2.1.294, a cadrei guard that hangs or times out lets the command go on to Claude Code's own permission check.",
+		Fix:  "Update Claude Code to 2.1.295 or later to fix it."}
+	if got := versionNotice("2.1.294 (Claude Code)"); got == nil || *got != want {
+		t.Errorf("2.1.294: %+v", got)
+	}
+	if got := versionNotice("1.9.999"); got == nil || !strings.HasPrefix(got.What, "On Claude Code 1.9.999,") {
+		t.Errorf("1.9.999: %+v", got)
+	}
+	for _, raw := range []string{"2.1.295 (Claude Code)", "2.1.300", "2.2.0", "3.0.0", "Claude Code (dev build)", "2.1", ""} {
+		if got := versionNotice(raw); got != nil {
+			t.Errorf("%q: %+v", raw, got)
+		}
+	}
+	// The probe carries it.
+	dir := t.TempDir()
+	stub := "#!/bin/sh\ncase \"$1\" in\n  --version) echo '2.1.268 (Claude Code)' ;;\n  auth) echo '{\"loggedIn\": true}' ;;\nesac\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	if p := (Claude{}).Probe(context.Background()); p.Notice == nil || p.Login != runtime.LoggedIn {
+		t.Errorf("probe %+v", p)
+	}
+}
+
 // Audit qual-tests-09, acceptance 67: the login check's limit is 3
 // seconds at most, pinned here rather than relative to itself.
 func TestTheLoginLimitIsThreeSeconds(t *testing.T) {

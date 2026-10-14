@@ -346,8 +346,9 @@ func write(root *jsonx.Value, dir string, places Places) (string, error) {
 		}
 	}
 	if places.GuardHook != "" {
-		// First among the PreToolUse groups, and fails closed.
-		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(places.GuardHook), "timeout", jsonx.Literal("10"))
+		// First among the PreToolUse groups, and fails closed, on a
+		// timeout too (a timed-out hook would let the call go on).
+		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(places.GuardHook), "timeout", jsonx.Literal("10"), "onFailure", jsonx.String("block"))
 		group := jsonx.NewObject("matcher", jsonx.String("Bash"), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
 		groups := []*jsonx.Value{group}
 		if pre := hooks.Get("PreToolUse"); pre != nil {

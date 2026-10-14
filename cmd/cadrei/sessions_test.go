@@ -398,8 +398,9 @@ func TestMembersReportTheirState(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The guard comes first before a Bash call (forward-compatibility round:
-	// cadrei hook guard), and fails closed.
-	if pre := settings.Hooks["PreToolUse"]; len(pre) != 2 || pre[0].Matcher == nil || *pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 ||
+	// cadrei hook guard), and fails closed, on a timeout too (review of
+	// 0.2.2, H1).
+	if pre := settings.Hooks["PreToolUse"]; len(pre) != 2 || pre[0].Matcher == nil || *pre[0].Matcher != "Bash" || len(pre[0].Hooks) != 1 || pre[0].Hooks[0]["onFailure"] != "block" ||
 		!strings.HasSuffix(pre[0].Hooks[0]["command"].(string), " hook guard || exit 2; else echo 'cadrei, which checks commands for team members, is missing, so this one is blocked.' >&2; exit 2; fi") {
 		t.Errorf("the guard: %+v", pre)
 	} else {
@@ -684,11 +685,17 @@ func TestEveryHookCommandSurvivesAnOldProgram(t *testing.T) {
 			}
 			// The guard is the one hook that fails closed: with a program
 			// that's gone, or doesn't know it, a member's Bash call waits
-			// for a cadrei that does (exit 2).
+			// for a cadrei that does (exit 2). The orchestrator's lets the
+			// call go on when the program is gone (0.2.2).
 			if strings.Contains(command, " hook guard ") {
+				want := 2
+				if strings.HasSuffix(command, "else exit 0; fi") && program != old {
+					want = 0
+				}
 				var exit *exec.ExitError
-				if _, _, err := timed(command); !errors.As(err, &exit) || exit.ExitCode() != 2 {
-					t.Errorf("the guard with %s: %v, want exit 2", program, err)
+				_, _, err := timed(command)
+				if got := 0; err != nil && !errors.As(err, &exit) || (errors.As(err, &exit) && exit.ExitCode() != want) || (err == nil && want != got) {
+					t.Errorf("the guard with %s: %v, want exit %d", program, err, want)
 				}
 				continue
 			}

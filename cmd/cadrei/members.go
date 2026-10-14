@@ -30,6 +30,9 @@ type memberStatus struct {
 	Error      bool          // idle after a turn that hit an error
 	Quiet      time.Duration // working or waiting, and nothing written for this long
 	QuietSince time.Time     // when the transcript was last written, with Quiet
+	// Request is what it waits on the user for, with its code, while it
+	// waits: the runtime's own record of it, never consent.
+	Request *session.Request
 }
 
 // statusOfMember reads member name's state in the cadrei at home. With
@@ -58,6 +61,9 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 		return memberStatus{State: session.Unknown}
 	}
 	m := memberStatus{State: st.State, Since: st.Since, WaitingFor: st.WaitingFor, Error: st.Error}
+	if st.State == session.Waiting {
+		m.Request = st.Request
+	}
 	if (m.State == session.Working || m.State == session.Waiting) && transcript != "" {
 		if fi, err := os.Stat(transcript); err == nil && now.Sub(fi.ModTime()) >= quietAfter {
 			m.Quiet, m.QuietSince = now.Sub(fi.ModTime()), fi.ModTime()
@@ -118,9 +124,16 @@ func (m memberStatus) text(now time.Time) string {
 			s = "working for " + duration(d)
 		}
 	case session.Waiting:
-		s = "waiting on you · approve it in its window"
-		if m.WaitingFor == session.ForQuestion {
+		r := m.Request
+		switch {
+		case r != nil && r.Kind == session.ForApproval:
+			s = "waiting on you · approve it with cadrei answer " + r.Code + " yes"
+		case r != nil && r.Kind == session.ForQuestion && !r.Multi:
+			s = "waiting on you · it asked you something: cadrei answer"
+		case m.WaitingFor == session.ForQuestion:
 			s = "waiting on you · it asked you something in its window"
+		default:
+			s = "waiting on you · approve it in its window"
 		}
 	case session.Idle:
 		s = "idle since " + clock(m.Since, now)

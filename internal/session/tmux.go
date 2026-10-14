@@ -306,6 +306,17 @@ func (t Tmux) Screen(session, window string) string {
 	return out
 }
 
+// SendKeys presses keys in a window's pane, on its exact target: each is
+// a tmux key name (1, Escape, Enter), or with literal, text typed as is.
+func (t Tmux) SendKeys(session, window string, literal bool, keys ...string) error {
+	args := []string{"send-keys", "-t", target(session) + "=" + window}
+	if literal {
+		args = append(args, "-l")
+	}
+	_, err := t.run(append(args, keys...)...)
+	return err
+}
+
 // LastLine is the last line a window's pane shows that isn't blank, or "".
 func (t Tmux) LastLine(session, window string) string {
 	// With the lines above the screen: what a command wrote just before it

@@ -30,6 +30,34 @@ func firstMachine(t *testing.T) string {
 	return home
 }
 
+// oldClaude makes the claude stub say it's 2.1.290, below the 2.1.295
+// that knows the guard's onFailure.
+func oldClaude(t *testing.T, home string) {
+	t.Helper()
+	writeStub(t, home+"/bin/claude", strings.Replace(readFile(t, home+"/bin/claude"), "2.1.300", "2.1.290", 1))
+}
+
+// oldNotice is what cadrei says about 2.1.290, and how to fix it.
+const oldNotice = "On Claude Code 2.1.290, a cadrei guard that hangs or times out lets the command go on to Claude Code's own permission check. Update Claude Code to 2.1.295 or later to fix it."
+
+// 0.2.2: the full check and each cadrei start say a Claude Code below
+// 2.1.295 is too old for all of the guard. 2.1.300 says nothing (the
+// sound machine in TestHealthCheck, TestPlainCadreiOpensTheOrchestratorInThisTerminal).
+func TestTheChecksSayAnOldClaudeCode(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	stubClaude(t, home)
+	oldClaude(t, home)
+	os.WriteFile(home+"/release", nil, 0o644)
+	must(t, "init", "work")
+	if _, out, errOut := call("--check"); !strings.Contains(flat(out+errOut), oldNotice) {
+		t.Errorf("--check:\n%s%s", out, errOut)
+	}
+	if code, out, errOut := call(); code != 0 || !strings.Contains(flat(out+errOut), "! "+oldNotice) {
+		t.Errorf("start: %d\n%s%s", code, out, errOut)
+	}
+}
+
 func TestHealthCheck(t *testing.T) {
 	home := sandbox(t)
 	withTmux(t, home)

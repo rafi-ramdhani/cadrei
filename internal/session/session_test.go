@@ -538,11 +538,14 @@ func (o resumableOps) TranscriptFile(string, string) string { return "" }
 func (o resumableOps) UnansweredPrompt(string, string) bool { return false }
 func (o resumableOps) Ready(string) bool                    { return true }
 func (o resumableOps) Waiting(string) bool                  { return false }
-func (o resumableOps) ShellCommand(io.Reader) (string, bool, error) {
-	return "", false, nil
+func (o resumableOps) ShellCall(io.Reader) (runtime.ShellCall, error) {
+	return runtime.ShellCall{}, nil
 }
-func (o resumableOps) Sent(io.Reader) (runtime.Sent, bool) { return runtime.Sent{}, false }
-func (o resumableOps) SentContext(string) []byte           { return nil }
+func (o resumableOps) Ask(string) []byte                     { return nil }
+func (o resumableOps) SessionSettings(string) (string, bool) { return "", false }
+func (o resumableOps) InSession() bool                       { return false }
+func (o resumableOps) Sent(io.Reader) (runtime.Sent, bool)   { return runtime.Sent{}, false }
+func (o resumableOps) SentContext(string) []byte             { return nil }
 
 func (o resumableOps) SafeguardStop(string) (time.Time, bool) {
 	return time.Time{}, false

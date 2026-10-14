@@ -38,6 +38,23 @@ func ConfigDir() string {
 // unknown subcommand could be read as a prompt.
 var authStatusSince = [3]int{2, 1, 268}
 
+// onFailureSince is the first version that knows a hook's onFailure.
+// An older one skips it, so a guard that hangs or times out lets the call
+// go on to its own permission check.
+var onFailureSince = [3]int{2, 1, 295}
+
+// versionNotice is what to tell the user about the version claude
+// --version printed, or nil: for one new enough, or one it can't read.
+func versionNotice(raw string) *runtime.Problem {
+	v, ok := parseVersion(raw)
+	if !ok || atLeast(v, onFailureSince) {
+		return nil
+	}
+	return &runtime.Problem{
+		What: "On Claude Code " + versionText(v) + ", a cadrei guard that hangs or times out lets the command go on to Claude Code's own permission check.",
+		Fix:  "Update Claude Code to " + versionText(onFailureSince) + " or later to fix it."}
+}
+
 var versionRe = regexp.MustCompile(`(\d+)\.(\d+)\.(\d+)`)
 
 func parseVersion(s string) ([3]int, bool) {
@@ -100,13 +117,17 @@ func (c Claude) Health(full bool, cadreiDirs []string) []runtime.Problem {
 	// The full check asks Claude Code as the first run's screen does: the
 	// one Probe, so both say the same.
 	if full {
-		switch p := c.Probe(context.Background()); {
+		p := c.Probe(context.Background())
+		switch {
 		case !p.Runs:
 			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fatal: true, Fix: "Reinstall it with " + help.Reinstall})
 		case p.Login == runtime.LoggedOut:
 			out = append(out, runtime.Problem{What: p.Says(c.Title()), Fix: "Log in with " + help.Login + "."})
 		case p.Login != runtime.LoggedIn:
 			out = append(out, runtime.Problem{What: p.Says(c.Title())})
+		}
+		if p.Notice != nil {
+			out = append(out, *p.Notice)
 		}
 	}
 	// Member settings with no record here and no commit (a crew without
@@ -371,8 +392,9 @@ func (hooks) Output(text string) []byte {
 
 // SnapshotSettings writes <dir>/orchestrator-settings.json, holding the
 // session start hook that runs `<binary> hook snapshot`, the prompt hook
-// that runs `<binary> hook team-status`, and the hook after each
-// SendMessage call that runs `<binary> hook notify`. Claude Code adds their
+// that runs `<binary> hook team-status`, the guard before each Bash call
+// (`<binary> hook guard`), and the hook after each SendMessage call that
+// runs `<binary> hook notify`. Claude Code adds their
 // output to the session's context (the snapshot on startup, on resume and
 // after /clear and /compact; the team status on each prompt; the notify
 // note after a send), and shows none of it in the chat.
@@ -385,8 +407,15 @@ func (hooks) SnapshotSettings(dir, binary string) (string, error) {
 		}
 		return &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{group}}
 	}
+	// The guard, before each Bash call: it asks the user before an answer
+	// for a member, and keeps the orchestrator from typing into tmux. A
+	// guard that times out blocks the call: without it, the call would go
+	// on to the normal permission flow with no ask. A cadrei that's gone
+	// isn't a failure: the command ends with 0 at once.
+	guard := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(OrchestratorGuardHook(binary)), "timeout", jsonx.Literal("10"), "onFailure", jsonx.String("block"))
+	pre := &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{jsonx.NewObject("matcher", jsonx.String("Bash"), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{guard}})}}
 	root := jsonx.NewObject("hooks", jsonx.NewObject("SessionStart", entry("snapshot", "10", ""), "UserPromptSubmit", entry("team-status", "5", ""),
-		"PostToolUse", entry("notify", "5", "SendMessage")))
+		"PreToolUse", pre, "PostToolUse", entry("notify", "5", "SendMessage")))
 	path := filepath.Join(dir, "orchestrator-settings.json")
 	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
 }
@@ -405,7 +434,7 @@ func (c Claude) Probe(ctx context.Context) runtime.Probe {
 	if err != nil || !ok {
 		return p
 	}
-	p.Runs, p.Version = true, versionText(v)
+	p.Runs, p.Version, p.Notice = true, versionText(v), versionNotice(string(raw))
 	if !atLeast(v, authStatusSince) {
 		return p
 	}

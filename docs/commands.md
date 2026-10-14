@@ -99,6 +99,40 @@ Opens a running team's windows, so you can watch a member or answer a question i
 cadrei attach dev my-app
 ```
 
+### `cadrei answer [<code> yes|no|<n>]`
+
+Answers a member that's waiting on you: a permission prompt (`yes` or `no`), or a question (the number of your pick). With no code, it shows who's waiting, with the line that answers each. Each request has a short code, so an answer never lands on a prompt that changed in the meantime.
+
+Your orchestrator runs it for you, and Claude Code asks you first, in its own permission prompt: your Yes there is the answer. You can also type it yourself, in your own terminal or as `! cadrei answer 7f3 yes` in your orchestrator. It refuses in a member, and in a chat it recognizes as Claude Code other than the orchestrator cadrei opened.
+
+```text
+$ cadrei answer
+Waiting on you:
+
+  7f3  The engineer on my-app wants to run a command:
+         gh pr merge 42
+       Allow it once:  cadrei answer 7f3 yes
+       Say no:         cadrei answer 7f3 no
+
+  k2m  The writer in docs asks: Upload resume.pdf to the signing site?
+         1. Yes
+         2. No
+       Answer:         cadrei answer k2m 1
+
+$ cadrei answer 7f3 yes
+✓ Allowed once: the engineer on my-app can run gh pr merge 42.
+```
+
+`yes` only ever picks the plain "Yes", the one-time allow, never a choice that allows more or changes the member's mode. `no` stops the member's turn: it waits for what to do instead. Some are answered in the member's window: a question that takes more than one pick, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command too long for cadrei's record to hold whole), a prompt taller than the member's window (its top isn't on the screen, so cadrei can't see it whole), and a file whose path the window shows cut short. `cadrei answer` says so, and your orchestrator's guard says so before it asks you.
+
+### `cadrei compact <team>/<role> [project]`
+
+Compacts an idle member's conversation: it types `/compact` into the member's window and presses Enter. A member that's working, or waiting on you, is left alone.
+
+```bash
+cadrei compact dev/engineer my-app
+```
+
 ### `cadrei ls`
 
 Shows your crew, your orchestrator, the running teams and what each member is doing (working, idle, waiting on you), and your projects.

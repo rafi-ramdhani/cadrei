@@ -28,7 +28,8 @@ func sandbox(t *testing.T) string {
 	t.Cleanup(func() { hookAnywhereForTests = false })
 	// Nothing may point cadrei or Claude Code at the user's own setup: a
 	// set CLAUDE_CONFIG_DIR would send trust edits to the real config.
-	for _, v := range []string{"CADREI_HOME", "CADREI_MEMBER", "CADRE_PERSONA", "CADREI_TEST_TTY", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "TMUX", "TMUX_PANE"} {
+	for _, v := range []string{"CADREI_HOME", "CADREI_MEMBER", "CADRE_PERSONA", "CADREI_TEST_TTY", "XDG_CACHE_HOME", "CLAUDE_CONFIG_DIR", "TMUX", "TMUX_PANE",
+		"CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION"} {
 		t.Setenv(v, "")
 		os.Unsetenv(v)
 	}

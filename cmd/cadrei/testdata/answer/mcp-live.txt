@@ -1,0 +1,24 @@
+  Your message is mostly correct. "Call the upload tool of the files MCP server"
+  reads naturally. A small fix: "It is a stand-in that does nothing" could be
+  "It is a stand-in that does nothing," which you already have, so no change is
+  needed.
+
+  The upload tool is deferred, so I'll load its schema first.
+
+⏺ Calling files…
+
+────────────────────────────────────────────────────────────────────────────────
+ Tool use
+ files - Upload Tool: (MCP)
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ path: "resume.pdf"
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ About the files - Upload Tool:
+ │ Upload a file to the signing site (a stand-in that does nothing)
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for files - Upload commands in <work>…
+   3. No
+
+ Esc to cancel · Tab to amend

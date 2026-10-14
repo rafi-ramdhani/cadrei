@@ -39,6 +39,12 @@
           "state": "waiting",
           "since": "<time>",
           "waiting_for": "approval",
+          "request": {
+            "code": "<code>",
+            "kind": "approval",
+            "tool": "Bash",
+            "summary": "gh pr merge 42 --squash"
+          },
           "model": "sonnet",
           "effort": "medium",
           "model_from": "crew",
@@ -71,6 +77,16 @@
           "state": "waiting",
           "since": "<time>",
           "waiting_for": "question",
+          "request": {
+            "code": "<code>",
+            "kind": "question",
+            "tool": "AskUserQuestion",
+            "summary": "Upload resume.pdf to the signing site?",
+            "options": [
+              "Yes",
+              "No"
+            ]
+          },
           "model": "sonnet",
           "effort": "medium",
           "model_from": "crew",

@@ -1,0 +1,9 @@
+ ☐ Upload
+Upload the test file to the signing site?
+❯ 1. Yes
+     Upload the test file to the signing site.
+  2. No
+     Do not upload the test file.
+  3. Type something.
+  4. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel

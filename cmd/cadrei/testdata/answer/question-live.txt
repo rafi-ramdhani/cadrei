@@ -1,0 +1,24 @@
+  The two earlier commands (mkdir e2e-no and mkdir e2e-c1) were rejected or
+  interrupted before they ran, so those directories should not exist. If you
+  want one of them, tell me and I'll run it.
+
+✻ Cooked for 3s · done 5:26 PM
+
+❯ Use the AskUserQuestion tool to ask me exactly: "Upload resume.pdf to the
+  signing site?" with two options, "Yes" and "No", single select. Then tell me
+  what I picked.
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Upload
+
+Upload resume.pdf to the signing site?
+
+❯ 1. Yes
+     Upload resume.pdf to the signing site
+  2. No
+     Do not upload resume.pdf
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+──────────────────────────────────────────────────────── work-dev-app-engineer ─

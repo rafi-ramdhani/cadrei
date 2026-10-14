@@ -68,12 +68,12 @@ func runPlain(e *env) int {
 	// get an error back.
 	// Whatever this run ends with, a check still going ends with it: in
 	// a process group of its own, nothing else would stop it.
-	var login chan string
+	var login chan runtime.Probe
 	if !first {
 		ctx, stop := context.WithCancel(context.Background())
 		defer stop()
-		login = make(chan string, 1)
-		go func() { login <- rt.Probe(ctx).Login }()
+		login = make(chan runtime.Probe, 1)
+		go func() { login <- rt.Probe(ctx) }()
 	}
 	r, ok := e.resolve()
 	if !ok {
@@ -130,14 +130,21 @@ func runPlain(e *env) int {
 	// Logged out for sure: log in first, unless it's open already (that
 	// one is only switched to, without waiting for the answer). Unsure
 	// (offline, an old runtime) opens as before. Asked before the start
-	// guard, which a login would hold.
-	if login != nil && !e.orchestratorOpen(t, r, build) && <-login == runtime.LoggedOut {
-		if e.interactive() {
-			e.say("")
-			e.screen("You're not logged in to " + rt.Title() + ", so log in first.")
+	// guard, which a login would hold. The same check says when the
+	// runtime is too old for all of cadrei's guard.
+	if login != nil && !e.orchestratorOpen(t, r, build) {
+		p := <-login
+		if p.Notice != nil {
+			e.note("  ", markWarn, p.Notice.What+" "+p.Notice.Fix)
 		}
-		if !e.logInNow(rt, "") {
-			return 1
+		if p.Login == runtime.LoggedOut {
+			if e.interactive() {
+				e.say("")
+				e.screen("You're not logged in to " + rt.Title() + ", so log in first.")
+			}
+			if !e.logInNow(rt, "") {
+				return 1
+			}
 		}
 	}
 	if err := session.EnsureBuild(build); err != nil {

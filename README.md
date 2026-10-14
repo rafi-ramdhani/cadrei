@@ -34,6 +34,8 @@ Then run `cadrei` in a repo you want your team to work on, and press Enter. That
 
 You start with an engineer and a reviewer. Want a designer, a writer or a tutor? Just ask. Each member is its own Claude Code session and uses your Claude plan like one, so your orchestrator only starts the ones a task needs.
 
+Answer your team's questions and permission prompts from the orchestrator: no trips to each member's window.
+
 ## Learn more
 
 - [Getting started](https://cadrei.dev/docs/): install, run it in a repo, and press Enter

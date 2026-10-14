@@ -229,10 +229,19 @@ func (sessions) Sent(input io.Reader) (runtime.Sent, bool) {
 
 func (sessions) SentContext(text string) []byte { return []byte(text + "\n") }
 
-func (sessions) ShellCommand(input io.Reader) (string, bool, error) {
-	var in struct{ Command string }
+func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
+	var in struct{ Command, Mode string }
 	if err := json.NewDecoder(input).Decode(&in); err != nil {
-		return "", false, err
+		return runtime.ShellCall{}, err
 	}
-	return in.Command, true, nil
+	return runtime.ShellCall{Command: in.Command, Shell: true, Mode: in.Mode}, nil
+}
+
+func (sessions) SessionSettings(string) (string, bool) { return "", false }
+
+func (sessions) InSession() bool { return false }
+
+func (sessions) Ask(why string) []byte {
+	b, _ := json.Marshal(map[string]string{"ask": why})
+	return append(b, '\n')
 }

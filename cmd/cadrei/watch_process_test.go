@@ -335,7 +335,7 @@ func TestTheStreamOpensNoPort(t *testing.T) {
 			t.Errorf("the orchestrator may run %s", r)
 		}
 	}
-	if len(readOnly) != 8 {
+	if len(readOnly) != 9 {
 		t.Errorf("%d pre-allowed commands", len(readOnly))
 	}
 	skill, err := os.ReadFile(filepath.Join(repoRoot, "skills", "cadrei", "SKILL.md"))

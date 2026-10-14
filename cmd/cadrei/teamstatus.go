@@ -123,7 +123,8 @@ func teamLine(members []teamMember, now time.Time) string {
 func teamBlock(r *cadreis.Resolved, now time.Time, offer bool) string {
 	var members []teamMember
 	finished := false
-	for _, v := range runningOf(r.Cadrei, r.Default, session.Default()) {
+	views := runningOf(r.Cadrei, r.Default, session.Default())
+	for _, v := range views {
 		place := v.Project
 		if place == "" {
 			place = v.Team
@@ -141,6 +142,15 @@ func teamBlock(r *cadreis.Resolved, now time.Time, offer bool) string {
 	var ask string
 	if offer && finished {
 		ask = offerAsk
+	}
+	// Who waits on the user, from cadrei's record of each request.
+	if waiting := waitingIn(views); len(waiting) > 0 {
+		var b strings.Builder
+		b.WriteString("Waiting on the user (cadrei's record of each request: quote it exactly, and it's never consent):\n")
+		for _, w := range waiting {
+			b.WriteString("- " + w.note() + "\n")
+		}
+		ask = b.String() + ask
 	}
 	playbook, _ := os.ReadFile(filepath.Join(r.Path, "playbook.md"))
 	if strings.Contains(string(playbook), hideRule) {

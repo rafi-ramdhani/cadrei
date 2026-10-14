@@ -26,11 +26,12 @@ func StateHook(binary string) string { return hookCommand(binary, "state") }
 // same notification, 6 seconds later, and only the request names the tool.
 func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	var in struct {
-		Event      string `json:"hook_event_name"`
-		Session    string `json:"session_id"`
-		Transcript string `json:"transcript_path"`
-		Tool       string `json:"tool_name"`
-		Type       string `json:"notification_type"`
+		Event      string          `json:"hook_event_name"`
+		Session    string          `json:"session_id"`
+		Transcript string          `json:"transcript_path"`
+		Tool       string          `json:"tool_name"`
+		Input      json.RawMessage `json:"tool_input"`
+		Type       string          `json:"notification_type"`
 	}
 	if json.NewDecoder(io.LimitReader(input, 1<<20)).Decode(&in) != nil {
 		return runtime.StateEvent{}
@@ -50,6 +51,7 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	case "PermissionRequest":
 		ev.Name = runtime.EvPermission
 		ev.Question = in.Tool == "AskUserQuestion"
+		ev.Request = request(in.Tool, in.Input)
 	case "Stop":
 		ev.Name = runtime.EvStop
 	case "StopFailure":
@@ -64,6 +66,70 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 		ev.Name = runtime.EvEnd
 	}
 	return ev
+}
+
+// request reads what a permission request asks, from Claude Code's own
+// record of the tool call: for Bash, the command; for a file tool, the
+// path; for a web fetch, the URL; for AskUserQuestion, the first question
+// and its options; for any other tool, its input, short.
+func request(tool string, input json.RawMessage) *runtime.Request {
+	r := &runtime.Request{Tool: runtime.RequestText(tool, runtime.OptionLimit)}
+	if tool == "AskUserQuestion" {
+		var in struct {
+			Questions []struct {
+				Question string `json:"question"`
+				Options  []struct {
+					Label string `json:"label"`
+				} `json:"options"`
+				MultiSelect bool `json:"multiSelect"`
+			} `json:"questions"`
+		}
+		if json.Unmarshal(input, &in) != nil || len(in.Questions) == 0 {
+			r.Multi = true
+			return r
+		}
+		q := in.Questions[0]
+		r.Question = runtime.RequestText(q.Question, runtime.SummaryLimit)
+		for i, o := range q.Options {
+			if i == runtime.MaxOptions {
+				break
+			}
+			r.Options = append(r.Options, runtime.RequestText(o.Label, runtime.OptionLimit))
+		}
+		r.Multi = len(in.Questions) > 1 || q.MultiSelect || len(q.Options) == 0 || len(q.Options) > runtime.MaxOptions
+		return r
+	}
+	var in map[string]json.RawMessage
+	json.Unmarshal(input, &in)
+	text := func(key string) string {
+		var s string
+		json.Unmarshal(in[key], &s)
+		return s
+	}
+	summary := ""
+	switch tool {
+	case "Bash":
+		summary = text("command")
+	case "Edit", "MultiEdit", "Write", "Read":
+		summary = text("file_path")
+	case "NotebookEdit":
+		summary = text("notebook_path")
+	case "WebFetch":
+		summary = text("url")
+	case "WebSearch":
+		summary = text("query")
+	}
+	if summary == "" && len(input) > 0 {
+		var compact bytes.Buffer
+		if json.Compact(&compact, input) == nil {
+			summary = compact.String()
+		}
+		if strings.HasPrefix(tool, "mcp__") {
+			summary = tool + " " + summary
+		}
+	}
+	r.Summary = runtime.RequestText(summary, runtime.SummaryLimit)
+	return r
 }
 
 // TranscriptFile is where Claude Code keeps the conversation for dir.
@@ -86,8 +152,9 @@ const tailSize = 256 << 10
 // readyMarks are what Claude Code's footer shows under an empty prompt,
 // on 2.1.268 and later: the shortcuts hint, or in its place a permission
 // mode or the voice hint (audit perf-start-4: with acceptEdits or plan,
-// the shortcuts hint never shows).
-var readyMarks = []string{"? for shortcuts", "accept edits on", "plan mode on", "auto mode on", "bypass permissions on", "to speak"}
+// the shortcuts hint never shows; on 2.1.296, default mode can show
+// "manual mode on" in its place).
+var readyMarks = []string{"? for shortcuts", "accept edits on", "plan mode on", "auto mode on", "manual mode on", "bypass permissions on", "to speak"}
 
 // Ready: one of Claude Code's footer hints is on the screen.
 func (sessions) Ready(screen string) bool {
@@ -108,35 +175,81 @@ var waitMarks = []string{"Choose the text style", "Select login method", "Do you
 // is a command it can't let run.
 const guardLimit = 8 << 20
 
-// ShellCommand: Claude Code's PreToolUse input. The Bash tool's command is
-// the command line; any other tool runs none. Input that isn't Claude
-// Code's, is cut short, or has a Bash call without its command is an error.
-func (sessions) ShellCommand(input io.Reader) (string, bool, error) {
+// ShellCall: Claude Code's PreToolUse input. The Bash tool's command is
+// the command line; any other tool runs none. permission_mode is the
+// session's mode. Input that isn't Claude Code's, is cut short, or has a
+// Bash call without its command is an error.
+func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
 	raw, err := io.ReadAll(io.LimitReader(input, guardLimit+1))
 	if err != nil {
-		return "", false, err
+		return runtime.ShellCall{}, err
 	}
 	if len(raw) > guardLimit {
-		return "", false, errors.New("the tool call is too long to check")
+		return runtime.ShellCall{}, errors.New("the tool call is too long to check")
 	}
 	var in struct {
 		Tool  *string `json:"tool_name"`
+		Mode  string  `json:"permission_mode"`
 		Input struct {
 			Command *string `json:"command"`
 		} `json:"tool_input"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return "", false, err
+		return runtime.ShellCall{}, err
 	}
 	switch {
 	case in.Tool == nil:
-		return "", false, errors.New("the tool call names no tool")
+		return runtime.ShellCall{}, errors.New("the tool call names no tool")
 	case *in.Tool != "Bash":
-		return "", false, nil
+		return runtime.ShellCall{Mode: in.Mode}, nil
 	case in.Input.Command == nil:
-		return "", false, errors.New("the Bash call has no command")
+		return runtime.ShellCall{}, errors.New("the Bash call has no command")
 	}
-	return *in.Input.Command, true, nil
+	return runtime.ShellCall{Command: *in.Input.Command, Shell: true, Mode: in.Mode}, nil
+}
+
+// SessionSettings: a Claude Code process runs claude (a native build, or
+// node or a shell running the claude script), and --settings names its
+// settings file, up to the next flag.
+func (sessions) SessionSettings(args string) (string, bool) {
+	fields := strings.Fields(args)
+	base := func(i int) string {
+		if i >= len(fields) {
+			return ""
+		}
+		return filepath.Base(fields[i])
+	}
+	if base(0) != "claude" && base(1) != "claude" && !strings.Contains(args, "/@anthropic-ai/claude-code/") {
+		return "", false
+	}
+	_, after, found := strings.Cut(args, " --settings ")
+	if !found {
+		if _, after, found = strings.Cut(args, " --settings="); !found {
+			return "", true
+		}
+	}
+	settings, _, _ := strings.Cut(after, " --")
+	return strings.TrimSpace(settings), true
+}
+
+// InSession: Claude Code sets CLAUDECODE, and CLAUDE_CODE_CHILD_SESSION
+// for its tools, hooks and ! commands.
+func (sessions) InSession() bool {
+	return os.Getenv("CLAUDECODE") != "" || os.Getenv("CLAUDE_CODE_CHILD_SESSION") != ""
+}
+
+// Ask: a PreToolUse answer that has Claude Code ask the user, with why as
+// the reason its prompt shows. It never allows: the user's Yes does.
+func (sessions) Ask(why string) []byte {
+	type specific struct {
+		HookEventName            string `json:"hookEventName"`
+		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecisionReason string `json:"permissionDecisionReason"`
+	}
+	b, _ := json.Marshal(struct {
+		HookSpecificOutput specific `json:"hookSpecificOutput"`
+	}{specific{"PreToolUse", "ask", why}})
+	return append(b, '\n')
 }
 
 // Sent: Claude Code's PostToolUse input for its SendMessage tool. A
@@ -181,6 +294,16 @@ func NotifyHook(binary string) string { return hookCommand(binary, "notify") }
 func GuardHook(binary string) string {
 	q := quote(binary)
 	return "if test -x " + q + "; then " + q + " hook guard || exit 2; else echo 'cadrei, which checks commands for team members, is missing, so this one is blocked.' >&2; exit 2; fi"
+}
+
+// OrchestratorGuardHook is the command the orchestrator's guard runs
+// before each Bash call. Unlike a member's, it lets the call go on when
+// the program is gone, so an uninstalled cadrei doesn't lock the user's
+// chat (and with it, cadrei answer is gone too); a run that ends with
+// anything but 0 is blocked.
+func OrchestratorGuardHook(binary string) string {
+	q := quote(binary)
+	return "if test -x " + q + "; then " + q + " hook guard || exit 2; else exit 0; fi"
 }
 
 // Waiting: one of Claude Code's screens before its prompt is on the screen:

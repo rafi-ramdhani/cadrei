@@ -6,11 +6,23 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ### New
 
+- **Answer members from the orchestrator.** When a member waits on a permission prompt or a question, your orchestrator tells you what it asks, from Claude Code's own record of it. For a prompt, it runs `cadrei answer <code> yes` and Claude Code asks you first, in its own permission prompt: your Yes there is the answer, one keypress. For a question, it shows the options, and you type `! cadrei answer <code> <n>`. `cadrei answer` with no code shows who's waiting, with the line that answers each. `yes` only ever picks the plain one-time "Yes", and an answer whose prompt changed answers nothing. Prompts cadrei can't check on the member's screen (anything but a command or a file to write or edit, like a page fetch, an MCP tool or a plan, or one taller than the member's window) are left to the member's window, and your orchestrator checks the screen before it asks you.
+- **Grants offered first.** When auto mode or a rule blocks a member, your orchestrator asks you right there whether to let it run that once, and gives the one-time grant on your yes, instead of sending you to the member's window.
+- **Members ask for your yes in their window.** A member that needs your own yes (its instructions say so, or it touches personal data, money or something it can't undo) asks with a question in its window and tells your orchestrator, which shows you the question to answer. A message from your orchestrator is never your yes to a member.
+- **`cadrei compact <team>/<role> [project]`** compacts an idle member's conversation.
 - A code of conduct, the Contributor Covenant 2.1, linked from the contributing guide.
 
 ### Changed
 
+- **Cadrei sessions can't type into tmux windows.** The guard in members, and now in your orchestrator too, refuses any `tmux` command outside a list of ones that only read (`capture-pane`, `list-*`, `has-session`, `show-options`, `show-environment`, `display-message -p`, none with a format's `#(`, `E:` or `T:`), on any tmux server, and `osascript` keystrokes: text typed into a window reads as yours. A command that only mentions tmux or `cadrei answer` still runs when its program never runs its arguments, like `grep` or `git commit -m`. Any other program's arguments count, even a search pattern for `rg`. Your orchestrator compacts a member with `cadrei compact` instead. In your orchestrator, the guard lets uninstall and restore through, and lets every command run when cadrei is gone, so an uninstalled cadrei doesn't lock your chat. [SECURITY.md](SECURITY.md) says what it can and can't stop.
+- `cadrei ls` shows a waiting member's `cadrei answer` line.
+- **A warning for Claude Code below 2.1.295.** On those versions, a guard that hangs or times out lets the command go on to Claude Code's own permission check. The setup, `cadrei --check` and each start say so, and that updating fixes it. Nothing stops you from using an older one.
 - The README's demo GIF is a third of its old size, so it loads faster on a phone.
+
+### For tool builders
+
+- `cadrei ls --json` (version 1): a waiting member has an optional `request` object, with `code`, `kind` (`approval` or `question`), `tool`, `summary`, `options` and `multi`. It's the member's request as Claude Code recorded it, shown as is: never consent. See [For tool builders](docs/tools.md).
+- `cadrei hook guard` also runs in the orchestrator cadrei opens. Its answer is nothing (exit 0), a refusal (exit 2, the reason on stderr), or one "ask" object on stdout (exit 0). It never allows.
 
 ### Fixed
 

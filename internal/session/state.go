@@ -1,9 +1,12 @@
 package session
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,6 +43,73 @@ type State struct {
 	Transcript string    `json:"transcript,omitempty"`  // the conversation's transcript, for its last activity
 	PromptAt   time.Time `json:"prompt_at,omitempty"`   // when the last prompt arrived
 	EndedAt    time.Time `json:"ended_at,omitempty"`    // when a turn last ended (Stop or StopFailure)
+	// Request is what it waits on the user for, while it waits.
+	Request *Request `json:"request,omitempty"`
+}
+
+// Request is what a waiting member asks the user, as the runtime recorded
+// it, with the code cadrei gave it: an answer names the code, so it never
+// lands on a request that changed.
+type Request struct {
+	Code     string   `json:"code"`
+	Kind     string   `json:"kind"` // ForApproval or ForQuestion
+	Tool     string   `json:"tool,omitempty"`
+	Summary  string   `json:"summary,omitempty"`
+	Question string   `json:"question,omitempty"`
+	Options  []string `json:"options,omitempty"`
+	Multi    bool     `json:"multi,omitempty"` // only its window can answer it
+}
+
+// Same reports whether two states say the same.
+func Same(a, b *State) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	x, y := *a, *b
+	x.Request, y.Request = nil, nil
+	if x != y || (a.Request == nil) != (b.Request == nil) {
+		return false
+	}
+	if a.Request == nil {
+		return true
+	}
+	ra, rb := *a.Request, *b.Request
+	return ra.Code == rb.Code && ra.Kind == rb.Kind && ra.Tool == rb.Tool && ra.Summary == rb.Summary &&
+		ra.Question == rb.Question && ra.Multi == rb.Multi && slices.Equal(ra.Options, rb.Options)
+}
+
+// codeChars are what a request's code is made of: no 0, 1, l or o, which
+// read alike.
+const codeChars = "abcdefghijkmnpqrstuvwxyz23456789"
+
+// CodeRule is a request code's shape.
+var CodeRule = regexp.MustCompile("^[" + codeChars + "]{3}$")
+
+// GiveCode gives a new request in s a code that no other state file in its
+// folder has.
+func GiveCode(path string, s *State) {
+	if s == nil || s.Request == nil || s.Request.Code != "" {
+		return
+	}
+	taken := map[string]bool{}
+	files, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "*.json"))
+	for _, f := range files {
+		if f == path {
+			continue
+		}
+		if o := ReadState(f); o != nil && o.Request != nil {
+			taken[o.Request.Code] = true
+		}
+	}
+	for {
+		var b [3]byte
+		rand.Read(b[:])
+		code := string([]byte{codeChars[int(b[0])%len(codeChars)], codeChars[int(b[1])%len(codeChars)], codeChars[int(b[2])%len(codeChars)]})
+		if !taken[code] {
+			s.Request.Code = code
+			return
+		}
+	}
 }
 
 // queued is how close a Stop may come after a prompt and still belong to
@@ -71,6 +141,7 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		next.State = state
 		next.WaitingFor = ""
 		next.Error = false
+		next.Request = nil
 	}
 	switch ev.Name {
 	case runtime.EvPrompt:
@@ -83,6 +154,11 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		next.WaitingFor = ForApproval
 		if ev.Question {
 			next.WaitingFor = ForQuestion
+		}
+		// A new request, so a new code (GiveCode).
+		if r := ev.Request; r != nil {
+			next.Request = &Request{Kind: next.WaitingFor, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
+				Options: slices.Clone(r.Options), Multi: r.Multi}
 		}
 	case runtime.EvStop:
 		if prev != nil && prev.State == Working && !prev.PromptAt.IsZero() && now.Sub(prev.PromptAt) < queued {
