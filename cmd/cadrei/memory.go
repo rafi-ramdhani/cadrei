@@ -46,10 +46,11 @@ func (e *env) crewMemory(rt runtime.Runtime, c cadreis.Cadrei) (dir string, noti
 	if len(res.Copies) > 0 {
 		e.note("  ", markWarn, fmt.Sprintf("%d of your orchestrator's notes differed from the crew's, so both are kept: %s.", len(res.Copies), strings.Join(res.Copies, ", ")))
 	}
-	memory.Attributes(crew)
 	if _, err := os.Stat(memory.Dir(crew)); err != nil {
 		return memory.Dir(crew), false
 	}
+	// Committed with the memory: a crew with none gets no stray file.
+	memory.Attributes(crew)
 	if cadreis.MemoryNotice(c) == "" {
 		if cadreis.SetMemoryNotice(c, time.Now().Format(time.RFC3339)) == nil {
 			e.note("", markDone, "Your orchestrator's memory now lives in your crew (.memory/), so your backup keeps it")

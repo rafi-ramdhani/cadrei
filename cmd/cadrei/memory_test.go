@@ -279,3 +279,26 @@ func TestTheMemoryNoticeReachesATmuxOrchestrator(t *testing.T) {
 		t.Error("the notice stayed in cadrei's own environment")
 	}
 }
+
+// A crew from before 0.2.2, with no .gitattributes: an open with no
+// memory anywhere leaves nothing new in it, and the first memory commit
+// carries the union line.
+func TestAnOlderCrewGetsTheUnionLineWithItsMemory(t *testing.T) {
+	home, c, d := memoryCrew(t)
+	exec.Command("git", "-C", c, "rm", "-q", ".gitattributes").Run()
+	exec.Command("git", "-C", c, "commit", "-qm", "as 0.2.1 made it").Run()
+	os.RemoveAll(d)
+	must(t)
+	if st, _ := exec.Command("git", "-C", c, "status", "--porcelain").Output(); len(st) != 0 {
+		t.Errorf("an open with no memory left %q", st)
+	}
+	os.MkdirAll(c+"/.memory", 0o755)
+	os.WriteFile(c+"/.memory/role.md", []byte("role\n"), 0o644)
+	must(t)
+	must(t)
+	files, _ := exec.Command("git", "-C", c, "show", "--name-only", "--format=", "HEAD").Output()
+	if string(files) != ".gitattributes\n.memory/role.md\n" {
+		t.Errorf("the first memory commit holds %q", files)
+	}
+	_ = home
+}
