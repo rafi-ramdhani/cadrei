@@ -28,6 +28,10 @@ func TestTheGuardKeepsMembersOutOfTheMemory(t *testing.T) {
 		`.memory_x=1; echo x > '.memory/a b.md'`, `cp -t ~/.cadrei/main/.memory a.md`, `cp --target-directory=.memory a.md`,
 		`find .memory -name x -exec mv {} /tmp \;`, `tar -x -f x.tar --directory .memory`, `unzip x.zip -d .memory`, `wget -P .memory https://example.com/a`,
 		`cd .memory && cp /tmp/a.md .`, "cat a.md \\\n  > .memory/a.md",
+		// Re-review M4: a redirection after cd, and a .memory folder copied
+		// into a crew.
+		`cd ~/.cadrei/main/.memory && echo "fact" > a.md`, `cd .memory; printf 'x' >> MEMORY.md`,
+		`cp -r ~/proj/notes/.memory ~/.cadrei/main/`, `rsync -a ~/proj/notes/.memory ~/.cadrei/main`,
 		// A line it can't read whole is read word by word.
 		`echo "x > .memory/a.md`, `cat <<EOF > .memory/a.md`,
 	} {
@@ -46,6 +50,10 @@ func TestTheGuardKeepsMembersOutOfTheMemory(t *testing.T) {
 		`grep -rn "cp" .memory/`, `grep -rw install .memory/`, `git log --grep rm -- .memory`, `ls .memory && mkdir -p out`,
 		`test -d .memory || touch notes.md`, `cd ~/proj && npm run build && rm -rf dist # not .memory`, `ls .memory | xargs -I{} cp {} /tmp/`,
 		`find .memory -name '*.md' -exec cp {} /tmp/ \;`,
+		// After cd into the folder, writes elsewhere, and a .memory copied
+		// anywhere but a crew.
+		`cd .memory && cat a.md > /tmp/a.md`, `cd .memory && ls 2>&1 >/dev/null`, `cp -r ~/proj/notes/.memory /tmp/backup/`,
+		`rsync -a ~/.cadrei/main/.memory ~/backups/`,
 	} {
 		if guardLine(memoryRule{}, c, 0) {
 			t.Errorf("blocked: %q", c)

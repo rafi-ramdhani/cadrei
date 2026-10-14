@@ -38,8 +38,9 @@ type guardRule interface {
 // writeRule is a rule about what a command writes, which it checks even
 // for a program that runs none of its arguments.
 type writeRule interface {
-	// outputs reports whether a command's output files are its kind.
-	outputs(files []shWord) bool
+	// outputs reports whether a command's output files, on line, are its
+	// kind.
+	outputs(files []shWord, line *lineText) bool
 	// writes reports whether the command, its program at words[p], writes
 	// there; fed is whether what pipes into it mentions it.
 	writes(words []shWord, p int, fed bool, line *lineText) bool
@@ -103,7 +104,7 @@ func (l *lineText) blunt() bool {
 func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth int) bool {
 	// Where its output goes, whatever the program.
 	w, writing := rule.(writeRule)
-	if writing && w.outputs(c.outputs) {
+	if writing && w.outputs(c.outputs, line) {
 		return true
 	}
 	words := c.words

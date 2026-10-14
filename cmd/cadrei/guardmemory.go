@@ -3,8 +3,12 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/rafi-ramdhani/cadrei/internal/paths"
 )
 
 // memoryRule looks for a command that writes into a .memory folder: the
@@ -42,13 +46,41 @@ var goesIn = regexp.MustCompile(`(^|[\s;&|(])(cd|pushd)\s+[^;&|]*\.memory($|[/\s
 // writesCode matches code that writes or removes files.
 var writesCode = regexp.MustCompile(`(?i)open\([^)]*,\s*['"]?[^'")]*[wax+]|write|unlink|rename|remove|rmtree|copy|truncate|symlink|>|\btee\b|\bcp\b|\bmv\b|\brm\b|\bln\b|sed\s+-i`)
 
-func (memoryRule) outputs(files []shWord) bool {
+func (memoryRule) outputs(files []shWord, line *lineText) bool {
 	for _, f := range files {
-		if memoryPath.MatchString(f.text) {
+		// Named, or relative on a line that went into the folder first
+		// (cd .memory && echo fact > a.md).
+		if memoryPath.MatchString(f.text) || (goesIn.MatchString(line.text) && !elsewhere(f.text)) {
 			return true
 		}
 	}
 	return false
+}
+
+// elsewhere reports whether a redirection's target is a full path, or a
+// file descriptor (2>&1, >&-), so it doesn't land in the folder a line
+// went into.
+func elsewhere(path string) bool {
+	return strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") || path == "-" || strings.Trim(path, "0123456789") == ""
+}
+
+// crewRoot matches a crew's own folder, ~/.cadrei/<name>, as a path ends.
+var crewRoot = regexp.MustCompile(`(^|/)\.cadrei/[^/]+/?$`)
+
+// intoCrew reports whether a copy's destination is a crew's own folder:
+// one under ~/.cadrei, or the crew this session is in (CADREI_HOME).
+func intoCrew(dest string) bool {
+	if crewRoot.MatchString(dest) {
+		return true
+	}
+	home := os.Getenv("CADREI_HOME")
+	if home == "" {
+		return false
+	}
+	if rest, ok := strings.CutPrefix(dest, "~/"); ok {
+		dest = filepath.Join(paths.Home(), rest)
+	}
+	return filepath.IsAbs(dest) && paths.Real(dest) == paths.Real(home)
 }
 
 func (memoryRule) writes(words []shWord, p int, fed bool, line *lineText) bool {
@@ -130,7 +162,23 @@ func writesInto(name string, args []shWord) bool {
 		files = append(files, a)
 	}
 	if toWriters[name] {
-		return len(files) > 0 && memoryPath.MatchString(files[len(files)-1].text)
+		if len(files) == 0 {
+			return false
+		}
+		dest := files[len(files)-1].text
+		if memoryPath.MatchString(dest) {
+			return true
+		}
+		// A folder named .memory copied into a crew lands as its memory
+		// (cp -r ~/notes/.memory ~/.cadrei/main/).
+		if intoCrew(dest) {
+			for _, f := range files[:len(files)-1] {
+				if filepath.Base(strings.TrimRight(f.text, "/")) == ".memory" {
+					return true
+				}
+			}
+		}
+		return false
 	}
 	for _, f := range files {
 		if memoryPath.MatchString(f.text) {
