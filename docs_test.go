@@ -139,7 +139,7 @@ func TestTheDocsShowTheFirstRunAsItIs(t *testing.T) {
 		}
 		return string(raw)
 	}
-	asDrawn := strings.NewReplacer("  ✓ ", "  + ", "  · ", "  - ", "cadrei v0.2.1\n", "cadrei, development build\n", "$ cadrei\n\n", "")
+	asDrawn := strings.NewReplacer("  ✓ ", "  + ", "  · ", "  - ", "cadrei v0.2.2\n", "cadrei, development build\n", "$ cadrei\n\n", "")
 	section := func(file, heading string) []string {
 		raw, err := os.ReadFile(file)
 		if err != nil {
