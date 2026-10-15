@@ -64,6 +64,7 @@ func (s stubRuntime) Health(bool, []string) []runtime.Problem { return nil }
 func (s stubRuntime) Instructions() runtime.InstructionOps    { return nil }
 func (s stubRuntime) Hooks() runtime.HookOps                  { return nil }
 func (s stubRuntime) Sessions() runtime.SessionOps            { return nil }
+func (s stubRuntime) Memory() runtime.MemoryOps               { return nil }
 func (s stubRuntime) Launch(l runtime.LaunchSpec) (runtime.Command, error) {
 	return runtime.Command{Argv: []string{s.bin, "--name", l.Name, "--mode", l.Mode, "--prompt", l.PromptFile}}, nil
 }

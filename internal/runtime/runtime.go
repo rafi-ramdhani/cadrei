@@ -241,9 +241,19 @@ type HookOps interface {
 	Output(text string) []byte
 	// SnapshotSettings writes, in dir, the orchestrator's settings file:
 	// a session start hook that runs `<binary> hook snapshot`, so the
-	// orchestrator gets a fresh snapshot on startup and on resume. It
-	// returns the file, for LaunchSpec.Settings.
-	SnapshotSettings(dir, binary string) (string, error)
+	// orchestrator gets a fresh snapshot on startup and on resume, and
+	// cadrei's other orchestrator hooks; with memory set, the folder its
+	// own memory lives in. A "" binary leaves the hooks out. It returns
+	// the file, for LaunchSpec.Settings, or "" with neither.
+	SnapshotSettings(dir, binary, memory string) (string, error)
+}
+
+// MemoryOps is where the runtime keeps a session's own memory.
+type MemoryOps interface {
+	// Folders are the folders the runtime keeps the memory of sessions in
+	// dir in, the one it writes to first: dir's real path and dir as
+	// written can name two.
+	Folders(dir string) []string
 }
 
 // ContextUse is how full a session's context is, as its transcript says.
@@ -497,6 +507,7 @@ type Runtime interface {
 	Instructions() InstructionOps
 	Hooks() HookOps
 	Sessions() SessionOps
+	Memory() MemoryOps
 }
 
 var (

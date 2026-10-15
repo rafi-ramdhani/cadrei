@@ -210,7 +210,7 @@ func TestTheGuardsAskIsOnlyAnAsk(t *testing.T) {
 // doesn't know the word, the call ends with exit 0 and nothing on stdout.
 func TestTheNotifyHookIsTheOrchestratorsAndStaysQuiet(t *testing.T) {
 	dir := t.TempDir()
-	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei")
+	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestTheNotifyHookIsTheOrchestratorsAndStaysQuiet(t *testing.T) {
 // ask on, and blocks when the guard fails.
 func TestTheOrchestratorsGuardFailsOpenOnlyWhenGone(t *testing.T) {
 	dir := t.TempDir()
-	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei")
+	path, err := (hooks{}).SnapshotSettings(dir, "/opt/cadrei/bin/cadrei", "")
 	if err != nil {
 		t.Fatal(err)
 	}

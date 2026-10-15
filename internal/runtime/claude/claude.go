@@ -5,6 +5,8 @@
 package claude
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
+	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/gitx"
 	"github.com/rafi-ramdhani/cadrei/internal/jsonx"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
@@ -80,11 +83,22 @@ func (c Claude) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 	if s.PromptFile != "" {
 		argv = append(argv, "--append-system-prompt-file", s.PromptFile)
 	}
+	grants := s.Grants
+	if s.Role == runtime.Member && s.Settings == "" && s.Cadrei != "" && s.WorkDir != "" && paths.Within(paths.Real(s.WorkDir), paths.Real(s.Cadrei)) {
+		// A member working inside the crew (a team without a project)
+		// would save its own memory in the crew's folder of Claude Code's,
+		// which cadrei moves into the orchestrator's: it gets one of its
+		// own instead, with or without grants.
+		var err error
+		if grants, err = ownMemory(s); err != nil {
+			return runtime.Command{}, err
+		}
+	}
 	switch {
-	case s.Grants != "" && s.Settings != "":
+	case grants != "" && s.Settings != "":
 		return runtime.Command{}, errors.New("a session gets grants or cadrei's own settings, not both")
-	case s.Grants != "":
-		argv = append(argv, "--settings", s.Grants)
+	case grants != "":
+		argv = append(argv, "--settings", grants)
 	case s.Settings != "":
 		argv = append(argv, "--settings", s.Settings)
 	}
@@ -129,6 +143,41 @@ func (c Claude) Launch(s runtime.LaunchSpec) (runtime.Command, error) {
 		unset = append(slices.Clone(unset), configVar)
 	}
 	return runtime.Command{Argv: argv, Dir: s.WorkDir, Env: env, Unset: unset}, nil
+}
+
+// MemberMemory is the memory folder of a member that works inside its
+// crew: in Claude Code's own projects folder, named after the member's
+// working folder and its name, so it's neither the crew's folder there
+// (the orchestrator's, before it moves into the crew) nor in the crew.
+func MemberMemory(workDir, name string) string {
+	return filepath.Join(ConfigDir(), "projects", projectFolder(paths.Real(workDir))+"-"+projectFolder(name), "memory")
+}
+
+// ownMemory writes a copy of the member's grants with its own memory
+// folder (MemberMemory), beside them, named by its text and read-only as
+// the grants' copy is, and returns it.
+func ownMemory(s runtime.LaunchSpec) (string, error) {
+	// With no grants copy (cadrei couldn't write one), a file with only
+	// the memory folder, in the crew's build folder.
+	root, dir := jsonx.NewObject(), Claude{}.BuildDir(s.Cadrei)
+	if s.Grants != "" {
+		raw, err := os.ReadFile(s.Grants)
+		if err != nil {
+			return "", err
+		}
+		if root, err = jsonx.Parse(raw); err != nil {
+			return "", fmt.Errorf("%s: %w", s.Grants, err)
+		}
+		dir = filepath.Dir(s.Grants)
+	}
+	root.Set("autoMemoryDirectory", jsonx.String(MemberMemory(s.WorkDir, s.Name)))
+	text := jsonx.Format(root, "  ")
+	sum := sha256.Sum256(text)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "member-settings-own."+hex.EncodeToString(sum[:])[:16]+".json")
+	return path, fsx.WriteFile(path, text, 0o400)
 }
 
 // configVar is the folder Claude Code keeps its config and login in.

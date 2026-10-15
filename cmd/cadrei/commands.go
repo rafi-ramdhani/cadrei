@@ -73,6 +73,7 @@ func init() {
 		// Advanced, grouped.
 		{name: "new", usage: "<name>", summary: "create a crew in ~/.cadrei/<name>", group: "Crews", run: runNew},
 		{name: "use", usage: "<name>", summary: "make a crew your default", group: "Crews", run: runUse},
+		{name: "pull", summary: "bring in what your crew's other machines backed up, keeping both versions of a note both changed", group: "Crews", run: runPull},
 		// The old name of cadrei new: it works, and no help lists it.
 		{name: "init", usage: "<name>", hidden: true, run: runNew},
 

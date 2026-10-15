@@ -100,6 +100,14 @@ func (Fake) Health(bool, []string) []runtime.Problem { return nil }
 func (Fake) Instructions() runtime.InstructionOps { return instructions{} }
 func (Fake) Hooks() runtime.HookOps               { return hooks{} }
 func (Fake) Sessions() runtime.SessionOps         { return sessions{} }
+func (Fake) Memory() runtime.MemoryOps            { return memoryOps{} }
+
+type memoryOps struct{}
+
+// Folders is one folder under the fake runtime's home.
+func (memoryOps) Folders(dir string) []string {
+	return []string{filepath.Join(os.Getenv("HOME"), ".fake", "memory", filepath.Base(dir))}
+}
 
 // sessions hand out counted ids and know every one they gave.
 type sessions struct{}
@@ -164,7 +172,7 @@ func (hooks) Set(string) (bool, error)      { return false, errors.New("the fake
 func (hooks) Remove(string) (bool, error)   { return false, nil }
 func (hooks) Outdated(string) (bool, error) { return false, nil }
 func (hooks) Output(text string) []byte     { return []byte(text + "\n") }
-func (hooks) SnapshotSettings(dir, binary string) (string, error) {
+func (hooks) SnapshotSettings(dir, binary, memory string) (string, error) {
 	return filepath.Join(dir, "fake-snapshot-settings"), nil
 }
 func (Fake) Permissions() runtime.PermissionOps { return permissions{} }

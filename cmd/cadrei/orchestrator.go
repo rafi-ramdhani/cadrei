@@ -193,9 +193,15 @@ func runPlain(e *env) int {
 		in = orchestrator.Tmux
 	}
 	wd, _ := paths.Getwd()
-	settings := e.snapshotSettings(rt, build)
+	memoryDir, notice := e.crewMemory(rt, r.Cadrei)
+	if notice {
+		// The snapshot, in the prompt or from the hook, says so.
+		os.Setenv(envMemoryNotice, "1")
+		defer os.Unsetenv(envMemoryNotice)
+	}
+	settings, hooked := e.snapshotSettings(rt, build, memoryDir)
 	body := orchestrator.Prompt(text, r.Name, display(r.Path))
-	if settings == "" {
+	if !hooked {
 		// No hook may name this binary: the snapshot goes into the
 		// prompt, fresh at startup only.
 		body = append(body, "\n"+snapshotOf(rt, r, opening{in: in, from: wd, proj: r.Project}, time.Now())...)
@@ -232,12 +238,15 @@ func runPlain(e *env) int {
 			}
 		}
 		cmd, err := rt.Launch(runtime.LaunchSpec{Role: runtime.Orchestrator, Name: orchestrator.Name(r.Name), Cadrei: r.Path,
-			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: readOnly, Prompt: first,
+			WorkDir: r.Path, Mode: mode, PromptFile: prompt, Settings: settings, Allowed: preAllowed, Prompt: first,
 			SessionID: conv.SessionID, Resume: conv.Resume, Model: own.Model.Value, Effort: own.Effort.Value})
 		// Pinned to this cadrei, and marked as the orchestrator, so the
 		// hook adds nothing more (K.3). What only this launch knows goes
 		// to the snapshot hook.
 		cmd.Env = append(cmd.Env, "CADREI_HOME="+r.Path, "CADREI_ORCHESTRATOR=1", envOpensIn+"="+in, envOpenedFrom+"="+wd)
+		if notice {
+			cmd.Env = append(cmd.Env, envMemoryNotice+"=1")
+		}
 		if r.Project != "" {
 			cmd.Env = append(cmd.Env, envOpenedProject+"="+r.Project)
 		}

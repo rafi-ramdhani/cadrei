@@ -16,6 +16,7 @@ import (
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/memory"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
@@ -53,10 +54,20 @@ func TestUninstallAllDeletesEverythingButProjects(t *testing.T) {
 		t.Fatal("the crew isn't trusted to begin with")
 	}
 	must(t, "up", "dev")
+	// work's orchestrator memory, with cadrei's pointer in Claude Code's
+	// folder; life's folder there holds the user's own notes.
+	rt, _ := runtime.Get(runtimeName())
+	work, life := rt.Memory().Folders(home + "/.cadrei/work")[0], rt.Memory().Folders(home + "/.cadrei/life")[0]
+	os.MkdirAll(home+"/.cadrei/work/.memory", 0o755)
+	os.WriteFile(home+"/.cadrei/work/.memory/role.md", []byte("role\n"), 0o644)
+	os.MkdirAll(work, 0o700)
+	os.WriteFile(work+"/MEMORY.md", []byte(memory.Pointer(home+"/.cadrei/work")), 0o644)
+	os.MkdirAll(life, 0o700)
+	os.WriteFile(life+"/MEMORY.md", []byte("- [Role](role.md): the user's own\n"), 0o644)
 
 	out := must(t, "uninstall", "--all", "--dry-run")
 	for _, want := range []string{"cadrei uninstall --all will:", "stop 2 team members", "delete the crew life (~/.cadrei/life): 1 team, 2 members, 0 projects (their folders stay)",
-		"delete the crew work (~/.cadrei/work): 1 team, 2 members, 1 project (their folders stay)", "delete ~/.cadrei-archive, with your archive in it",
+		"delete the crew work (~/.cadrei/work): 1 team, 2 members, 1 project (their folders stay), and your orchestrator's memory (.memory/, 1 note)", "delete ~/.cadrei-archive, with your archive in it",
 		"It keeps every project's folder: app (~/src/app).", "! life has no backup, so nothing of it is kept anywhere.", "Nothing was deleted."} {
 		if !strings.Contains(flat(out), want) {
 			t.Errorf("dry run lacks %q:\n%s", want, out)
@@ -87,6 +98,12 @@ func TestUninstallAllDeletesEverythingButProjects(t *testing.T) {
 		if _, err := os.Lstat(p); err == nil {
 			t.Errorf("%s is still there", p)
 		}
+	}
+	if _, err := os.Lstat(work + "/MEMORY.md"); err == nil {
+		t.Error("cadrei's pointer to work's memory stayed")
+	}
+	if _, err := os.Stat(life + "/MEMORY.md"); err != nil {
+		t.Error("the user's own notes went")
 	}
 	if raw, err := os.ReadFile(app + "/main.go"); err != nil || string(raw) != "package main\n" {
 		t.Errorf("the project's folder lost its work: %v", err)

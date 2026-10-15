@@ -35,6 +35,17 @@ type guardRule interface {
 	blunt(text string) bool
 }
 
+// writeRule is a rule about what a command writes, which it checks even
+// for a program that runs none of its arguments.
+type writeRule interface {
+	// outputs reports whether a command's output files, on line, are its
+	// kind.
+	outputs(files []shWord, line *lineText) bool
+	// writes reports whether the command, its program at words[p], writes
+	// there; fed is whether what pipes into it mentions it.
+	writes(words []shWord, p int, fed bool, line *lineText) bool
+}
+
 // guardLine checks a command line, or a shell's code inside one, for rule.
 func guardLine(rule guardRule, text string, depth int) bool {
 	if depth > 16 {
@@ -91,6 +102,11 @@ func (l *lineText) blunt() bool {
 // guardCommand checks one command of a pipeline for rule: fed is whether
 // what pipes into it mentions it, line the whole line it's on.
 func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth int) bool {
+	// Where its output goes, whatever the program.
+	w, writing := rule.(writeRule)
+	if writing && w.outputs(c.outputs, line) {
+		return true
+	}
 	words := c.words
 	for len(words) > 0 && assignment.MatchString(words[0].text) {
 		words = words[1:]
@@ -124,6 +140,9 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 				break
 			}
 		}
+	}
+	if writing && w.writes(words, p, fed, line) {
+		return true
 	}
 	prog, name := words[p], wordName(words[p])
 	// A program that is itself an expansion, such as $(printf 'cadrei
@@ -436,6 +455,7 @@ type (
 		words    []shWord
 		input    []string // the heredocs and here-strings it reads
 		fromFile bool     // it reads a file on stdin (<)
+		outputs  []shWord // the files its output goes to (>, >>, &>)
 	}
 	shLine struct {
 		pipes [][]*shCommand
@@ -490,6 +510,8 @@ func parseShell(s string) (shLine, bool) {
 			docs = append(docs, doc{cmd, w.bare, target == "<<-", w.quoted})
 		case "<":
 			cmd.fromFile = true
+		case ">":
+			cmd.outputs = append(cmd.outputs, w)
 		}
 		text, bare, in, q, x, target = nil, nil, false, false, false, ""
 	}
@@ -498,7 +520,7 @@ func parseShell(s string) (shLine, bool) {
 		if target != "" {
 			bad = true
 		}
-		if len(cmd.words) > 0 || len(cmd.input) > 0 || cmd.fromFile {
+		if len(cmd.words) > 0 || len(cmd.input) > 0 || cmd.fromFile || len(cmd.outputs) > 0 {
 			pipe = append(pipe, cmd)
 		}
 		cmd = &shCommand{}

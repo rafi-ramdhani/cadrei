@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -398,7 +399,27 @@ func (hooks) Output(text string) []byte {
 // output to the session's context (the snapshot on startup, on resume and
 // after /clear and /compact; the team status on each prompt; the notify
 // note after a send), and shows none of it in the chat.
-func (hooks) SnapshotSettings(dir, binary string) (string, error) {
+func (hooks) SnapshotSettings(dir, binary, memory string) (string, error) {
+	path := filepath.Join(dir, "orchestrator-settings.json")
+	if binary == "" && memory == "" {
+		os.Remove(path)
+		return "", nil
+	}
+	var fields []any
+	if memory != "" {
+		// Claude Code keeps the orchestrator's auto memory there (spike
+		// M1): saves land in it, and its index loads at each start.
+		fields = append(fields, "autoMemoryDirectory", jsonx.String(memory))
+	}
+	if binary != "" {
+		fields = append(fields, "hooks", orchestratorHooks(binary))
+	}
+	root := jsonx.NewObject(fields...)
+	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
+}
+
+// orchestratorHooks are the orchestrator's hooks, which run binary.
+func orchestratorHooks(binary string) *jsonx.Value {
 	entry := func(sub, timeout, matcher string) *jsonx.Value {
 		hook := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(hookCommand(binary, sub)), "timeout", jsonx.Literal(timeout))
 		group := jsonx.NewObject("hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{hook}})
@@ -414,10 +435,27 @@ func (hooks) SnapshotSettings(dir, binary string) (string, error) {
 	// isn't a failure: the command ends with 0 at once.
 	guard := jsonx.NewObject("type", jsonx.String("command"), "command", jsonx.String(OrchestratorGuardHook(binary)), "timeout", jsonx.Literal("10"), "onFailure", jsonx.String("block"))
 	pre := &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{jsonx.NewObject("matcher", jsonx.String("Bash"), "hooks", &jsonx.Value{Kind: jsonx.Array, Items: []*jsonx.Value{guard}})}}
-	root := jsonx.NewObject("hooks", jsonx.NewObject("SessionStart", entry("snapshot", "10", ""), "UserPromptSubmit", entry("team-status", "5", ""),
-		"PreToolUse", pre, "PostToolUse", entry("notify", "5", "SendMessage")))
-	path := filepath.Join(dir, "orchestrator-settings.json")
-	return path, fsx.WriteFile(path, jsonx.Format(root, "  "), 0o600)
+	return jsonx.NewObject("SessionStart", entry("snapshot", "10", ""), "UserPromptSubmit", entry("team-status", "5", ""),
+		"PreToolUse", pre, "PostToolUse", entry("notify", "5", "SendMessage"))
+}
+
+// Memory is where Claude Code keeps auto memory.
+func (Claude) Memory() runtime.MemoryOps { return memoryOps{} }
+
+type memoryOps struct{}
+
+// Folders are <config>/projects/<folder>/memory for dir's real path and
+// dir as written: Claude Code names the folder after the session's git
+// repository (C1).
+func (memoryOps) Folders(dir string) []string {
+	var out []string
+	for _, d := range []string{paths.Real(dir), dir} {
+		f := filepath.Join(ConfigDir(), "projects", projectFolder(d), "memory")
+		if !slices.Contains(out, f) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // Probe runs claude --version, and claude auth status when this version

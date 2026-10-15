@@ -44,6 +44,8 @@ var cadreiDeny = []string{"Edit(//**/.cadrei/config/**)", "Edit(//**/.cadrei/fra
 	"Edit(//**/.cadrei/*/.git/**)",
 	// Claude Code loads these into the orchestrator; the template has none.
 	"Edit(//**/.cadrei/*/CLAUDE.md)", "Edit(//**/.cadrei/*/CLAUDE.local.md)", "Edit(//**/.cadrei/*/.mcp.json)",
+	// The orchestrator's memory, which loads into each of its sessions.
+	"Edit(//**/.cadrei/*/.memory/**)",
 	// Archived setups: the user's to bring back, never a member's to read.
 	"Read(//**/.cadrei-archive/**)", "Edit(//**/.cadrei-archive/**)"}
 
@@ -231,7 +233,7 @@ func (p Places) deny() []string {
 		out = append(out, "Edit(/"+root+"/config/**)", "Edit(/"+root+"/framework/**)", "Read(/"+archive+"/**)", "Edit(/"+archive+"/**)")
 	}
 	for _, c := range p.Cadreis {
-		for _, f := range []string{"/.claude/**", "/cadrei.conf", "/members/**", "/playbook.md", "/protocol.md", "/projects.yaml", "/.git/**", "/CLAUDE.md", "/CLAUDE.local.md", "/.mcp.json"} {
+		for _, f := range []string{"/.claude/**", "/cadrei.conf", "/members/**", "/playbook.md", "/protocol.md", "/projects.yaml", "/.git/**", "/CLAUDE.md", "/CLAUDE.local.md", "/.mcp.json", "/.memory/**"} {
 			out = append(out, "Edit(/"+escapeGlob(c)+f+")")
 		}
 	}
