@@ -578,20 +578,20 @@ func TestFromHistory(t *testing.T) {
 	CommitRemoval(crew, "Keep the orchestrator's memory on this machine")
 	d := filepath.Join(t.TempDir(), "memory")
 	write(t, filepath.Join(d, Index), Pointer(crew))
-	res, removal, err := FromHistory(crew, d, "")
+	res, removal, err := FromHistory(crew, d, "", nil)
 	if err != nil || res.Moved != 1 || removal == "" {
 		t.Fatalf("%+v %q %v", res, removal, err)
 	}
 	if got := names(t, d); !slices.Equal(got, []string{Index, "role.md"}) || read(t, filepath.Join(d, Index)) != "- [Role](role.md): the user\n" {
 		t.Errorf("D %v", got)
 	}
-	if res, _, err := FromHistory(repo(t), t.TempDir(), ""); err != nil || res.Moved != 0 {
+	if res, _, err := FromHistory(repo(t), t.TempDir(), "", nil); err != nil || res.Moved != 0 {
 		t.Errorf("no removal: %+v %v", res, err)
 	}
 	// L11: the same removal again, after the user cleared the notes:
 	// done, so they stay cleared.
 	os.RemoveAll(d)
-	if res, again, err := FromHistory(crew, d, removal); err != nil || res.Moved != 0 || again != "" {
+	if res, again, err := FromHistory(crew, d, removal, nil); err != nil || res.Moved != 0 || again != "" {
 		t.Errorf("brought back twice: %+v %q %v", res, again, err)
 	}
 	if _, err := os.Stat(d); err == nil {
@@ -604,7 +604,7 @@ func TestFromHistory(t *testing.T) {
 	Commit(crew, "Update the orchestrator's memory")
 	os.RemoveAll(Dir(crew))
 	Commit(crew, "Update the orchestrator's memory")
-	if res, removal, err := FromHistory(crew, d, ""); err != nil || res.Moved != 0 || removal != "" {
+	if res, removal, err := FromHistory(crew, d, "", nil); err != nil || res.Moved != 0 || removal != "" {
 		t.Errorf("an emptying came back: %+v %q %v", res, removal, err)
 	}
 }
@@ -636,7 +636,7 @@ func TestACopyFromTheCrewIsNamedAfterIt(t *testing.T) {
 	CommitRemoval(crew, OptOut)
 	d = filepath.Join(t.TempDir(), "memory")
 	write(t, filepath.Join(d, "role.md"), "this machine's role\n")
-	res, _, err = FromHistory(crew, d, "")
+	res, _, err = FromHistory(crew, d, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -852,6 +852,43 @@ func TestPullAfterAnOptOut(t *testing.T) {
 	gone(t, aside)
 }
 
+// Re-review 5: after a pull set this machine's notes aside, the next
+// open brings back the opt-out's history without an older copy of a note
+// this machine changed since, and still with what the other machine
+// changed before it opted out.
+func TestTheHistoryAfterNotesSetAside(t *testing.T) {
+	a, b := twoClones(t)
+	write(t, filepath.Join(Dir(b), "tone.md"), note("tone", "tone", "2026-10-14T11:05:00Z", "Long answers."))
+	write(t, filepath.Join(Dir(b), Index), "- [Role](role.md): the user\n- [Tone](tone.md): long answers\n")
+	Commit(b, "Update the orchestrator's memory")
+	write(t, filepath.Join(Dir(a), "role.md"), note("role", "the user", "2026-10-14T11:00:00Z", "The user designs."))
+	Commit(a, "Update the orchestrator's memory")
+	optOut(t, a)
+	gitIn(t, a, "push", "-q")
+	aside := filepath.Join(t.TempDir(), "aside")
+	if pulled, err := Pull(b, "b", aside); err != nil || pulled.SetAside != 2 {
+		t.Fatalf("%+v %v", pulled, err)
+	}
+	// What the next open does: the notes set aside, then the history.
+	d := filepath.Join(t.TempDir(), "memory")
+	brought, err := Move(aside, d, "b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := FromHistory(b, d, "", brought.Notes); err != nil {
+		t.Fatal(err)
+	}
+	if got := names(t, d); !slices.Equal(got, []string{Index, "role.from-crew.md", "role.md", "tone.md"}) {
+		t.Errorf("D %v", got)
+	}
+	if !strings.Contains(read(t, filepath.Join(d, "tone.md")), "Long answers.") || !strings.Contains(read(t, filepath.Join(d, "role.md")), "The user codes.") || !strings.Contains(read(t, filepath.Join(d, "role.from-crew.md")), "The user designs.") {
+		t.Error("a note isn't the one it should be")
+	}
+	if idx := read(t, filepath.Join(d, Index)); strings.Count(idx, "(tone.md)") != 1 || !strings.Contains(idx, "long answers") || !strings.Contains(idx, "(role.from-crew.md)") {
+		t.Errorf("index:\n%s", idx)
+	}
+}
+
 // optOut does what keepOnMachine does after the orchestrator set
 // MEMORY=machine: the setting committed, the memory folder removed.
 func optOut(t *testing.T, crew string) {
@@ -903,11 +940,11 @@ func TestPullAfterAnOptIn(t *testing.T) {
 	first := LastOptOut(a)
 	optOut(t, a)
 	d := filepath.Join(t.TempDir(), "memory")
-	res, removal, err := FromHistory(a, d, first)
+	res, removal, err := FromHistory(a, d, first, nil)
 	if err != nil || removal == "" || removal == first || res.Moved != 2 || read(t, filepath.Join(d, "tone.md")) != "a's tone\n" {
 		t.Errorf("the second opt-out: %+v %q %v", res, removal, err)
 	}
-	if res, again, _ := FromHistory(a, t.TempDir(), removal); res.Moved != 0 || again != "" {
+	if res, again, _ := FromHistory(a, t.TempDir(), removal, nil); res.Moved != 0 || again != "" {
 		t.Errorf("brought back twice: %+v", res)
 	}
 }

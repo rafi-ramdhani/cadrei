@@ -82,11 +82,14 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 			cadreis.SetMemoryRestored(c, memory.LastOptOut(crew))
 		}
 		// Notes cadrei pull set aside, this machine's latest, first.
-		moved := e.bringAside(c, folders[0])
+		aside := e.bringAside(c, folders[0])
+		moved := aside.Moved
 		// Another machine kept the memory on its own and pushed the
 		// removal: this one brings in the notes it lacks from the history,
 		// once per removal, so notes the user cleared later stay cleared.
-		res, removal, err := memory.FromHistory(crew, folders[0], cadreis.MemoryRestored(c))
+		// It skips the notes set aside: this machine's are newer, and the
+		// other machine's changes came in with them.
+		res, removal, err := memory.FromHistory(crew, folders[0], cadreis.MemoryRestored(c), aside.Notes)
 		if removal != "" && err == nil {
 			cadreis.SetMemoryRestored(c, removal)
 		}
@@ -131,21 +134,21 @@ func (e *env) leaveCrewMemory(c cadreis.Cadrei, folders []string) {
 			e.note("", markDone, "Your orchestrator's memory is on this machine only now ("+count(res.Moved, "note")+" copied from your crew). Your other machines keep the crew's.")
 		}
 	}
-	if moved := e.bringAside(c, folders[0]); moved > 0 {
+	if moved := e.bringAside(c, folders[0]).Moved; moved > 0 {
 		e.note("", markDone, "Brought your orchestrator's memory back to this machine ("+count(moved, "note")+"). It stays on this machine only now.")
 	}
 }
 
-// bringAside moves the notes cadrei pull set aside into to, and returns
-// how many moved.
-func (e *env) bringAside(c cadreis.Cadrei, to string) int {
+// bringAside moves the notes cadrei pull set aside into to, and says what
+// moved.
+func (e *env) bringAside(c cadreis.Cadrei, to string) memory.Result {
 	res, err := memory.Move(memoryAside(c), to, memory.Machine())
 	if err != nil {
 		e.warn("", "Your orchestrator's notes set aside couldn't move into its memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
 			"They're still in "+unbroken(display(memoryAside(c)))+".")
-		return 0
+		return memory.Result{}
 	}
-	return res.Moved
+	return res
 }
 
 // runPull is cadrei pull: git pull --rebase --autostash in the crew, which

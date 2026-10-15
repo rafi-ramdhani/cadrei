@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -234,38 +235,77 @@ const OptOut = "Keep the orchestrator's memory on this machine"
 // returns that commit, and does nothing when it's done, the commit cadrei
 // last brought notes back from: each removal is brought back once, so
 // notes the user cleared later stay cleared. A note that clashes is kept
-// as <name>.from-crew.md.
-func FromHistory(crew, to, done string) (Result, string, error) {
+// as <name>.from-crew.md. The notes in skip, and their index lines, stay
+// out: the ones this machine's pull set aside just came in under those
+// names, newer than the history's, and what the other machine changed
+// came in with them (setAside).
+func FromHistory(crew, to, done string, skip []string) (Result, string, error) {
 	removal := LastOptOut(crew)
 	if removal == "" || removal == done {
 		return Result{}, "", nil
 	}
-	list, err := git(crew, "ls-tree", "-r", removal+"^", "--", Folder+"/")
+	then, err := notesAt(crew, removal+"^")
 	if err != nil {
 		return Result{}, "", err
 	}
-	tmp, err := os.MkdirTemp("", "cadrei-memory-")
-	if err != nil {
-		return Result{}, "", err
+	for _, name := range skip {
+		delete(then, name)
 	}
-	defer os.RemoveAll(tmp)
+	res, err := fromGit(crew, then, to, skip)
+	return res, removal, err
+}
+
+// notesAt is the notes and index the crew's memory folder holds at rev,
+// each name with its git object: files only, at the folder's top.
+func notesAt(crew, rev string) (map[string]string, error) {
+	list, err := git(crew, "ls-tree", "-r", rev, "--", Folder+"/")
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
 	for _, line := range strings.Split(list, "\n") {
-		// <mode> blob <object>\t<path>: files only, at the folder's top.
+		// <mode> blob <object>\t<path>
 		meta, path, ok := strings.Cut(line, "\t")
 		f := strings.Fields(meta)
 		if !ok || len(f) != 3 || f[1] != "blob" || (f[0] != "100644" && f[0] != "100755") || strings.Contains(strings.TrimPrefix(path, Folder+"/"), "/") {
 			continue
 		}
-		data, err := gitx.Reading(crew, "cat-file", "blob", f[2]).Output()
+		out[filepath.Base(path)] = f[2]
+	}
+	return out, nil
+}
+
+// fromGit merges the notes from notesAt into to, as FromHistory does,
+// with the index lines that link to a note in skip left out.
+func fromGit(crew string, notes map[string]string, to string, skip []string) (Result, error) {
+	if len(notes) == 0 {
+		return Result{}, nil
+	}
+	tmp, err := os.MkdirTemp("", "cadrei-memory-")
+	if err != nil {
+		return Result{}, err
+	}
+	defer os.RemoveAll(tmp)
+	for name, object := range notes {
+		data, err := gitx.Reading(crew, "cat-file", "blob", object).Output()
 		if err != nil {
-			return Result{}, "", err
+			return Result{}, err
 		}
-		if err := os.WriteFile(filepath.Join(tmp, filepath.Base(path)), data, 0o600); err != nil {
-			return Result{}, "", err
+		if name == Index {
+			var keep []string
+			for _, l := range strings.SplitAfter(string(data), "\n") {
+				if !slices.ContainsFunc(skip, func(n string) bool { return strings.Contains(l, "("+n+")") }) {
+					keep = append(keep, l)
+				}
+			}
+			data = []byte(strings.Join(keep, ""))
+		}
+		if err := os.WriteFile(filepath.Join(tmp, name), data, 0o600); err != nil {
+			return Result{}, err
 		}
 	}
 	res, _, err := merge(tmp, to, FromCrew)
-	return res, removal, err
+	return res, err
 }
 
 // LastOptOut is the last commit that removed notes from the crew's memory
@@ -273,8 +313,11 @@ func FromHistory(crew, to, done string) (Result, string, error) {
 // OptOut commit, or one made while the crew's cadrei.conf said
 // MEMORY=machine. A crew that only emptied its memory has none: the user
 // cleared those notes.
-func LastOptOut(crew string) string {
-	out, err := git(crew, "log", "-1", "--format=%H %s", "--diff-filter=D", "--", Folder)
+func LastOptOut(crew string) string { return lastOptOut(crew, "HEAD") }
+
+// lastOptOut is LastOptOut in rev's history.
+func lastOptOut(crew, rev string) string {
+	out, err := git(crew, "log", "-1", "--format=%H %s", "--diff-filter=D", rev, "--", Folder)
 	commit, subject, _ := strings.Cut(out, " ")
 	if err != nil || commit == "" || (subject != OptOut && !onMachine(crew, commit)) {
 		return ""
@@ -361,11 +404,13 @@ var pullLimit = 60 * time.Second
 //
 // When the other machine removed the whole memory folder (it keeps its
 // memory on itself now), this machine's notes, committed or not, are set
-// aside in aside, outside git, for the next open, and its unpushed commits
-// lose their memory changes before they're replayed: a note never goes
-// back into the backup after an opt-out. An uncommitted change that
-// clashes with what came in (git's autostash) is settled like a commit's
-// when it's a note, and named in Stashed when it's anything else.
+// aside in aside, outside git, for the next open, with what the other
+// machine changed in the memory since this one last pulled, and its
+// unpushed commits lose their memory changes before they're replayed: a
+// note never goes back into the backup after an opt-out. An uncommitted
+// change that clashes with what came in (git's autostash) is settled like
+// a commit's when it's a note, and named in Stashed when it's anything
+// else.
 func Pull(crew, machine, aside string) (Pulled, error) {
 	var out Pulled
 	if why := Busy(crew); why != "" {
@@ -495,7 +540,8 @@ func dropAutostash(crew string) {
 // tracks the memory folder and its upstream took the whole folder out
 // with its cadrei.conf saying MEMORY=machine (not a crew that only
 // emptied its memory, or opted back in), it sets this machine's notes
-// (as they are, committed or not) aside in aside, rewrites the unpushed
+// (as they are, committed or not) aside in aside, with the other
+// machine's changes since this one last pulled, rewrites the unpushed
 // commits without the folder, so none of its notes is pushed again, and
 // takes the folder out of the crew. It returns how many notes it set
 // aside.
@@ -523,6 +569,29 @@ func setAside(crew, machine, aside string) (int, error) {
 	_, taken, err := merge(Dir(crew), aside, machine)
 	if err != nil {
 		return 0, err
+	}
+	// What the other machine changed in the memory since this one last
+	// pulled comes in beside this machine's notes: the next open then
+	// skips, in the history, every note set aside (FromHistory), so a
+	// note this machine changed since gets no older copy, and nothing the
+	// other machine changed is lost.
+	if removal := lastOptOut(crew, up); removal != "" {
+		then, err := notesAt(crew, removal+"^")
+		if err != nil {
+			return 0, err
+		}
+		had, err := notesAt(crew, base)
+		if err != nil {
+			return 0, err
+		}
+		for name, object := range then {
+			if had[name] == object {
+				delete(then, name)
+			}
+		}
+		if _, err := fromGit(crew, then, aside, nil); err != nil {
+			return 0, err
+		}
 	}
 	head, _ := git(crew, "rev-parse", "HEAD")
 	commits, _ := git(crew, "rev-list", "--reverse", base+"..HEAD")

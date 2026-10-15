@@ -74,6 +74,7 @@ func IsPointer(data []byte) bool {
 type Result struct {
 	Moved  int      // notes copied over, the index not counted
 	Copies []string // notes that clashed, kept beside the other under these names
+	Notes  []string // every note of from it dealt with, by its name there
 }
 
 // FromCrew is the name a note copied from the crew's memory, or from its
@@ -160,6 +161,7 @@ func merge(from, to, machine string) (res Result, taken map[string][]byte, err e
 			return res, nil, err
 		}
 		taken[name] = data
+		res.Notes = append(res.Notes, name)
 		target := name
 		if present[name] {
 			same, err := sameText(filepath.Join(to, name), data)
