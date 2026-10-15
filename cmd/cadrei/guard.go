@@ -123,6 +123,15 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 		if runsAnother[name] {
 			p, wrapped = p+1, true
 			for p < len(words) && (strings.HasPrefix(words[p].bare, "-") || assignment.MatchString(words[p].text) || guardDuration.MatchString(words[p].bare)) {
+				// env's split string is the command it runs, with the
+				// words after it: a shell's code, as eval's is.
+				if code, ok := splitString(name, words[p:]); ok {
+					return guardLine(rule, code, depth+1)
+				}
+				// An option's value (env -u TMUX) is never the program.
+				if takesValue(name, words[p].bare) {
+					p++
+				}
 				p++
 			}
 			continue
@@ -297,7 +306,19 @@ var (
 	shellPrograms = setOf("sh", "bash", "zsh", "dash", "ksh", "mksh", "yash", "fish", "csh", "tcsh")
 	// runsAnother: programs that run the command after them.
 	runsAnother = setOf("env", "command", "builtin", "exec", "nohup", "time", "nice", "sudo", "doas", "timeout", "stdbuf", "caffeinate", "setsid", "unbuffer", "watch", "chronic")
-	shKeywords  = setOf("if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac", "select", "function", "{", "}", "!", "[[", "]]")
+	// wrapperValues: the options of runsAnother's programs that take a
+	// value, in macOS's and GNU's spellings.
+	wrapperValues = map[string]map[string]bool{
+		"env": setOf("-u", "--unset", "-C", "--chdir", "-P"),
+		"sudo": setOf("-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "--close-from", "-D", "--chdir",
+			"-R", "--chroot", "-T", "--command-timeout", "-U", "--other-user", "-r", "--role", "-t", "--type"),
+		"doas":       setOf("-u", "-C"),
+		"timeout":    setOf("-s", "--signal", "-k", "--kill-after"),
+		"nice":       setOf("-n", "--adjustment"),
+		"stdbuf":     setOf("-i", "--input", "-o", "--output", "-e", "--error"),
+		"caffeinate": setOf("-t", "-w"),
+	}
+	shKeywords = setOf("if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac", "select", "function", "{", "}", "!", "[[", "]]")
 	// inertPrograms never run their arguments or their stdin.
 	inertPrograms = setOf("echo", "printf", "cat", "grep", "egrep", "fgrep", "ls", "head", "tail", "wc", "uniq", "cut", "tr", "diff", "cmp", "comm", "tee", "jq", "mkdir", "cp", "mv", "rm", "rmdir", "ln", "touch", "chmod", "stat", "test", "[", "true", "false", "pwd", "cd", "basename", "dirname", "realpath", "readlink", "which", "whoami", "date", "sleep", "shasum", "od", "hexdump", "column", "nl", "paste", "rev", "git", "gh")
 	// gitInert: git commands that run nothing of the line's (hooks in
@@ -319,6 +340,67 @@ func setOf(words ...string) map[string]bool {
 		m[w] = true
 	}
 	return m
+}
+
+// takesValue reports whether opt, an option of wrapper, takes the word
+// after it as its value: -u NAME, or -iu NAME, where short options are
+// grouped. -uNAME and --unset=NAME hold theirs.
+func takesValue(wrapper, opt string) bool {
+	values := wrapperValues[wrapper]
+	switch {
+	case values == nil || opt == "-" || opt == "--":
+		return false
+	case strings.HasPrefix(opt, "--"):
+		return !strings.Contains(opt, "=") && values[opt]
+	}
+	for k := 1; k < len(opt); k++ {
+		if values["-"+opt[k:k+1]] {
+			return k == len(opt)-1
+		}
+	}
+	return false
+}
+
+// splitString is the command env runs from its split string, args at an
+// option of env's: the string (-S x, -Sx, --split-string x or
+// --split-string=x) with the words after it, as env splits them.
+func splitString(wrapper string, args []shWord) (string, bool) {
+	if wrapper != "env" || len(args) == 0 {
+		return "", false
+	}
+	opt, code, rest := args[0].text, "", args[1:]
+	switch {
+	case strings.HasPrefix(opt, "--split-string="):
+		code = opt[len("--split-string="):]
+	case opt == "--split-string":
+		if len(rest) == 0 {
+			return "", false
+		}
+		code, rest = rest[0].text, rest[1:]
+	case strings.HasPrefix(opt, "--") || !strings.HasPrefix(opt, "-"):
+		return "", false
+	default:
+		k := 1
+		for ; k < len(opt) && opt[k] != 'S'; k++ {
+			if wrapperValues["env"]["-"+opt[k:k+1]] {
+				return "", false // -uS: S is -u's value
+			}
+		}
+		switch {
+		case k == len(opt):
+			return "", false
+		case k < len(opt)-1:
+			code = opt[k+1:]
+		case len(rest) == 0:
+			return "", false
+		default:
+			code, rest = rest[0].text, rest[1:]
+		}
+	}
+	for _, w := range rest {
+		code += " " + w.text
+	}
+	return code, true
 }
 
 // inert reports whether a program runs none of its arguments: git only

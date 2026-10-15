@@ -33,6 +33,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - `cadrei up` says when a member it started is stuck on Claude Code's login or setup screen, and how to open its window to answer it, instead of only "Started".
 - The first run's checks no longer show a stray blank line under git.
 - **The members' guard no longer blocks commands that only mention uninstall or restore.** It used to refuse any command with those words next to a shell's name or a `$`, so a member couldn't `grep` for them, write code with a `restore()` in it, or open a pull request that talks about them. It now reads a command the way the shell does: running cadrei's `uninstall` or `restore` is still refused in every form it was before (`env`, `sh -c`, `eval`, a full path, quotes, variables, a pipe or heredoc into a shell), while text sent to a program that never runs it goes through.
+- **The guard reads `env`, `sudo` and the like the way they do.** It took an option's value for the program, so `env -u TMUX go test` was blocked as if it typed into tmux. And a command inside `env`'s split string (`env -S'...'`, `env --split-string=...`) wasn't checked at all. Now an option's value is skipped, and the split string is checked like any other command.
 
 ## 0.2.1 - 2026-10-11
 
