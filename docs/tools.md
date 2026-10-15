@@ -149,8 +149,21 @@ Each member in a running team:
 | `no_activity_since` | time, optional | With `working` or `waiting` only: its chat hasn't changed since then, for 10 minutes or more. Maybe someone stopped it with Esc |
 | `turn_error` | bool, optional | With `idle` only: `true` when its last turn ended in an error |
 | `request` | object, optional | With `waiting` only: what it waits on you for, as Claude Code recorded it, when cadrei recorded it (a member started before 0.2.2 has none) |
+| `context` | object, optional | How full its context is, from its chat: see below. Not in the `--watch` stream, its snapshots included |
 | `model`, `effort` | string, optional | The model and effort level it started with |
 | `model_from`, `effort_from` | string, optional | Where each one was set: `start` (the command that started it), `member` (its member file), `machine` (this machine's crew settings) or `crew` (the crew's settings) |
+
+`context`, how full a running member's context is, read from its chat's last reply:
+
+| Field | Type | What it is |
+|---|---|---|
+| `tokens` | number, optional | The size of the request behind its last reply, in tokens: the context it has in use |
+| `window` | number, optional | Its model's context window, only when cadrei is sure of it (a model setting ending in `[1m]` while that model is the one replying, or Haiku 4.5 and earlier) |
+| `percent` | number, optional | `tokens` as a share of `window`, with `window` only. cadrei ls says `compact soon` from 80 |
+| `at` | time, optional | When that reply came |
+| `compacted` | time, optional | Alone: it was compacted then, and hasn't replied since, so the new size isn't known yet |
+
+A member that hasn't replied yet, or whose chat cadrei can't find, has no `context`.
 
 `request`, what a waiting member asks you:
 

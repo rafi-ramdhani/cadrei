@@ -74,6 +74,15 @@ func TestTheToolsPageIsTheSpecs(t *testing.T) {
 	}
 	base = base[:table] + base[next:]
 	base = base[:row] + base[row+strings.Index(base[row:], "\n")+1:]
+	// And a running member's context (0.2.2, context use): its row and
+	// its table, which comes just before the request's.
+	ctable, cnext := strings.Index(base, "`context`, how full a running member's context is"), strings.Index(base, "Each project in `projects`:")
+	crow := strings.Index(base, "| `context` | object, optional |")
+	if ctable < 0 || cnext < ctable || crow < 0 {
+		t.Fatal("docs/tools.md lacks 0.2.2's context field")
+	}
+	base = base[:ctable] + base[cnext:]
+	base = base[:crow] + base[crow+strings.Index(base[crow:], "\n")+1:]
 	for added, was := range map[string]string{
 		"a `waiting_for`, a request `kind`, a snapshot reason":                "a `waiting_for`, a snapshot reason",
 		" an unknown request `kind` as one to answer in the member's window,": "",

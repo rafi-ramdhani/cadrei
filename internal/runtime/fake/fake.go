@@ -206,6 +206,10 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 
 func (sessions) TranscriptFile(id, dir string) string { return "" }
 
+func (sessions) Context(string, string) (runtime.ContextUse, bool) {
+	return runtime.ContextUse{}, false
+}
+
 func (sessions) UnansweredPrompt(string, string) bool { return false }
 
 func (sessions) SafeguardStop(string) (time.Time, bool) { return time.Time{}, false }

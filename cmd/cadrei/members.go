@@ -33,7 +33,15 @@ type memberStatus struct {
 	// Request is what it waits on the user for, with its code, while it
 	// waits: the runtime's own record of it, never consent.
 	Request *session.Request
+	// Context is how full its context is, from its transcript, when
+	// HasContext.
+	Context    runtime.ContextUse
+	HasContext bool
 }
+
+// compactSoon is how full a known context window must be for cadrei ls
+// to suggest compacting.
+const compactSoon = 80
 
 // statusOfMember reads member name's state in the cadrei at home. With
 // wait, a safeguard stop counts only once the runtime's retry had its
@@ -69,6 +77,29 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 			m.Quiet, m.QuietSince = now.Sub(fi.ModTime()), fi.ModTime()
 		}
 	}
+	return m
+}
+
+// withContext adds how full member name's context is, from its
+// transcript, to its status m. Only cadrei ls and the snapshot read it:
+// the team status line on each prompt doesn't, and must stay quick.
+func withContext(rt runtime.Runtime, home, name string, m memberStatus) memberStatus {
+	if m.State == session.SafeguardStopped || m.State == session.Unknown {
+		return m
+	}
+	build := rt.BuildDir(home)
+	rec := session.ReadRecord(session.RecordPath(build, name))
+	transcript, model := "", ""
+	if rec != nil {
+		model = rec.Model
+	}
+	switch st := session.ReadState(session.StatePath(build, name)); {
+	case st != nil && st.Transcript != "":
+		transcript = st.Transcript
+	case rec != nil:
+		transcript = rt.Sessions().TranscriptFile(rec.ID, rec.Dir)
+	}
+	m.Context, m.HasContext = rt.Sessions().Context(transcript, model)
 	return m
 }
 
@@ -150,7 +181,43 @@ func (m memberStatus) text(now time.Time) string {
 	if m.Quiet > 0 {
 		s += " · no activity for " + duration(m.Quiet)
 	}
+	if c := m.contextText(now); c != "" {
+		s += " · " + c
+	}
 	return s
+}
+
+// contextText says how full the member's context is: "context 142k",
+// with "(71%)" and ", compact soon" when its window is known, or
+// "compacted 19:40" until its first reply after a compact. "" when
+// there's nothing to say.
+func (m memberStatus) contextText(now time.Time) string {
+	c := m.Context
+	switch {
+	case !m.HasContext:
+		return ""
+	case !c.Compacted.IsZero():
+		return "compacted " + clock(c.Compacted, now)
+	}
+	s := "context " + tokens(c.Tokens)
+	if p := c.Percent(); p >= 0 {
+		s += fmt.Sprintf(" (%d%%)", p)
+		if p >= compactSoon {
+			s += ", compact soon"
+		}
+	}
+	return s
+}
+
+// tokens is a token count as people say it: 900, 142k, 1.2M.
+func tokens(n int) string {
+	switch {
+	case n < 1000:
+		return fmt.Sprint(n)
+	case n < 1_000_000:
+		return fmt.Sprintf("%dk", (n+500)/1000)
+	}
+	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 }
 
 // forTime is "for 4m", or "just now" under a minute (never "for just
@@ -166,8 +233,18 @@ func forTime(d time.Duration) string {
 const safeguardHint = "Pick the model again in its window, or start it fresh."
 
 // brief says a state for the orchestrator's snapshot: "engineer working
-// for 4m", "reviewer waiting on you for 1m".
+// for 4m", "reviewer waiting on you for 1m", with how full its context is
+// when that's known: "engineer idle since 19:37 · context 142k".
 func (m memberStatus) brief(now time.Time) string {
+	s := m.briefState(now)
+	if c := m.contextText(now); c != "" && m.State != session.SafeguardStopped {
+		s += " · " + c
+	}
+	return s
+}
+
+// briefState is brief without the context.
+func (m memberStatus) briefState(now time.Time) string {
 	switch m.State {
 	case session.Working:
 		return "working " + forTime(now.Sub(m.Since))

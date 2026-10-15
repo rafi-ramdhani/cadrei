@@ -316,6 +316,15 @@ func comparable(status map[string]any) map[string]any {
 			delete(x.(map[string]any), "found")
 		}
 	}
+	// The stream leaves out how full a member's context is.
+	if running, ok := c["running"].([]any); ok {
+		for _, s := range running {
+			members, _ := s.(map[string]any)["members"].([]any)
+			for _, m := range members {
+				delete(m.(map[string]any), "context")
+			}
+		}
+	}
 	return c
 }
 
