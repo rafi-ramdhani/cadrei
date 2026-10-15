@@ -935,6 +935,48 @@ func TestPullAfterAnEmptying(t *testing.T) {
 	}
 }
 
+// Re-review 6, L16 and L17: the files that came in changed are git's
+// names only, never its warnings, with a moved file's old name too, and a
+// name outside ASCII as it is.
+func TestPullNamesWhatChanged(t *testing.T) {
+	a, b := twoClones(t)
+	for _, f := range []string{"x1.md", "x2.md", "z.md"} {
+		write(t, filepath.Join(a, f), f+" at first\n")
+	}
+	gitIn(t, a, "add", "-A")
+	gitIn(t, a, "commit", "-qm", "files")
+	gitIn(t, a, "push", "-q")
+	if _, err := Pull(b, "b", t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	// Past diff.renameLimit, git warns on stderr and exits 0.
+	gitIn(t, b, "config", "diff.renameLimit", "1")
+	gitIn(t, a, "mv", "x1.md", "y1.md")
+	gitIn(t, a, "mv", "x2.md", "y2.md")
+	gitIn(t, a, "mv", "z.md", "w.md")
+	write(t, filepath.Join(a, "y1.md"), "y1 now\n")
+	write(t, filepath.Join(a, "y2.md"), "y2 now\n")
+	write(t, filepath.Join(a, "café.md"), "coffee\n")
+	write(t, filepath.Join(Dir(a), "role.md"), note("role", "the user", "2026-10-15T10:00:00Z", "The user designs."))
+	gitIn(t, a, "add", "-A")
+	gitIn(t, a, "commit", "-qm", "moves")
+	gitIn(t, a, "push", "-q")
+	pulled, err := Pull(b, "b", t.TempDir())
+	if want := []string{"café.md", "w.md", "x1.md", "x2.md", "y1.md", "y2.md", "z.md"}; err != nil || !slices.Equal(pulled.Changed, want) {
+		t.Errorf("changed: %q %v", pulled.Changed, err)
+	}
+	// Any other warning stays out too: with a tag named HEAD, git says
+	// the name is ambiguous, and goes on.
+	a, b = twoClones(t)
+	gitIn(t, b, "update-ref", "refs/tags/HEAD", "HEAD")
+	write(t, filepath.Join(a, "playbook.md"), "the new playbook\n")
+	gitIn(t, a, "commit", "-qam", "playbook")
+	gitIn(t, a, "push", "-q")
+	if pulled, err := Pull(b, "b", t.TempDir()); !slices.Equal(pulled.Changed, []string{"playbook.md"}) {
+		t.Errorf("a warning: %q %v", pulled.Changed, err)
+	}
+}
+
 // Re-review 2, L14: a pull stopped at its limit says where it left the
 // crew.
 func TestAPullThatTakesTooLong(t *testing.T) {

@@ -399,8 +399,11 @@ func Pull(crew, machine, aside string) (Pulled, error) {
 		}
 		return out, errors.New(firstLine(string(text)))
 	}
-	if files, err := git(crew, "diff", "--name-only", "HEAD...@{u}"); err == nil {
-		for _, f := range strings.Split(files, "\n") {
+	// Names only, from stdout: git warns on stderr (past diff.renameLimit,
+	// say). A moved file is named at both paths, and a name outside ASCII
+	// as it is.
+	if files, err := gitx.Reading(crew, "-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", "HEAD...@{u}").Output(); err == nil {
+		for _, f := range strings.Split(string(files), "\n") {
 			if f != "" && !strings.HasPrefix(f, Folder+"/") {
 				out.Changed = append(out.Changed, f)
 			}

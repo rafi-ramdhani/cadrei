@@ -574,7 +574,7 @@ func TestCadreiPull(t *testing.T) {
 	os.WriteFile(other+"/playbook.md", []byte("from the other machine\n"), 0o644)
 	push(other, "the other's playbook")
 	os.WriteFile(c+"/playbook.md", []byte("from here\n"), 0o644)
-	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(flat(errOut), "your changes to playbook.md that weren't committed clash with what came in.") {
+	if code, _, errOut := call("pull"); code != 1 || !strings.Contains(flat(errOut), "cadrei: pulled work's backup, which changed playbook.md, but your changes to playbook.md that weren't committed clash with what came in.") {
 		t.Errorf("an uncommitted clash: %d %q", code, errOut)
 	}
 	exec.Command("git", "-C", c, "checkout", "-q", "--theirs", "playbook.md").Run()

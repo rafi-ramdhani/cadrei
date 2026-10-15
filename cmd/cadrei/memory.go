@@ -187,23 +187,12 @@ func runPull(e *env) int {
 	for _, f := range got.Restored {
 		e.note("", markWarn, f+" was deleted on one machine and changed on the other, so the changed one is kept.")
 	}
-	if len(got.Stashed) > 0 {
-		return e.failWith("Pulled "+r.Name+"'s backup, but your changes to "+andList(got.Stashed)+" that weren't committed clash with what came in.",
-			"Nothing was lost: git marked both versions in those files and kept your changes in its stash. Pick what to keep, then "+cmd("git -C "+display(crew)+" add")+" the files.")
-	}
 	// What came in can change the playbook and members, so the line names
-	// those files for the orchestrator to tell the user.
-	done := "Pulled " + r.Name + "'s backup"
-	if len(got.Changed) > 0 {
-		names := make([]string, 0, pullNamed+1)
-		for i, f := range got.Changed {
-			if i == pullNamed {
-				names = append(names, count(len(got.Changed)-pullNamed, "more file"))
-				break
-			}
-			names = append(names, printable(f))
-		}
-		done += ", which changed " + andList(names)
+	// those files for the orchestrator to tell the user, a clash or not.
+	done := "Pulled " + r.Name + "'s backup" + whichChanged(got.Changed)
+	if len(got.Stashed) > 0 {
+		return e.failWith(done+", but your changes to "+andList(got.Stashed)+" that weren't committed clash with what came in.",
+			"Nothing was lost: git marked both versions in those files and kept your changes in its stash. Pick what to keep, then "+cmd("git -C "+display(crew)+" add")+" the files.")
 	}
 	e.note("", markDone, done)
 	return 0
@@ -211,6 +200,23 @@ func runPull(e *env) int {
 
 // pullNamed is how many changed files cadrei pull names.
 const pullNamed = 8
+
+// whichChanged is ", which changed a, b and c" for the files a pull
+// brought in changed, the first pullNamed of them, or nothing.
+func whichChanged(files []string) string {
+	if len(files) == 0 {
+		return ""
+	}
+	names := make([]string, 0, pullNamed+1)
+	for i, f := range files {
+		if i == pullNamed {
+			names = append(names, count(len(files)-pullNamed, "more file"))
+			break
+		}
+		names = append(names, printable(f))
+	}
+	return ", which changed " + andList(names)
+}
 
 // memoryAside is where cadrei pull sets a crew's notes aside when another
 // machine keeps the memory on its own: in the crew's local folder, which
