@@ -4,6 +4,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -546,7 +547,7 @@ func TestCadreiPull(t *testing.T) {
 	os.WriteFile(c+"/.memory/user_role.md", []byte("The user is a manager.\n"), 0o644)
 	out := must(t, "pull")
 	if !strings.Contains(flat(out), "Both machines changed one of your orchestrator's notes, so both are kept: the other machine's under its name, and this one's as user_role.from-") ||
-		!strings.Contains(flat(out), "+ Pulled work's backup") {
+		!strings.Contains(flat(out), "+ Pulled work's backup") || strings.Contains(out, "which changed") {
 		t.Errorf("the pull:\n%s", out)
 	}
 	if readFile(t, c+"/.memory/user_role.md") != "The user is a designer.\n" || memory.Count(c) != 2 {
@@ -580,6 +581,16 @@ func TestCadreiPull(t *testing.T) {
 	exec.Command("git", "-C", c, "reset", "-q").Run()
 	exec.Command("git", "-C", c, "checkout", "-q", "--", "playbook.md").Run()
 	exec.Command("git", "-C", c, "stash", "drop", "-q").Run()
+	// What came in can change the playbook and members: the line names
+	// the files, the first eight of them.
+	for i := range 10 {
+		os.MkdirAll(other+"/notes", 0o755)
+		os.WriteFile(fmt.Sprintf("%s/notes/n%d.md", other, i), []byte("x\n"), 0o644)
+	}
+	push(other, "notes")
+	if out := must(t, "pull"); !strings.HasSuffix(flat(out), "+ Pulled work's backup, which changed notes/n0.md, notes/n1.md, notes/n2.md, notes/n3.md, notes/n4.md, notes/n5.md, notes/n6.md, notes/n7.md and 2 more files") {
+		t.Errorf("the files that changed:\n%s", out)
+	}
 	// Re-review 2, M6: the other machine keeps its memory on itself now,
 	// while this one has a note change of its own: it's set aside, never
 	// pushed again, and the next open brings every note here.
@@ -590,7 +601,8 @@ func TestCadreiPull(t *testing.T) {
 	push(other, "Keep the orchestrator's memory on this machine")
 	os.WriteFile(c+"/.memory/tone.md", []byte("Short answers.\n"), 0o644)
 	out = must(t, "pull")
-	if !strings.Contains(flat(out), "Another machine keeps your orchestrator's memory on its own now, so this one's 3 notes were set aside, out of the backup.") {
+	if !strings.Contains(flat(out), "Another machine keeps your orchestrator's memory on its own now, so this one's 3 notes were set aside, out of the backup.") ||
+		!strings.HasSuffix(flat(out), "+ Pulled work's backup, which changed cadrei.conf") {
 		t.Errorf("the opt-out:\n%s", out)
 	}
 	if ls, _ := exec.Command("git", "-C", c, "ls-files", ".memory").Output(); len(ls) != 0 {

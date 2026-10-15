@@ -191,9 +191,26 @@ func runPull(e *env) int {
 		return e.failWith("Pulled "+r.Name+"'s backup, but your changes to "+andList(got.Stashed)+" that weren't committed clash with what came in.",
 			"Nothing was lost: git marked both versions in those files and kept your changes in its stash. Pick what to keep, then "+cmd("git -C "+display(crew)+" add")+" the files.")
 	}
-	e.note("", markDone, "Pulled "+r.Name+"'s backup")
+	// What came in can change the playbook and members, so the line names
+	// those files for the orchestrator to tell the user.
+	done := "Pulled " + r.Name + "'s backup"
+	if len(got.Changed) > 0 {
+		names := make([]string, 0, pullNamed+1)
+		for i, f := range got.Changed {
+			if i == pullNamed {
+				names = append(names, count(len(got.Changed)-pullNamed, "more file"))
+				break
+			}
+			names = append(names, printable(f))
+		}
+		done += ", which changed " + andList(names)
+	}
+	e.note("", markDone, done)
 	return 0
 }
+
+// pullNamed is how many changed files cadrei pull names.
+const pullNamed = 8
 
 // memoryAside is where cadrei pull sets a crew's notes aside when another
 // machine keeps the memory on its own: in the crew's local folder, which

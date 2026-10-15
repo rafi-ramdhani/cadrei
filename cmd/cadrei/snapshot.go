@@ -30,13 +30,16 @@ const (
 // seed is the orchestrator's first message: cadrei sent it, not the user.
 const seed = "(cadrei opened this chat)"
 
-// readOnly are the commands the orchestrator runs without asking, exactly
-// these forms (the skill names them).
-var readOnly = []string{"cadrei ls", "cadrei ls --json", "cadrei ls --all", "cadrei ls --json --all", "cadrei ls --all --json", "cadrei allow", "cadrei allow list",
+// preAllowed are the commands the orchestrator runs without asking,
+// exactly these forms (the skill names them).
+var preAllowed = []string{"cadrei ls", "cadrei ls --json", "cadrei ls --all", "cadrei ls --json --all", "cadrei ls --all --json", "cadrei allow", "cadrei allow list",
 	// It only records the user's no to the every-chat hook.
 	"cadrei hook skip",
 	// The listing of who's waiting: it answers nothing.
-	"cadrei answer"}
+	"cadrei answer",
+	// What the crew's other machines pushed, at each session start. It
+	// never force-pushes, and it says which files came in changed.
+	"cadrei pull"}
 
 // opening is what only the launch knows: where the orchestrator opens
 // (tmux, tmux-inside, terminal, or hook for a chat the every-chat hook

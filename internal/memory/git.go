@@ -341,6 +341,9 @@ type Pulled struct {
 	// Stashed are files whose uncommitted changes clashed with what came
 	// in: git marked them, and kept the changes in its stash.
 	Stashed []string
+	// Changed are the crew's files outside the memory that the other
+	// machines' commits change: the playbook, members, and so on.
+	Changed []string
 }
 
 // pullLimit is how long the pull from the backup may take. Tests shorten
@@ -395,6 +398,13 @@ func Pull(crew, machine, aside string) (Pulled, error) {
 			return late()
 		}
 		return out, errors.New(firstLine(string(text)))
+	}
+	if files, err := git(crew, "diff", "--name-only", "HEAD...@{u}"); err == nil {
+		for _, f := range strings.Split(files, "\n") {
+			if f != "" && !strings.HasPrefix(f, Folder+"/") {
+				out.Changed = append(out.Changed, f)
+			}
+		}
 	}
 	n, err := setAside(crew, machine, aside)
 	if err != nil {

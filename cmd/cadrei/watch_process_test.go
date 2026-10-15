@@ -330,13 +330,13 @@ func TestTheStreamOpensNoPort(t *testing.T) {
 	}
 	cmd.cmd.Process.Signal(syscall.SIGINT)
 	waitExit(t, cmd, 5*time.Second)
-	for _, r := range readOnly {
+	for _, r := range preAllowed {
 		if strings.Contains(r, "--watch") {
 			t.Errorf("the orchestrator may run %s", r)
 		}
 	}
-	if len(readOnly) != 9 {
-		t.Errorf("%d pre-allowed commands", len(readOnly))
+	if len(preAllowed) != 10 {
+		t.Errorf("%d pre-allowed commands", len(preAllowed))
 	}
 	skill, err := os.ReadFile(filepath.Join(repoRoot, "skills", "cadrei", "SKILL.md"))
 	if err != nil || bytes.Contains(skill, []byte("--watch")) {
