@@ -27,7 +27,7 @@ So the engine can come and go. Upgrade it, uninstall it, or delete `~/.cadrei/co
 The first `cadrei` checks your tools, shows the whole plan on one screen, and waits for one key. Run it inside a repo you want your team to work on, and the plan adds that repo too:
 
 ```text
-  cadrei v0.2.1
+  cadrei v0.2.2
   A team of Claude Code helpers you lead from one chat.
   ~/code/my-app
 
@@ -594,11 +594,13 @@ A switch such as `CADREI_OFF` is on when it's set to anything but an empty value
 
 ## The health check
 
-Every `cadrei` checks the setup and stays silent unless something is wrong. Quick checks run every time; full checks run on the first run, after an upgrade, when a quick check fails, and on `cadrei --check`. They cover Claude Code (installed, logged in, and new enough: below 2.1.295, a guard that hangs or times out lets the command go on to Claude Code's own permission check, so cadrei warns you to update, here and each time it opens your orchestrator), tmux and git (and your git name and email), cadrei's instructions link and the every-chat hook pointing at this program, the `cadrei` first on your `PATH` being this one, files at the top of a crew that Claude Code loads into your orchestrator (`.claude/settings.json`, `.claude/settings.local.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`), each crew's pre-push hook, and cadrei's instructions (put back when something changed them). Missing projects show in `cadrei ls` and your orchestrator's greeting instead. Leftovers from 0.1.x (the old hook, a skill link and a `cadre` link in `~/.local/bin`, both into the old clone) are recognized. Each finding says what's wrong (`!`) and how to fix it, a fixable one asks right away, and nothing outside cadrei's own files is changed without your yes. `cadrei --check` ends with `✓ Everything looks good. (cadrei 0.2.1)` when it is.
+Every `cadrei` checks the setup and stays silent unless something is wrong. Quick checks run every time; full checks run on the first run, after an upgrade, when a quick check fails, and on `cadrei --check`. They cover Claude Code (installed, logged in, and new enough: below 2.1.295, a guard that hangs or times out lets the command go on to Claude Code's own permission check, so cadrei warns you to update, here and each time it opens your orchestrator), tmux and git (and your git name and email), cadrei's instructions link and the every-chat hook pointing at this program, the `cadrei` first on your `PATH` being this one, files at the top of a crew that Claude Code loads into your orchestrator (`.claude/settings.json`, `.claude/settings.local.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.mcp.json`), each crew's pre-push hook, and cadrei's instructions (put back when something changed them). Missing projects show in `cadrei ls` and your orchestrator's greeting instead. Leftovers from 0.1.x (the old hook, a skill link and a `cadre` link in `~/.local/bin`, both into the old clone) are recognized. Each finding says what's wrong (`!`) and how to fix it, a fixable one asks right away, and nothing outside cadrei's own files is changed without your yes. `cadrei --check` ends with `✓ Everything looks good. (cadrei 0.2.2)` when it is.
 
 ## Upgrading
 
 `brew upgrade cadrei`, or run `install.sh` again. The next `cadrei` runs the full health check and rewrites `~/.cadrei/framework`. Running members keep the old protocol until they restart (`cadrei stop`, then let your orchestrator start them again; chats resume). Read the [CHANGELOG](../CHANGELOG.md) for anything to know.
+
+Coming from 0.2.1, close your orchestrator first (`/exit`), since `cadrei` only attaches to one running in tmux. The first `cadrei` of 0.2.2 moves your orchestrator's memory into each crew's `.memory/` and says so once, and nothing of it is committed until your next session ([Your orchestrator's memory](#your-orchestrators-memory)). To go back to 0.2.1 later, say "keep my memory on this machine" and open `cadrei` once first, since 0.2.1 never looks in `.memory/`.
 
 Coming from 0.2.0, there's nothing to do: on its first run, 0.2.1 moves each crew's project places and orchestrator chat record from `~/.cadrei/config` into the crew's `.claude/local/`, adds that folder to the crew's `.gitignore`, and says so once.
 
