@@ -578,20 +578,20 @@ func TestFromHistory(t *testing.T) {
 	CommitRemoval(crew, "Keep the orchestrator's memory on this machine")
 	d := filepath.Join(t.TempDir(), "memory")
 	write(t, filepath.Join(d, Index), Pointer(crew))
-	res, removal, err := FromHistory(crew, d, "m", "")
+	res, removal, err := FromHistory(crew, d, "")
 	if err != nil || res.Moved != 1 || removal == "" {
 		t.Fatalf("%+v %q %v", res, removal, err)
 	}
 	if got := names(t, d); !slices.Equal(got, []string{Index, "role.md"}) || read(t, filepath.Join(d, Index)) != "- [Role](role.md): the user\n" {
 		t.Errorf("D %v", got)
 	}
-	if res, _, err := FromHistory(repo(t), t.TempDir(), "m", ""); err != nil || res.Moved != 0 {
+	if res, _, err := FromHistory(repo(t), t.TempDir(), ""); err != nil || res.Moved != 0 {
 		t.Errorf("no removal: %+v %v", res, err)
 	}
 	// L11: the same removal again, after the user cleared the notes:
 	// done, so they stay cleared.
 	os.RemoveAll(d)
-	if res, again, err := FromHistory(crew, d, "m", removal); err != nil || res.Moved != 0 || again != "" {
+	if res, again, err := FromHistory(crew, d, removal); err != nil || res.Moved != 0 || again != "" {
 		t.Errorf("brought back twice: %+v %q %v", res, again, err)
 	}
 	if _, err := os.Stat(d); err == nil {
@@ -604,9 +604,43 @@ func TestFromHistory(t *testing.T) {
 	Commit(crew, "Update the orchestrator's memory")
 	os.RemoveAll(Dir(crew))
 	Commit(crew, "Update the orchestrator's memory")
-	if res, removal, err := FromHistory(crew, d, "m", ""); err != nil || res.Moved != 0 || removal != "" {
+	if res, removal, err := FromHistory(crew, d, ""); err != nil || res.Moved != 0 || removal != "" {
 		t.Errorf("an emptying came back: %+v %q %v", res, removal, err)
 	}
+}
+
+// Re-review 5: a note copied from the crew, or from its history, that
+// clashes with one here is named after the crew, not after this machine.
+func TestACopyFromTheCrewIsNamedAfterIt(t *testing.T) {
+	crew := repo(t)
+	write(t, filepath.Join(Dir(crew), Index), "- [Role](role.md): the user\n")
+	write(t, filepath.Join(Dir(crew), "role.md"), "the crew's role\n")
+	Commit(crew, "Update the orchestrator's memory")
+	check := func(how string, d string, res Result) {
+		t.Helper()
+		if !slices.Equal(res.Copies, []string{"role.from-crew.md"}) || read(t, filepath.Join(d, "role.from-crew.md")) != "the crew's role\n" || read(t, filepath.Join(d, "role.md")) != "this machine's role\n" {
+			t.Errorf("%s: %+v %v", how, res, names(t, d))
+		}
+		if idx := read(t, filepath.Join(d, Index)); !strings.Contains(idx, "(role.from-crew.md)") {
+			t.Errorf("%s: index:\n%s", how, idx)
+		}
+	}
+	d := filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(d, "role.md"), "this machine's role\n")
+	res, err := Copy(crew, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("the copy", d, res)
+	os.RemoveAll(Dir(crew))
+	CommitRemoval(crew, OptOut)
+	d = filepath.Join(t.TempDir(), "memory")
+	write(t, filepath.Join(d, "role.md"), "this machine's role\n")
+	res, _, err = FromHistory(crew, d, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("the history", d, res)
 }
 
 // The memory commit takes only the union line from .gitattributes: the
@@ -869,11 +903,11 @@ func TestPullAfterAnOptIn(t *testing.T) {
 	first := LastOptOut(a)
 	optOut(t, a)
 	d := filepath.Join(t.TempDir(), "memory")
-	res, removal, err := FromHistory(a, d, "a", first)
+	res, removal, err := FromHistory(a, d, first)
 	if err != nil || removal == "" || removal == first || res.Moved != 2 || read(t, filepath.Join(d, "tone.md")) != "a's tone\n" {
 		t.Errorf("the second opt-out: %+v %q %v", res, removal, err)
 	}
-	if res, again, _ := FromHistory(a, t.TempDir(), "a", removal); res.Moved != 0 || again != "" {
+	if res, again, _ := FromHistory(a, t.TempDir(), removal); res.Moved != 0 || again != "" {
 		t.Errorf("brought back twice: %+v", res)
 	}
 }

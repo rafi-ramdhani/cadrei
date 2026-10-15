@@ -233,8 +233,9 @@ const OptOut = "Keep the orchestrator's memory on this machine"
 // machine and pushed the removal. It merges them as MoveOut does. It
 // returns that commit, and does nothing when it's done, the commit cadrei
 // last brought notes back from: each removal is brought back once, so
-// notes the user cleared later stay cleared.
-func FromHistory(crew, to, machine, done string) (Result, string, error) {
+// notes the user cleared later stay cleared. A note that clashes is kept
+// as <name>.from-crew.md.
+func FromHistory(crew, to, done string) (Result, string, error) {
 	removal := LastOptOut(crew)
 	if removal == "" || removal == done {
 		return Result{}, "", nil
@@ -263,7 +264,7 @@ func FromHistory(crew, to, machine, done string) (Result, string, error) {
 			return Result{}, "", err
 		}
 	}
-	res, _, err := merge(tmp, to, machine)
+	res, _, err := merge(tmp, to, FromCrew)
 	return res, removal, err
 }
 

@@ -76,6 +76,11 @@ type Result struct {
 	Copies []string // notes that clashed, kept beside the other under these names
 }
 
+// FromCrew is the name a note copied from the crew's memory, or from its
+// history, is kept under when it clashes (<name>.from-crew.md): it came
+// from the crew, not from this machine.
+const FromCrew = "crew"
+
 // entries lists a memory folder's files by name, the index apart. A
 // pointer index counts as none. Anything but a file stops it: cadrei
 // moves only what it can vouch for.
@@ -340,9 +345,10 @@ func Point(crew, dir string) error {
 }
 
 // Copy copies the crew's notes into to, merged as MoveOut merges, and
-// leaves the crew's as they are.
-func Copy(crew, to, machine string) (Result, error) {
-	res, _, err := merge(Dir(crew), to, machine)
+// leaves the crew's as they are. A note that clashes is kept as
+// <name>.from-crew.md.
+func Copy(crew, to string) (Result, error) {
+	res, _, err := merge(Dir(crew), to, FromCrew)
 	return res, err
 }
 

@@ -86,7 +86,7 @@ func (e *env) keepOnMachine(c cadreis.Cadrei, crew string, folders []string) {
 		// Another machine kept the memory on its own and pushed the
 		// removal: this one brings in the notes it lacks from the history,
 		// once per removal, so notes the user cleared later stay cleared.
-		res, removal, err := memory.FromHistory(crew, folders[0], memory.Machine(), cadreis.MemoryRestored(c))
+		res, removal, err := memory.FromHistory(crew, folders[0], cadreis.MemoryRestored(c))
 		if removal != "" && err == nil {
 			cadreis.SetMemoryRestored(c, removal)
 		}
@@ -122,7 +122,7 @@ func (e *env) leaveCrewMemory(c cadreis.Cadrei, folders []string) {
 		memory.RemovePointer(d)
 	}
 	if cadreis.MemoryCopied(c) == "" {
-		res, err := memory.Copy(paths.Real(c.Path), folders[0], memory.Machine())
+		res, err := memory.Copy(paths.Real(c.Path), folders[0])
 		switch {
 		case err != nil:
 			e.warn("", "Your crew's notes couldn't be copied into your orchestrator's memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
