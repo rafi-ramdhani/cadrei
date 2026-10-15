@@ -295,6 +295,36 @@ func TestMemoryOnThisMachineOnly(t *testing.T) {
 	}
 }
 
+// Re-review 5: the one-time copy is recorded before it runs. When the
+// record can't be written, nothing is copied, so a later open can't copy
+// again over a note the orchestrator changed or cleared.
+func TestTheOneTimeCopyIsRecordedFirst(t *testing.T) {
+	_, c, d := memoryCrew(t)
+	must(t)
+	must(t) // committed
+	os.MkdirAll(cadreis.LocalDir(c), 0o700)
+	os.WriteFile(filepath.Join(cadreis.LocalDir(c), "cadrei.conf"), []byte("MEMORY=machine\n"), 0o644)
+	// state.json can be read, but not written: a newer cadrei's.
+	state := filepath.Join(cadreis.LocalDir(c), "state.json")
+	os.WriteFile(state, []byte(`{"version": 99}`+"\n"), 0o600)
+	code, out, errOut := call()
+	if code != 0 || !strings.Contains(flat(errOut), "! Your crew's notes couldn't be copied into your orchestrator's memory here:") || !strings.Contains(flat(errOut), "cadrei tries again next time.") {
+		t.Errorf("no warning: exit %d\n%s%s", code, out, errOut)
+	}
+	if _, err := os.Stat(d + "/user_role.md"); err == nil {
+		t.Error("copied with no record of it")
+	}
+	// Once the record can be written, the copy runs, once.
+	os.Remove(state)
+	if out := must(t); !strings.Contains(flat(out), "(1 note copied from your crew)") || readFile(t, d+"/user_role.md") != "The user is a developer.\n" {
+		t.Errorf("no copy:\n%s", out)
+	}
+	os.Remove(d + "/user_role.md")
+	if must(t); exists(d + "/user_role.md") {
+		t.Error("copied twice")
+	}
+}
+
 // Members' settings deny writing into each crew's memory.
 func TestMembersCantEditTheMemory(t *testing.T) {
 	home := sandbox(t)
