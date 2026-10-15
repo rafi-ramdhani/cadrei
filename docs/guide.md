@@ -467,7 +467,7 @@ Cadrei keeps that memory in your crew, in `.memory/`, so your crew's private bac
 **Taking it out of the backup's history.** After the switch, new commits leave your memory out, but older commits in your backup still have it. Neither cadrei nor your orchestrator rewrites that history, since it means a force push (replacing what's on GitHub with a new version) and a fresh copy of the crew on every other machine. If you want the notes gone from GitHub, do it by hand, once, on one machine:
 
 1. Wait until your crew's `cadrei.conf` says `MEMORY=machine` (a `MEMORY=machine` in `.claude/local/cadrei.conf` is for one machine only, and the crew keeps `.memory/` for the others), and every machine has opened `cadrei` once since. Each one brings its notes back from this history at that open, so a machine that hasn't yet would lose them.
-2. Make sure every machine has pushed what it had, then close cadrei everywhere but here (no orchestrator or member running), so nothing pushes while you work.
+2. Make sure every machine has pushed what it had, then close cadrei everywhere but here (no orchestrator or member running), so nothing pushes while you work. Here, commit or drop any changes first: `git -C ~/.cadrei/<name> status --short --untracked-files=no` should print nothing, since step 4 won't run with uncommitted changes.
 3. Keep a copy, just in case. It still has the notes, so keep it on this machine:
    `git clone --mirror ~/.cadrei/<name> ~/cadrei-<name>-before.git`
 4. Take `.memory/` out of every commit and tag:
