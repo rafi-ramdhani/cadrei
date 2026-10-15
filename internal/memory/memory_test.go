@@ -862,6 +862,9 @@ func TestTheHistoryAfterNotesSetAside(t *testing.T) {
 	write(t, filepath.Join(Dir(b), Index), "- [Role](role.md): the user\n- [Tone](tone.md): long answers\n")
 	Commit(b, "Update the orchestrator's memory")
 	write(t, filepath.Join(Dir(a), "role.md"), note("role", "the user", "2026-10-14T11:00:00Z", "The user designs."))
+	// Its index changed too: its line for tone.md is older than b's.
+	write(t, filepath.Join(Dir(a), "new.md"), note("new", "new", "2026-10-14T11:00:00Z", "New."))
+	write(t, filepath.Join(Dir(a), Index), "- [Role](role.md): the user\n- [Tone](tone.md): tone\n- [New](new.md): new\n")
 	Commit(a, "Update the orchestrator's memory")
 	optOut(t, a)
 	gitIn(t, a, "push", "-q")
@@ -878,13 +881,13 @@ func TestTheHistoryAfterNotesSetAside(t *testing.T) {
 	if _, _, err := FromHistory(b, d, "", brought.Notes); err != nil {
 		t.Fatal(err)
 	}
-	if got := names(t, d); !slices.Equal(got, []string{Index, "role.from-crew.md", "role.md", "tone.md"}) {
+	if got := names(t, d); !slices.Equal(got, []string{Index, "new.md", "role.from-crew.md", "role.md", "tone.md"}) {
 		t.Errorf("D %v", got)
 	}
 	if !strings.Contains(read(t, filepath.Join(d, "tone.md")), "Long answers.") || !strings.Contains(read(t, filepath.Join(d, "role.md")), "The user codes.") || !strings.Contains(read(t, filepath.Join(d, "role.from-crew.md")), "The user designs.") {
 		t.Error("a note isn't the one it should be")
 	}
-	if idx := read(t, filepath.Join(d, Index)); strings.Count(idx, "(tone.md)") != 1 || !strings.Contains(idx, "long answers") || !strings.Contains(idx, "(role.from-crew.md)") {
+	if idx := read(t, filepath.Join(d, Index)); strings.Count(idx, "(tone.md)") != 1 || !strings.Contains(idx, "long answers") || strings.Count(idx, "(role.md)") != 1 || !strings.Contains(idx, "(role.from-crew.md)") || !strings.Contains(idx, "(new.md)") {
 		t.Errorf("index:\n%s", idx)
 	}
 }

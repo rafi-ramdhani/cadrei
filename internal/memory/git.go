@@ -589,7 +589,15 @@ func setAside(crew, machine, aside string) (int, error) {
 				delete(then, name)
 			}
 		}
-		if _, err := fromGit(crew, then, aside, nil); err != nil {
+		// Its index lines for this machine's other notes are older than
+		// this machine's own, so only the lines for what it changed come.
+		var mine []string
+		for _, name := range notesIn(taken) {
+			if _, changed := then[name]; !changed {
+				mine = append(mine, name)
+			}
+		}
+		if _, err := fromGit(crew, then, aside, mine); err != nil {
 			return 0, err
 		}
 	}
