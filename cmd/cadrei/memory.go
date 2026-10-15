@@ -125,12 +125,20 @@ func (e *env) leaveCrewMemory(c cadreis.Cadrei, folders []string) {
 		memory.RemovePointer(d)
 	}
 	if cadreis.MemoryCopied(c) == "" {
-		res, err := memory.Copy(paths.Real(c.Path), folders[0])
+		// Recorded first: a record that can't be written copies nothing,
+		// so the copy never runs twice.
+		err := cadreis.SetMemoryCopied(c, time.Now().Format(time.RFC3339))
+		var res memory.Result
+		if err == nil {
+			if res, err = memory.Copy(paths.Real(c.Path), folders[0]); err != nil {
+				cadreis.SetMemoryCopied(c, "")
+			}
+		}
 		switch {
 		case err != nil:
 			e.warn("", "Your crew's notes couldn't be copied into your orchestrator's memory here: "+strings.TrimSuffix(err.Error(), ".")+".",
 				"They're still in your crew (.memory/), and cadrei tries again next time.")
-		case cadreis.SetMemoryCopied(c, time.Now().Format(time.RFC3339)) == nil && res.Moved > 0:
+		case res.Moved > 0:
 			e.note("", markDone, "Your orchestrator's memory is on this machine only now ("+count(res.Moved, "note")+" copied from your crew). Your other machines keep the crew's.")
 		}
 	}
