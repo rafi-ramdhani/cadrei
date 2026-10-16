@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -73,17 +74,20 @@ func waitingIn(views []sessionView) []waitingOn {
 	var out []waitingOn
 	for _, v := range views {
 		for _, m := range v.Members {
-			if m.status.State != session.Waiting || m.status.Request == nil {
+			if m.status.State != session.Waiting {
 				continue
 			}
-			w := waitingOn{team: v.Team, project: v.Project, role: m.Role, session: v.info.Name, window: m.window,
-				name: m.name, since: m.status.Since, req: m.status.Request}
+			dir := ""
 			if rt != nil && v.info.Home != "" {
 				if rec := session.ReadRecord(session.RecordPath(rt.BuildDir(v.info.Home), m.name)); rec != nil {
-					w.dir = rec.Dir
+					dir = rec.Dir
 				}
 			}
-			out = append(out, w)
+			// Each open prompt is its own request, under its own code.
+			for _, req := range m.status.Requests {
+				out = append(out, waitingOn{team: v.Team, project: v.Project, role: m.Role, session: v.info.Name, window: m.window,
+					name: m.name, dir: dir, since: m.status.Since, req: req})
+			}
 		}
 	}
 	for i := 1; i < len(out); i++ {
@@ -275,20 +279,7 @@ func runAnswer(e *env) int {
 		e.warn("", "I pressed your answer, but the prompt is still on the "+w.role+"'s screen. Check its window: "+cmd(w.attach()))
 		return 1
 	}
-	// The request is answered: a yes or a pick lets the member go on
-	// (working: its next hook comes only when the tool ends), and a no
-	// stops its turn with no hook to say so (idle). Either way it has
-	// nothing to answer, so nothing offers the code again.
-	next := session.Working
-	if w.req.Kind == session.ForApproval && choice == "no" {
-		next = session.Idle
-	}
-	if path := session.StatePath(rt.BuildDir(r.Path), w.name); path != "" {
-		if st := session.ReadState(path); st != nil && st.Request != nil && st.Request.Code == w.req.Code {
-			st.State, st.Since, st.WaitingFor, st.Request = next, time.Now(), "", nil
-			session.WriteState(path, st)
-		}
-	}
+	answered(rt.BuildDir(r.Path), w, choice)
 	verb, object, _ := act(w.req)
 	switch {
 	case w.req.Kind == session.ForQuestion:
@@ -300,6 +291,37 @@ func runAnswer(e *env) int {
 		e.note("", markDone, "Told "+w.place()+" no. It won't "+verb+" "+object+", and it's waiting for what to do instead.")
 	}
 	return 0
+}
+
+// answered ends w's request in its member's state, under the member's
+// lock, so nothing offers the code again. A yes or a pick lets the member
+// go on: working (its next hook comes only when the tool ends), or still
+// waiting when another prompt is open. A no stops its turn, and every
+// prompt in it, with no hook to say so: idle.
+func answered(build string, w *waitingOn, choice string) {
+	session.ChangeState(build, w.name, 2*time.Second, func(st *session.State) *session.State {
+		if st == nil || !slices.ContainsFunc(st.Requests(), func(r *session.Request) bool { return r.Code == w.req.Code }) {
+			return st
+		}
+		next := *st
+		next.Open = slices.Clone(st.Open)
+		next.Drop(w.req.Code)
+		state := session.Working
+		switch {
+		case w.req.Kind == session.ForApproval && choice == "no":
+			next.Open, next.Calls, state = nil, nil, session.Idle
+		case len(next.Open) > 0:
+			state = session.Waiting
+		}
+		if next.State != state {
+			next.Since = time.Now()
+		}
+		next.State, next.WaitingFor = state, ""
+		if r := next.Current(); r != nil {
+			next.WaitingFor = r.Kind
+		}
+		return &next
+	})
 }
 
 // listWaiting is cadrei answer with no code: who's waiting, with the line

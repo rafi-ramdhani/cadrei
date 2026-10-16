@@ -78,10 +78,10 @@ func request(t *testing.T, c, role, payload string) string {
 	t.Helper()
 	feed(t, c, "work-dev-"+role, payload)
 	st := session.ReadState(c + "/.claude/build/state/work-dev-" + role + ".json")
-	if st == nil || st.Request == nil {
+	if st == nil || st.Current() == nil {
 		t.Fatalf("no request: %+v", st)
 	}
-	return st.Request.Code
+	return st.Current().Code
 }
 
 const (
@@ -127,7 +127,7 @@ func TestAnswerYes(t *testing.T) {
 	}
 	// Review of 0.2.2 (M1): answered, it goes on with nothing to answer,
 	// so nothing offers the code again before the tool ends.
-	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Request != nil || st.WaitingFor != "" {
+	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Current() != nil || st.WaitingFor != "" {
 		t.Errorf("state after yes: %+v", st)
 	}
 	if n, out, _ := call("answer"); n != 0 || out != "Nobody's waiting on you right now.\n" {
@@ -151,7 +151,7 @@ func TestAnswerNo(t *testing.T) {
 	if k := key(t, home, "engineer"); k != "4" {
 		t.Errorf("key %q", k)
 	}
-	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Idle || st.Request != nil || st.WaitingFor != "" {
+	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Idle || st.Current() != nil || st.WaitingFor != "" {
 		t.Errorf("state after no: %+v", st)
 	}
 }
@@ -171,7 +171,7 @@ func TestAnswerAQuestion(t *testing.T) {
 	if k := key(t, home, "engineer"); k != "2" {
 		t.Errorf("key %q", k)
 	}
-	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Request != nil {
+	if st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json"); st == nil || st.State != session.Working || st.Current() != nil {
 		t.Errorf("state after the pick: %+v", st)
 	}
 }

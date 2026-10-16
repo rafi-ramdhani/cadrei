@@ -4,12 +4,15 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -54,7 +57,7 @@ func TestTheStateHookTracesEachRun(t *testing.T) {
 		}
 	}
 	st := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json")
-	if lines[3].Tool != "Bash" || len(lines[3].Codes) != 1 || lines[3].Codes[0] != st.Request.Code || lines[5].Notice != "permission_prompt" {
+	if lines[3].Tool != "Bash" || len(lines[3].Codes) != 1 || lines[3].Codes[0] != st.Current().Code || lines[5].Notice != "permission_prompt" {
 		t.Errorf("the request's run: %+v %+v", lines[3], lines[5])
 	}
 	raw, _ := os.ReadFile(session.TracePath(c+"/.claude/build", "work-dev-engineer"))
@@ -95,5 +98,139 @@ func TestTheStateHookTakesTheMembersLock(t *testing.T) {
 	feed(t, c, "work-dev-engineer", mkdirRequest)
 	if st := session.ReadState(build + "/state/work-dev-engineer.json"); st.State != session.Waiting {
 		t.Errorf("after the lock: %+v", st)
+	}
+}
+
+// The hook inputs of item 10's turn, with tool_use_id as 2.1.301 gives it:
+// SendMessage and a question side by side.
+const (
+	sendStart   = `{"hook_event_name":"PreToolUse","tool_name":"SendMessage","tool_use_id":"toolu_s","tool_input":{"to":"uds:/tmp/x.sock","message":"Waiting on the user's yes"}}`
+	sendEnd     = `{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_use_id":"toolu_s","tool_input":{"to":"uds:/tmp/x.sock","message":"Waiting on the user's yes"},"tool_response":{"success":true}}`
+	shipInput   = `{"questions":[{"question":"Ship it?","header":"Ship","options":[{"label":"Yes","description":"Ship now."},{"label":"No","description":"Wait."}],"multiSelect":false}]}`
+	shipStart   = `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","tool_input":` + shipInput + `}`
+	shipAsk     = `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":` + shipInput + `}`
+	shipEnd     = `{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","tool_input":` + shipInput + `}`
+	mkdirStart  = `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_m","tool_input":{"command":"mkdir e2e-yes"}}`
+	mkdirFailed = `{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","tool_use_id":"toolu_m","tool_input":{"command":"mkdir e2e-yes"},"error":"denied"}`
+)
+
+// stateOf is the engineer's state in crew c.
+func stateOf(c string) *session.State {
+	return session.ReadState(c + "/.claude/build/state/work-dev-engineer.json")
+}
+
+// Item 10: a question asked side by side with a SendMessage shows as
+// waiting, with its code, from its call's start, in either order, and the
+// code doesn't change when its permission request comes.
+func TestAQuestionBesideASendMessageWaits(t *testing.T) {
+	c := teamOf(t)
+	for name, events := range map[string][]string{
+		"one after the other": {sendStart, sendEnd, shipStart},
+		"side by side":        {sendStart, shipStart, sendEnd},
+	} {
+		feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+		for _, ev := range events {
+			feed(t, c, "work-dev-engineer", ev)
+		}
+		st := stateOf(c)
+		if st.State != session.Waiting || st.Current() == nil || st.Current().Question != "Ship it?" {
+			t.Fatalf("%s: %+v", name, st)
+		}
+		code := st.Current().Code
+		if r := row(t, "engineer"); !strings.Contains(r, "waiting on you · it asked you something: cadrei answer") {
+			t.Errorf("%s: row %q", name, r)
+		}
+		feed(t, c, "work-dev-engineer", shipAsk)
+		if st := stateOf(c); len(st.Requests()) != 1 || st.Current().Code != code {
+			t.Errorf("%s: after its permission request: %+v", name, st.Requests())
+		}
+		feed(t, c, "work-dev-engineer", shipEnd)
+		if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+			t.Errorf("%s: answered in its window: %+v", name, st)
+		}
+	}
+}
+
+// Two prompts at once each get a code, and the listing shows both.
+func TestTwoPromptsAtOnceBothShow(t *testing.T) {
+	c := teamOf(t)
+	for _, ev := range []string{`{"hook_event_name":"UserPromptSubmit"}`, mkdirStart, mkdirRequest, shipStart} {
+		feed(t, c, "work-dev-engineer", ev)
+	}
+	st := stateOf(c)
+	if len(st.Requests()) != 2 || st.Requests()[0].Code == st.Requests()[1].Code {
+		t.Fatalf("requests: %+v", st.Requests())
+	}
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	for _, r := range st.Requests() {
+		if !strings.Contains(out, "  "+r.Code+"  ") {
+			t.Errorf("the listing lacks %s:\n%s", r.Code, out)
+		}
+	}
+	// The Bash prompt failing (a no in its window) ends it alone.
+	feed(t, c, "work-dev-engineer", mkdirFailed)
+	if st := stateOf(c); st.State != session.Waiting || len(st.Requests()) != 1 || st.Current().Kind != session.ForQuestion {
+		t.Errorf("after the Bash call failed: %+v", st)
+	}
+}
+
+// Hooks firing at once, as parallel tool calls make them, each get their
+// change in: the member's lock keeps one from undoing another's.
+func TestHooksAtOnceAllCount(t *testing.T) {
+	c := teamOf(t)
+	rt, err := runtime.Get(runtimeName())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CADREI_HOME", c)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			id := fmt.Sprintf("toolu_%02d", i)
+			in := `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"` + id + `","tool_input":{"command":"make t` + id + `"}}`
+			writeState(rt, c, "work-dev-engineer", []byte(in), time.Now())
+			writeState(rt, c, "work-dev-engineer", []byte(`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make t`+id+`"}}`), time.Now())
+		}(i)
+	}
+	wg.Wait()
+	st := stateOf(c)
+	if len(st.Calls) != 20 || len(st.Requests()) != session.MaxRequests {
+		t.Errorf("%d calls, %d requests", len(st.Calls), len(st.Requests()))
+	}
+	for _, r := range st.Requests() {
+		if r.Call == "" || !strings.HasSuffix(r.Summary, strings.TrimPrefix(r.Call, "toolu_")) {
+			t.Errorf("request %+v isn't its call's", r)
+		}
+	}
+}
+
+// Answering one of two open prompts ends that one alone: the member still
+// waits on the other, under its code.
+func TestAnsweringOneOfTwoLeavesTheOther(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	for _, ev := range []string{mkdirStart, mkdirRequest, shipStart} {
+		feed(t, c, "work-dev-engineer", ev)
+	}
+	st := stateOf(c)
+	if len(st.Requests()) != 2 {
+		t.Fatalf("requests: %+v", st.Requests())
+	}
+	bash, question := st.Requests()[0], st.Requests()[1]
+	ownTerminal(t)
+	if n, out, errOut := call("answer", bash.Code, "yes"); n != 0 {
+		t.Fatalf("exit %d: %s%s", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "1" {
+		t.Errorf("key %q", k)
+	}
+	if st := stateOf(c); st.State != session.Waiting || len(st.Requests()) != 1 || st.Current().Code != question.Code || st.WaitingFor != session.ForQuestion {
+		t.Errorf("after the answer: %+v %+v", st, st.Requests())
 	}
 }

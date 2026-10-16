@@ -292,8 +292,12 @@ type StateEvent struct {
 	Tool   string
 	ToolID string
 	Notice string
-	// Request is what a permission request asks the user, as the runtime
-	// passed it to the hook: never the member's own description of it.
+	// InputKey is a digest of what the tool got, so a permission request,
+	// which names no call, is matched to the call it belongs to.
+	InputKey string
+	// Request is what a permission request or a question asks the user,
+	// as the runtime passed it to the hook: never the member's own
+	// description of it. For EvPromptShown, cadrei reads it off the screen.
 	Request *Request
 }
 
@@ -345,7 +349,9 @@ func RequestText(text string, limit int) string {
 // State event names.
 const (
 	EvPrompt       = "prompt"        // a prompt arrived: working
-	EvToolUse      = "tool"          // a tool runs: working
+	EvToolUse      = "tool"          // a tool call starts: working, unless a prompt is open
+	EvToolDone     = "tool-done"     // a tool call ended, done or failed: its prompt is over
+	EvPromptShown  = "prompt-shown"  // the runtime says a prompt is up: the catch-all
 	EvPermission   = "permission"    // it asks the user: waiting
 	EvStop         = "stop"          // its turn ended: idle
 	EvStopFailure  = "stop-failure"  // its turn ended on an error: idle

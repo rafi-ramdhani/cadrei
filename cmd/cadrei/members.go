@@ -26,13 +26,15 @@ const quietAfter = 10 * time.Minute
 type memberStatus struct {
 	State      string
 	Since      time.Time
-	WaitingFor string        // approval or question
+	WaitingFor string        // approval, question or prompt
 	Error      bool          // idle after a turn that hit an error
 	Quiet      time.Duration // working or waiting, and nothing written for this long
 	QuietSince time.Time     // when the transcript was last written, with Quiet
 	// Request is what it waits on the user for, with its code, while it
-	// waits: the runtime's own record of it, never consent.
-	Request *session.Request
+	// waits: the runtime's own record of it, never consent. With more than
+	// one prompt open, it's the oldest; Requests holds them all.
+	Request  *session.Request
+	Requests []*session.Request
 	// Context is how full its context is, from its transcript, when
 	// HasContext.
 	Context    runtime.ContextUse
@@ -70,7 +72,7 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 	}
 	m := memberStatus{State: st.State, Since: st.Since, WaitingFor: st.WaitingFor, Error: st.Error}
 	if st.State == session.Waiting {
-		m.Request = st.Request
+		m.Request, m.Requests = st.Current(), st.Requests()
 	}
 	if (m.State == session.Working || m.State == session.Waiting) && transcript != "" {
 		if fi, err := os.Stat(transcript); err == nil && now.Sub(fi.ModTime()) >= quietAfter {

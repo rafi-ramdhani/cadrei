@@ -281,8 +281,8 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		if phase == session.TraceEnd {
 			line.MS = time.Since(start).Milliseconds()
 			line.Before, line.After = session.TraceState(prev), session.TraceState(next)
-			if next != nil && next.Request != nil {
-				line.Codes = []string{next.Request.Code}
+			for _, r := range next.Requests() {
+				line.Codes = append(line.Codes, r.Code)
 			}
 			if err != nil {
 				line.Err = err.Error()

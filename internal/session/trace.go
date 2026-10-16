@@ -98,11 +98,7 @@ func TraceState(s *State) string {
 	if s == nil {
 		return "none"
 	}
-	n := 0
-	if s.Request != nil {
-		n = 1
-	}
-	return s.State + "/" + strconv.Itoa(n)
+	return s.State + "/" + strconv.Itoa(len(s.Requests()))
 }
 
 // TraceCounts sums up a member's trace.
