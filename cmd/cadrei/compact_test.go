@@ -28,14 +28,18 @@ func inputMember(t *testing.T, home string, ready, echo bool) {
 		"[ -n \"$TMUX\" ] || exit 0\n"+footer+quiet+"printf '❯ '\nIFS= read -r line\nprintf '%s\\n' \"$line\" > \""+home+"/typed\"\nexec sleep 300\n")
 	must(t, "up", "dev/engineer")
 	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
-	for i := 0; i < 100 && !strings.Contains(session.Default().Screen(session.SessionName("work", "dev"), "engineer"), "❯"); i++ {
+	for i := 0; !strings.Contains(session.Default().Screen(session.SessionName("work", "dev"), "engineer"), "❯"); i++ {
+		if i == 100 {
+			t.Fatal("the stub member's prompt never showed")
+		}
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
-// typedLine is the line the stub member got, after up to a second.
-func typedLine(home string) string {
-	for i := 0; i < 20; i++ {
+// typedLine is the line the stub member got, after up to within: a
+// loaded machine can take more than a second to pass the keys on.
+func typedLine(home string, within time.Duration) string {
+	for end := time.Now().Add(within); time.Now().Before(end); {
 		if raw, err := os.ReadFile(home + "/typed"); err == nil {
 			return string(raw)
 		}
@@ -56,7 +60,7 @@ func TestCompactTypesItIntoAnIdleMember(t *testing.T) {
 	if n, out, errOut := call("compact", "dev/engineer"); n != 0 || out != "+ Compacting the engineer in dev's conversation.\n" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
 	}
-	if got := typedLine(home); got != "/compact\n" {
+	if got := typedLine(home, 5*time.Second); got != "/compact\n" {
 		t.Errorf("typed %q", got)
 	}
 }
@@ -85,7 +89,7 @@ func TestCompactRefusesABusyMember(t *testing.T) {
 		t.Errorf("member: %d %q", n, errOut)
 	}
 	os.Unsetenv("CADREI_MEMBER")
-	if typedLine(home) != "" {
+	if typedLine(home, time.Second) != "" {
 		t.Error("something was typed")
 	}
 	if n, _, errOut := call("compact", "dev"); n != 1 || flat(errOut) != "cadrei: use cadrei compact <team>/<role> [project]." {
@@ -106,7 +110,7 @@ func TestCompactWaitsForAReadyPrompt(t *testing.T) {
 	if n, _, errOut := call("compact", "dev/engineer"); n != 1 || !strings.Contains(flat(errOut), "is busy") {
 		t.Errorf("exit %d %q", n, errOut)
 	}
-	if typedLine(home) != "" {
+	if typedLine(home, time.Second) != "" {
 		t.Error("something was typed")
 	}
 }
@@ -124,7 +128,7 @@ func TestCompactPressesNoEnterUnseen(t *testing.T) {
 	if n, _, errOut := call("compact", "dev/engineer"); n != 1 || flat(errOut) != "cadrei: I typed /compact, but it didn't show in the engineer in dev's input, so I didn't press Enter. Check its window: cadrei attach dev" {
 		t.Errorf("exit %d %q", n, errOut)
 	}
-	if typedLine(home) != "" {
+	if typedLine(home, time.Second) != "" {
 		t.Error("Enter was pressed")
 	}
 }

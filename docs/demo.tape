@@ -11,7 +11,7 @@
 #   first run offers to plug those back in instead. A development build of
 #   cadrei runs only with HOME in a temporary folder; for a throwaway HOME
 #   elsewhere, set CADREI_DEV_REAL_HOME=1.
-# - In that HOME: cadrei 0.2.1 on PATH, tmux 3.2 or newer, git with a name
+# - In that HOME: cadrei 0.2.2 on PATH, tmux 3.2 or newer, git with a name
 #   and email set, and Claude Code installed and logged in. Run claude once
 #   there and log in: that makes ~/.claude.json, so the first run can trust
 #   the new crew's folder and your orchestrator opens without a trust prompt.
