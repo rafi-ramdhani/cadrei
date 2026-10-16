@@ -163,6 +163,10 @@ func (m memberStatus) text(now time.Time) string {
 			s = "waiting on you · approve it with cadrei answer " + r.Code + " yes"
 		case r != nil && r.Kind == session.ForQuestion && !r.Multi:
 			s = "waiting on you · it asked you something: cadrei answer"
+		case r != nil && r.Kind == session.ForPrompt && !r.Multi:
+			s = "waiting on you · it shows a prompt: cadrei answer"
+		case r != nil && r.Kind == session.ForPrompt:
+			s = "waiting on you · it shows a prompt in its window"
 		case m.WaitingFor == session.ForQuestion:
 			s = "waiting on you · it asked you something in its window"
 		default:

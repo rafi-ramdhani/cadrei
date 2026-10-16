@@ -86,6 +86,8 @@ func TestTheToolsPageIsTheSpecs(t *testing.T) {
 	for added, was := range map[string]string{
 		"a `waiting_for`, a request `kind`, a snapshot reason":                "a `waiting_for`, a snapshot reason",
 		" an unknown request `kind` as one to answer in the member's window,": "",
+		// 0.2.3 (PR A): a prompt read off a member's screen.
+		"`approval` (it wants to run something), `question` (it asked you something) or `prompt` (a prompt cadrei read off its screen, when Claude Code didn't say what it asks)": "`approval` (it wants to run something) or `question` (it asked you something)",
 	} {
 		if !strings.Contains(base, added) {
 			t.Errorf("docs/tools.md lacks %q", added)

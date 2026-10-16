@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -232,5 +233,129 @@ func TestAnsweringOneOfTwoLeavesTheOther(t *testing.T) {
 	}
 	if st := stateOf(c); st.State != session.Waiting || len(st.Requests()) != 1 || st.Current().Code != question.Code || st.WaitingFor != session.ForQuestion {
 		t.Errorf("after the answer: %+v %+v", st, st.Requests())
+	}
+}
+
+// The catch-all's trigger, as 2.1.301 sends it about 6 seconds after any
+// prompt shows.
+const promptShown = `{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission","title":"Claude Code"}`
+
+// feedInPane runs the state hook as the member's own hooks run: inside
+// its tmux pane, with $TMUX and $TMUX_PANE naming it.
+func feedInPane(t *testing.T, c, role, payload string) {
+	t.Helper()
+	out, err := exec.Command("tmux", "-S", session.Default().Path(), "display", "-p", "-t", "=cadrei-work-dev:="+role, "#{pane_id}").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX", session.Default().Path()+",1,0")
+	t.Setenv("TMUX_PANE", strings.TrimSpace(string(out)))
+	feed(t, c, "work-dev-"+role, payload)
+	os.Unsetenv("TMUX")
+	os.Unsetenv("TMUX_PANE")
+}
+
+// A prompt no hook recorded (here an MCP tool's, with its call's start
+// lost) is read off the member's screen when the runtime says a prompt is
+// up: its box and its options, under a code. The answer checks the screen
+// shows that same prompt, then presses the option's number, which can be
+// one that allows more than once, shown word for word.
+func TestAPromptOffTheScreenGetsACode(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "mcp-live.txt")
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feedInPane(t, c, "engineer", promptShown)
+	st := stateOf(c)
+	r := st.Current()
+	if st.State != session.Waiting || st.WaitingFor != session.ForPrompt || r == nil || r.Source != session.FromScreen || r.Multi ||
+		len(r.Options) != 3 || r.Options[0] != "Yes" || r.Options[2] != "No" || !strings.Contains(r.Question, `path: "resume.pdf"`) || !strings.Contains(r.Question, "Do you want to proceed?") {
+		t.Fatalf("recorded: %+v %+v", st, r)
+	}
+	if row := row(t, "engineer"); !strings.Contains(row, "waiting on you · it shows a prompt: cadrei answer") {
+		t.Errorf("row %q", row)
+	}
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	if !strings.Contains(out, "  "+r.Code+"  The engineer in dev shows a prompt:") || !strings.Contains(out, "         2. Yes, and don't ask again for files - Upload commands in") {
+		t.Errorf("listing:\n%s", out)
+	}
+	// What the screen shows must be what was recorded: a changed record
+	// presses nothing.
+	session.ChangeState(c+"/.claude/build", "work-dev-engineer", time.Second, func(s *session.State) *session.State {
+		changed := *s
+		other := *s.Current()
+		other.Question += " (changed)"
+		changed.Open = []*session.Request{&other}
+		return &changed
+	})
+	if n, _, errOut := call("answer", r.Code, "2"); n == 0 || !strings.Contains(errOut, "I couldn't find that prompt on the engineer's screen") {
+		t.Errorf("changed: %d %q", n, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "" {
+		t.Fatalf("pressed %q for a changed prompt", k)
+	}
+	session.ChangeState(c+"/.claude/build", "work-dev-engineer", time.Second, func(*session.State) *session.State { return st })
+	n, out, errOut := call("answer", r.Code, "2")
+	if n != 0 || flat(out) != "+ Answered the engineer in dev: 2. Yes, and don't ask again for files - Upload commands in <work>…" {
+		t.Errorf("answer: %d %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "2" {
+		t.Errorf("key %q", k)
+	}
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("after the answer: %+v", st)
+	}
+}
+
+// With a request the hooks recorded, the catch-all leaves it: the screen
+// isn't read. Outside a pane, or with no prompt on the screen, nothing is
+// recorded.
+func TestTheCatchAllOnlyFillsAGap(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	feed(t, c, "work-dev-engineer", mkdirStart)
+	feed(t, c, "work-dev-engineer", mkdirRequest)
+	before := stateOf(c)
+	feedInPane(t, c, "engineer", promptShown)
+	if after := stateOf(c); !session.Same(before, after) {
+		t.Errorf("a recorded request changed: %+v", after.Requests())
+	}
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feed(t, c, "work-dev-engineer", promptShown) // no $TMUX_PANE
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("outside a pane: %+v", st)
+	}
+	feedInPane(t, c, "reviewer", promptShown) // no such window: nothing read
+	if st := stateOf(c); st.State != session.Working {
+		t.Errorf("no screen: %+v", st)
+	}
+}
+
+// A prompt cadrei can't read whole (its top off the screen) is recorded
+// for the member's window, so nothing offers an answer that can't work.
+func TestATallPromptOffTheScreenIsLeftToItsWindow(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "tall-live.txt")
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feedInPane(t, c, "engineer", promptShown)
+	st := stateOf(c)
+	if st.State != session.Waiting || st.Current() == nil || !st.Current().Multi {
+		t.Fatalf("tall: %+v %+v", st, st.Current())
+	}
+	if row := row(t, "engineer"); !strings.Contains(row, "it shows a prompt in its window") {
+		t.Errorf("row %q", row)
+	}
+	ownTerminal(t)
+	if n, _, errOut := call("answer", st.Current().Code, "1"); n == 0 || !strings.Contains(errOut, "couldn't read that prompt whole") {
+		t.Errorf("answer: %d %q", n, errOut)
 	}
 }

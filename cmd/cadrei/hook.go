@@ -296,9 +296,47 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		if ev.Name == "" {
 			return prev
 		}
+		// The catch-all: the runtime says a prompt is up, and no hook
+		// recorded one, so cadrei reads it off the member's own screen.
+		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) == 0 {
+			ev.Request = screenRequest(session.OwnScreen())
+		}
 		return session.Apply(prev, ev, time.Now())
 	})
 	note(session.TraceEnd, prev, next, err)
+}
+
+// screenLimit is how much of a screen prompt's box a request keeps: more
+// than a hook's summary, since an answer checks the box whole.
+const screenLimit = 2000
+
+// screenRequest is the prompt at the bottom of a member's screen as a
+// request: its box's text and its options' labels, or nil when no prompt
+// shows. One cadrei can't read whole (its top off the screen, its box
+// past screenLimit, or more options than it keeps) is recorded for the
+// member's window to answer.
+func screenRequest(screen string) *runtime.Request {
+	opts, box, whole := screenPrompt(screen)
+	if len(opts) == 0 {
+		return nil
+	}
+	var lines []string
+	for _, l := range box {
+		lines = append(lines, strings.TrimRight(l, " "))
+	}
+	text := strings.Trim(strings.Join(lines, "\n"), "\n ")
+	r := &runtime.Request{Question: runtime.RequestText(text, screenLimit)}
+	for i, o := range opts {
+		if i == runtime.MaxOptions {
+			r.Multi = true
+			break
+		}
+		r.Options = append(r.Options, runtime.RequestText(o.label, runtime.OptionLimit))
+	}
+	if !whole || text == "" || strings.HasSuffix(r.Question, "…") {
+		r.Multi = true
+	}
+	return r
 }
 
 // traceRun is a new id for one hook run in a member's trace.

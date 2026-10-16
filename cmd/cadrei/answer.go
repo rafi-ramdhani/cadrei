@@ -139,12 +139,12 @@ func act(req *session.Request) (verb, object, kind string) {
 var screenTools = setOf("Bash", "Write", "Edit")
 
 // answerable reports whether cadrei can answer req from here: a question
-// with one pick, or a prompt for one of screenTools with what it would
-// run or touch recorded in full. Any other is answered in the member's
-// window.
+// with one pick, a prompt for one of screenTools with what it would run
+// or touch recorded in full, or a prompt read off the screen whole. Any
+// other is answered in the member's window.
 func answerable(req *session.Request) bool {
 	switch req.Kind {
-	case session.ForQuestion:
+	case session.ForQuestion, session.ForPrompt:
 		return !req.Multi && req.Question != "" && len(req.Options) > 0
 	case session.ForApproval:
 		return screenTools[req.Tool] && req.Summary != "" && !cutShort(req)
@@ -171,15 +171,22 @@ func (w *waitingOn) note() string {
 		}
 		return who + " wants to " + verb + ": " + object + ". Answer with cadrei answer " + w.req.Code + " yes, or no."
 	case w.req.Kind == session.ForQuestion && answerable(w.req):
-		var opts []string
-		for i, o := range w.req.Options {
-			opts = append(opts, fmt.Sprintf("%d. %s", i+1, o))
-		}
-		return who + " asks: " + w.req.Question + " Options: " + strings.Join(opts, ", ") + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
+		return who + " asks: " + w.req.Question + " Options: " + numbered(w.req.Options) + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	case w.req.Kind == session.ForQuestion:
 		return who + " asks: " + w.req.Question + window
+	case w.req.Kind == session.ForPrompt && answerable(w.req):
+		return who + " shows a prompt: " + w.req.Question + " Options: " + numbered(w.req.Options) + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
+}
+
+// numbered lists options as 1. a, 2. b.
+func numbered(options []string) string {
+	var opts []string
+	for i, o := range options {
+		opts = append(opts, fmt.Sprintf("%d. %s", i+1, o))
+	}
+	return strings.Join(opts, ", ")
 }
 
 // nothingWaiting says a code names no request.
@@ -193,6 +200,8 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 	switch {
 	case w.req.Kind == session.ForQuestion && w.req.Multi:
 		return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
+	case w.req.Kind == session.ForPrompt && !answerable(w.req):
+		return "Cadrei couldn't read that prompt whole off the screen, so answer it in its window: " + c(w.attach())
 	case cutShort(w.req) && screenTools[w.req.Tool]:
 		return "That's too long for cadrei to check whole, so answer it in its window: " + c(w.attach())
 	case !answerable(w.req):
@@ -201,7 +210,7 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 		if choice != "yes" && choice != "no" {
 			return code + " is a yes-or-no prompt. Use " + c("cadrei answer "+code+" yes") + " or " + c("cadrei answer "+code+" no") + "."
 		}
-	case w.req.Kind == session.ForQuestion:
+	case w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt:
 		n, err := strconv.Atoi(choice)
 		if err != nil || strconv.Itoa(n) != choice || n < 1 || n > len(w.req.Options) {
 			return fmt.Sprintf("%s has options 1 to %d. Use %s, for example.", code, len(w.req.Options), c("cadrei answer "+code+" 1"))
@@ -213,9 +222,13 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 // askReason is the guard's text in the runtime's permission prompt: what
 // a yes there does, built from the record only.
 func askReason(w *waitingOn, choice string) string {
-	if w.req.Kind == session.ForQuestion {
+	switch w.req.Kind {
+	case session.ForQuestion:
 		n, _ := strconv.Atoi(choice)
 		return "Cadrei: answer " + w.place() + " with \"" + choice + ". " + w.req.Options[n-1] + "\"? It asks: " + w.req.Question
+	case session.ForPrompt:
+		n, _ := strconv.Atoi(choice)
+		return "Cadrei: answer " + w.place() + " with \"" + choice + ". " + w.req.Options[n-1] + "\"? Its screen shows: " + w.req.Question
 	}
 	verb, object, _ := act(w.req)
 	if choice == "no" {
@@ -282,7 +295,7 @@ func runAnswer(e *env) int {
 	answered(rt.BuildDir(r.Path), w, choice)
 	verb, object, _ := act(w.req)
 	switch {
-	case w.req.Kind == session.ForQuestion:
+	case w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt:
 		n, _ := strconv.Atoi(choice)
 		e.note("", markDone, "Answered "+w.place()+": "+choice+". "+w.req.Options[n-1])
 	case choice == "yes":
@@ -357,6 +370,15 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 		case w.req.Kind == session.ForQuestion:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
 			e.say("%s", "       This needs more than one pick. Answer it in its window: "+cmd(w.attach()))
+		case w.req.Kind == session.ForPrompt && answerable(w.req):
+			e.say("%s", "  "+code+"  "+capital(w.place())+" shows a prompt:")
+			for _, l := range strings.Split(w.req.Question, "⏎") {
+				e.say("%s", "         "+strings.TrimSpace(l))
+			}
+			for i, o := range w.req.Options {
+				e.say("%s", fmt.Sprintf("         %d. %s", i+1, o))
+			}
+			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" 1"))
 		default:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
 			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
@@ -484,6 +506,17 @@ func promptShows(screen string, w *waitingOn) bool {
 	}
 	req := w.req
 	switch req.Kind {
+	case session.ForPrompt:
+		// Read off the screen: the same options, and the same box, whole.
+		if len(opts) != len(req.Options) {
+			return false
+		}
+		for i, o := range req.Options {
+			if !sameLabel(opts[i].label, o) {
+				return false
+			}
+		}
+		return squeeze(strings.Join(box, "\n")) == squeeze(req.Question)
 	case session.ForQuestion:
 		if len(opts) < len(req.Options) {
 			return false
@@ -578,7 +611,7 @@ func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (k
 		return "", "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything." + window
 	}
 	opts, _, _ := screenPrompt(screen)
-	if w.req.Kind == session.ForQuestion {
+	if w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt {
 		return choice, ""
 	}
 	label := "Yes"
