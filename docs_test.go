@@ -427,3 +427,27 @@ func TestABlockedReplyStaysBlocked(t *testing.T) {
 		t.Error("SKILL.md tells the orchestrator to read a member's window")
 	}
 }
+
+// The demo tape asks for the latest release on PATH: the newest version
+// CHANGELOG.md has a heading for, so a release can't leave it behind.
+func TestTheDemoTapeNamesTheLatestRelease(t *testing.T) {
+	changelog, err := os.ReadFile("CHANGELOG.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest := regexp.MustCompile(`(?m)^## (\d+\.\d+\.\d+) - `).FindSubmatch(changelog)
+	if latest == nil {
+		t.Fatal("CHANGELOG.md has no release")
+	}
+	tape, err := os.ReadFile("docs/demo.tape")
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := regexp.MustCompile(`cadrei (\d+\.\d+\.\d+) on PATH`).FindSubmatch(tape)
+	if named == nil {
+		t.Fatal("docs/demo.tape names no cadrei version")
+	}
+	if string(named[1]) != string(latest[1]) {
+		t.Errorf("docs/demo.tape asks for cadrei %s, the latest release is %s", named[1], latest[1])
+	}
+}
