@@ -234,6 +234,24 @@ func TestAnsweringOneOfTwoLeavesTheOther(t *testing.T) {
 	if st := stateOf(c); st.State != session.Waiting || len(st.Requests()) != 1 || st.Current().Code != question.Code || st.WaitingFor != session.ForQuestion {
 		t.Errorf("after the answer: %+v %+v", st, st.Requests())
 	}
+	// The prompt log: two opened, one answered by its code; the turn's
+	// end cancels the other.
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"Stop"}`)
+	if n := session.CountPrompts(c + "/.claude/build"); n != (session.PromptCounts{Opened: 2, ByCode: 1, Cancelled: 1}) {
+		t.Errorf("prompt log: %+v", n)
+	}
+}
+
+// A prompt answered in the member's window (its call ends with no answer
+// by code) is the miss the prompt log counts.
+func TestThePromptLogCountsAnswersInTheWindow(t *testing.T) {
+	c := teamOf(t)
+	for _, ev := range []string{`{"hook_event_name":"UserPromptSubmit"}`, mkdirStart, mkdirRequest, mkdirFailed, shipStart, shipEnd} {
+		feed(t, c, "work-dev-engineer", ev)
+	}
+	if n := session.CountPrompts(c + "/.claude/build"); n != (session.PromptCounts{Opened: 2, InWindow: 2}) {
+		t.Errorf("prompt log: %+v", n)
+	}
 }
 
 // The catch-all's trigger, as 2.1.301 sends it about 6 seconds after any
@@ -307,6 +325,10 @@ func TestAPromptOffTheScreenGetsACode(t *testing.T) {
 	}
 	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
 		t.Errorf("after the answer: %+v", st)
+	}
+	raw, _ := os.ReadFile(session.PromptLogPath(c + "/.claude/build"))
+	if !strings.Contains(string(raw), `"source":"screen","event":"opened"`) || session.CountPrompts(c+"/.claude/build").ByCode != 1 {
+		t.Errorf("prompt log:\n%s", raw)
 	}
 }
 

@@ -62,11 +62,15 @@ func TracePath(build, name string) string {
 
 // AppendTrace adds one line to a trace, in one write: lines from hooks
 // running at once don't mix. It never follows a symlink.
-func AppendTrace(path string, l TraceLine) error {
+func AppendTrace(path string, l TraceLine) error { return appendJSON(path, l) }
+
+// appendJSON adds v to the file at path as one JSON line, in one write,
+// never through a symlink.
+func appendJSON(path string, v any) error {
 	if path == "" {
 		return nil
 	}
-	raw, err := json.Marshal(l)
+	raw, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}

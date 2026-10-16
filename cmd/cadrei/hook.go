@@ -303,6 +303,9 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		}
 		return session.Apply(prev, ev, time.Now())
 	})
+	if err == nil {
+		session.LogPrompts(build, name, prev, next, session.Ending(ev.Name), time.Now())
+	}
 	note(session.TraceEnd, prev, next, err)
 }
 

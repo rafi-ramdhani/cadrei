@@ -406,6 +406,25 @@ check "ls --json --watch | head -1 ends cleanly" bash -c "first=\$(cadrei ls --j
 check "a started member is starting until its hooks write" grep -q '"state":"starting"' "$C/.claude/build/state/demo-dev-app-engineer.json"
 check "its hooks write what it's doing" bash -c "echo '{\"hook_event_name\":\"PermissionRequest\",\"tool_name\":\"Bash\"}' | CADREI_HOME='$C' CADREI_MEMBER=demo-dev-app-engineer cadrei hook state && grep -q '\"state\":\"waiting\"' '$C/.claude/build/state/demo-dev-app-engineer.json'"
 check "its settings copy runs the state hook" bash -c "grep -q 'hook state' \"\$(args_of demo-dev-app-engineer | grep -A1 -x -- --settings | tail -1)\""
+# 0.2.3 (PR A): a question waits from its call's start, another call
+# ending leaves it waiting, its own call's end ends it, each hook run is
+# traced, and the prompt log notes how it ended, with nothing it asked.
+check "its settings copy runs the state hook when a tool fails too" bash -c "grep -q PostToolUseFailure \"\$(args_of demo-dev-app-engineer | grep -A1 -x -- --settings | tail -1)\""
+st="$C/.claude/build/state"
+printf '%s\n' '{"hook_event_name":"UserPromptSubmit"}' > "$T/pra-prompt.json"
+printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_q","tool_input":{"questions":[{"question":"Ship the smoke build?","options":[{"label":"Yes"},{"label":"No"}]}]}}' > "$T/pra-ask.json"
+printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"SendMessage","tool_use_id":"toolu_s","tool_input":{"to":"x","message":"waiting"}}' > "$T/pra-send.json"
+printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"SendMessage","tool_use_id":"toolu_s"}' > "$T/pra-sent.json"
+printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_q"}' > "$T/pra-asked.json"
+state_hook() { CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state < "$T/pra-$1.json"; }
+state_hook prompt; state_hook send; state_hook ask
+check "a question waits from its call's start" grep -q '"kind":"question"' "$st/demo-dev-app-engineer.json"
+state_hook sent
+check "another call ending leaves it waiting" grep -q '"state":"waiting"' "$st/demo-dev-app-engineer.json"
+state_hook asked
+check "its own call's end ends it" bash -c "grep -q '\"state\":\"working\"' '$st/demo-dev-app-engineer.json' && ! grep -q '\"requests\"' '$st/demo-dev-app-engineer.json'"
+check "each hook run is traced, without what the tool got" bash -c "test \$(grep -c '\"phase\":\"end\"' '$st/demo-dev-app-engineer.trace') -ge 5 && ! grep -q 'smoke build' '$st/demo-dev-app-engineer.trace'"
+check "the prompt log notes it answered in its window" bash -c "grep -q '\"ended\":\"in_window\"' '$st/prompts.log' && ! grep -q 'smoke build' '$st/prompts.log'"
 cd "$HOME/.cadrei/life"
 cadrei up dev/engineer >/dev/null
 check "another cadrei's team runs apart" running cadrei-life-dev

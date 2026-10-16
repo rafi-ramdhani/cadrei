@@ -4,6 +4,16 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 
 ## Unreleased
 
+### Fixed
+
+- **A member's question shows as waiting right away.** cadrei records a question the moment the member asks it, before its box draws, and another tool finishing in the same turn no longer hides it. Two prompts at once each get their own code, and answering one leaves the other waiting.
+- **A prompt cadrei wasn't told about still gets a code.** When Claude Code says a prompt is up and cadrei has no record of it, cadrei reads it off the member's screen. You answer it with an option's number, and cadrei checks the screen still shows that same prompt before it presses anything. `cadrei ls --json` shows these with `waiting_for` and a request `kind` of `prompt`.
+- Hooks that fire at the same moment no longer undo each other's record of what a member is doing.
+
+### New
+
+- Each member keeps a short log of what its hooks did (`state/<member>.trace` in the crew's build folder), and the crew keeps a log of how each prompt ended (`state/prompts.log`): answered by its code, in the member's window, or cancelled. That way a prompt that never reached your orchestrator can be explained. Neither log holds what a member asked or ran, and each one stays small.
+
 ## 0.2.2 - 2026-10-15
 
 Your orchestrator's memory now travels with your crew, your orchestrator can answer a waiting member for you, and cadrei sessions can't type into tmux windows. All changes since 0.2.1: [v0.2.1...v0.2.2](https://github.com/rafi-ramdhani/cadrei/compare/v0.2.1...v0.2.2).

@@ -310,9 +310,10 @@ func runAnswer(e *env) int {
 // lock, so nothing offers the code again. A yes or a pick lets the member
 // go on: working (its next hook comes only when the tool ends), or still
 // waiting when another prompt is open. A no stops its turn, and every
-// prompt in it, with no hook to say so: idle.
+// prompt in it, with no hook to say so: idle. The prompt log notes it as
+// answered by its code, and any other a no ended as cancelled.
 func answered(build string, w *waitingOn, choice string) {
-	session.ChangeState(build, w.name, 2*time.Second, func(st *session.State) *session.State {
+	prev, next, err := session.ChangeState(build, w.name, 2*time.Second, func(st *session.State) *session.State {
 		if st == nil || !slices.ContainsFunc(st.Requests(), func(r *session.Request) bool { return r.Code == w.req.Code }) {
 			return st
 		}
@@ -335,6 +336,14 @@ func answered(build string, w *waitingOn, choice string) {
 		}
 		return &next
 	})
+	if err == nil {
+		session.LogPrompts(build, w.name, prev, next, func(code string) string {
+			if code == w.req.Code {
+				return session.EndedByCode
+			}
+			return session.EndedCancelled
+		}, time.Now())
+	}
 }
 
 // listWaiting is cadrei answer with no code: who's waiting, with the line
