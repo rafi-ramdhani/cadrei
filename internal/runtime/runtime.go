@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -285,13 +286,18 @@ type StateEvent struct {
 	Question   bool   // a permission request that is a question to the user
 	Session    string // the conversation id
 	Transcript string // the conversation's transcript
-	// What the member's trace notes about the event: the runtime's own
-	// name for it, the tool and the runtime's id for the tool call, and a
-	// notification's type. Never what the tool was given.
+	// The runtime's own name for the event, the tool and the runtime's id
+	// for the tool call, and a notification's type. Never what the tool
+	// was given. Hook and Notice are one plain word (TraceWord); the tool
+	// and the id are as the hook got them, for matching, and the trace
+	// notes them only when they're one plain word too.
 	Hook   string
 	Tool   string
 	ToolID string
 	Notice string
+	// NoPrompt: the member's own screen, read when an idle reminder comes
+	// while a request is open, shows no prompt.
+	NoPrompt bool
 	// InputKey is a digest of what the tool got, so a permission request,
 	// which names no call, is matched to the call it belongs to.
 	InputKey string
@@ -320,6 +326,18 @@ const (
 	OptionLimit  = 80
 	MaxOptions   = 6
 )
+
+// traceRule is what a hook's own names and ids may be in a member's
+// trace: one word, so the trace never holds anything else the hook got.
+var traceRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// TraceWord is s when it fits traceRule, or "".
+func TraceWord(s string) string {
+	if !traceRule.MatchString(s) {
+		return ""
+	}
+	return s
+}
 
 // RequestText makes text one printable line of at most limit characters:
 // a line break shows as ⏎, any other control or invisible character as ?,

@@ -66,6 +66,21 @@ func TestATraceIsBounded(t *testing.T) {
 	}
 }
 
+// Review finding 6: a trace no hook could rotate (none got the lock)
+// stays bounded: past twice the limit, the next line moves it aside.
+func TestATraceStaysBoundedWithoutTheLock(t *testing.T) {
+	path := TracePath(t.TempDir(), "w-dev-engineer")
+	now := time.Now()
+	for i := 0; i < 5000; i++ {
+		AppendTrace(path, TraceLine{T: now, Run: "r" + strings.Repeat("x", 200), Phase: TraceStart})
+	}
+	for _, p := range []string{path, path + ".1"} {
+		if st, err := os.Stat(p); err != nil || st.Size() > 2*traceLimit+1024 {
+			t.Errorf("%s: %v %v", p, st, err)
+		}
+	}
+}
+
 // A trace is never written through a symlink.
 func TestATraceFollowsNoLink(t *testing.T) {
 	dir := t.TempDir()

@@ -275,7 +275,7 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		return
 	}
 	trace := session.TracePath(build, name)
-	line := session.TraceLine{Run: traceRun(), Hook: cmp.Or(ev.Hook, ev.Name), Tool: ev.Tool, ID: ev.ToolID, Notice: ev.Notice}
+	line := session.TraceLine{Run: traceRun(), Hook: cmp.Or(ev.Hook, ev.Name), Tool: runtime.TraceWord(ev.Tool), ID: runtime.TraceWord(ev.ToolID), Notice: ev.Notice}
 	note := func(phase string, prev, next *session.State, err error) {
 		line.T, line.Phase = time.Now(), phase
 		if phase == session.TraceEnd {
@@ -301,6 +301,12 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) == 0 {
 			ev.Request = screenRequest(session.OwnScreen())
 		}
+		// An idle reminder over an open request: a no or Esc in the
+		// member's window ends a prompt with no hook to say so, and the
+		// screen tells whether one still shows.
+		if ev.Name == runtime.EvIdleReminder && len(prev.Requests()) > 0 {
+			ev.NoPrompt = noPrompt(session.OwnScreen())
+		}
 		return session.Apply(prev, ev, time.Now())
 	})
 	if err == nil {
@@ -316,8 +322,9 @@ const screenLimit = 2000
 // screenRequest is the prompt at the bottom of a member's screen as a
 // request: its box's text and its options' labels, or nil when no prompt
 // shows. One cadrei can't read whole (its top off the screen, its box
-// past screenLimit, or more options than it keeps) is recorded for the
-// member's window to answer.
+// past screenLimit, or more options than it keeps), one that takes more
+// than one key, or one with no option cadrei may press (picks) is
+// recorded for the member's window to answer.
 func screenRequest(screen string) *runtime.Request {
 	opts, box, whole := screenPrompt(screen)
 	if len(opts) == 0 {
@@ -336,7 +343,7 @@ func screenRequest(screen string) *runtime.Request {
 		}
 		r.Options = append(r.Options, runtime.RequestText(o.label, runtime.OptionLimit))
 	}
-	if !whole || text == "" || strings.HasSuffix(r.Question, "…") {
+	if !whole || text == "" || strings.HasSuffix(r.Question, "…") || takesMore(box, opts) || len(picks(r.Options)) == 0 {
 		r.Multi = true
 	}
 	return r

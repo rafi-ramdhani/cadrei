@@ -60,7 +60,9 @@ func promptMember(t *testing.T, home, role, fixture string) {
 		"stty min 0 time 5\ne=$(dd bs=1 count=8 2>/dev/null)\nstty sane\n"+
 		"printf '%s' \"$e\" > \""+home+"/extra-"+role+"\"\n"+
 		"printf '%s' \"$k\" > \""+home+"/key-"+role+"\"\n"+
-		"[ -e \""+home+"/stay\" ] || printf '\\033[H\\033[2J'\nexec sleep 300\n")
+		"[ -e \""+home+"/stay\" ] || printf '\\033[H\\033[2J'\n"+
+		// What its window shows next, when a test gives it.
+		"[ -e \""+home+"/after-"+role+"\" ] && cat \""+home+"/after-"+role+"\"\nexec sleep 300\n")
 	must(t, "up", "dev/"+role)
 	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
 	screen := ""

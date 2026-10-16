@@ -173,7 +173,7 @@ A member that hasn't replied yet, or whose chat cadrei can't find, has no `conte
 | `kind` | string | `approval` (a permission prompt), `question`, or `prompt` (read off the member's screen: an option's number answers it). Treat any other kind as one to answer in the member's window |
 | `tool` | string, optional | The tool it wants to use, like `Bash` |
 | `summary` | string, optional | What it would run or touch (a command, a path, a URL), a question's text, or the text of a prompt read off the screen. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
-| `options` | list of strings, optional | A question's or a screen prompt's option labels, at most 6 |
+| `options` | list of strings, optional | A question's or a screen prompt's option labels, at most 6, numbered from 1 as the screen shows them. In a screen prompt, `cadrei answer` only presses the plain `Yes` or `No`, or a question's own options |
 | `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, holds more than one question, has no options or more than 6, or cadrei couldn't read it |
 
 Each project in `projects`:

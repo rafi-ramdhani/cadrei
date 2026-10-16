@@ -23,7 +23,8 @@ import (
 //
 // It lives in the build folder's state/<member>.trace, and is bounded: past
 // traceLimit, the hook that holds the lock moves it to <member>.trace.1
-// (replacing the one before), so a member keeps two files at most.
+// (replacing the one before), so a member keeps two files at most. Past
+// twice that, with the lock never taken, any hook moves it.
 
 // TraceLine is one line of a member's trace.
 type TraceLine struct {
@@ -61,8 +62,15 @@ func TracePath(build, name string) string {
 }
 
 // AppendTrace adds one line to a trace, in one write: lines from hooks
-// running at once don't mix. It never follows a symlink.
-func AppendTrace(path string, l TraceLine) error { return appendJSON(path, l) }
+// running at once don't mix. It never follows a symlink. A trace twice
+// past traceLimit is one no hook could rotate (none got the lock), so it
+// moves it aside itself: the trace stays bounded either way.
+func AppendTrace(path string, l TraceLine) error {
+	if st, err := os.Lstat(path); err == nil && st.Mode().IsRegular() && st.Size() > 2*traceLimit {
+		os.Rename(path, path+".1")
+	}
+	return appendJSON(path, l)
+}
 
 // appendJSON adds v to the file at path as one JSON line, in one write,
 // never through a symlink.

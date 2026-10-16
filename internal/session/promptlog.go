@@ -14,7 +14,8 @@ import (
 // The prompt log is how each request ended, crew-wide, so cadrei can tell
 // whether every prompt went through the orchestrator: a line when a
 // request opens, and one when it ends, by its code (cadrei answer), in
-// the member's window (its call ended with no answer by code), or
+// the member's window (its call ended, or it left the screen, with no
+// answer by code), or
 // cancelled (its turn ended, or another took its place). In the window is
 // the miss it counts.
 //
@@ -52,7 +53,8 @@ func PromptLogPath(build string) string { return filepath.Join(build, "state", "
 
 // LogPrompts notes in build's prompt log what changed for member's
 // requests from prev to next: each one that opened, and each one that
-// ended, as how says for its code.
+// ended, as how says for its code, or by its code when an answer by code
+// had begun (whatever ended it first: the answer, or the tool's end).
 func LogPrompts(build, member string, prev, next *State, how func(code string) string, now time.Time) {
 	was, is := map[string]bool{}, map[string]bool{}
 	for _, r := range prev.Requests() {
@@ -64,7 +66,11 @@ func LogPrompts(build, member string, prev, next *State, how func(code string) s
 	var lines []PromptEntry
 	for _, r := range prev.Requests() {
 		if r.Code != "" && !is[r.Code] {
-			lines = append(lines, PromptEntry{T: now, Member: member, Code: r.Code, Kind: r.Kind, Tool: r.Tool, Source: r.Source, Event: PromptEnded, Ended: how(r.Code)})
+			ended := how(r.Code)
+			if r.ByCode(now) {
+				ended = EndedByCode
+			}
+			lines = append(lines, PromptEntry{T: now, Member: member, Code: r.Code, Kind: r.Kind, Tool: r.Tool, Source: r.Source, Event: PromptEnded, Ended: ended})
 		}
 	}
 	for _, r := range next.Requests() {
@@ -92,11 +98,13 @@ func LogPrompts(build, member string, prev, next *State, how func(code string) s
 }
 
 // Ending says how a member's requests end on an event: the end of their
-// call is an answer in the member's window, and anything else (a new
-// prompt, the turn's end, another request taking a place) a cancel.
+// call, or an idle reminder with no prompt on the member's screen (a no
+// or Esc there), is an answer in the member's window, and anything else
+// (a new prompt, the turn's end, another request taking a place) a
+// cancel.
 func Ending(event string) func(string) string {
 	return func(string) string {
-		if event == runtime.EvToolDone {
+		if event == runtime.EvToolDone || event == runtime.EvIdleReminder {
 			return EndedInWindow
 		}
 		return EndedCancelled

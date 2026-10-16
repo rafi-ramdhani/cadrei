@@ -79,7 +79,10 @@ func TestStateEvent(t *testing.T) {
 
 // 0.2.3: what a member's trace notes of an event is one plain word each:
 // the hook's name, the tool, the call's id and a notification's type.
-// Never what the tool got, and nothing else a hook could slip in.
+// Never what the tool got, and nothing else a hook could slip in. The
+// tool and the id are kept as they came, printable and short, for
+// matching (an MCP tool's name or an id outside the trace's words still
+// matches its call); the trace filters them itself (runtime.TraceWord).
 func TestStateEventForTheTrace(t *testing.T) {
 	ev := sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_01AbC","tool_input":{"command":"echo TEST_TOKEN_PLACEHOLDER"}}`))
 	if ev.Hook != "PreToolUse" || ev.Tool != "Bash" || ev.ToolID != "toolu_01AbC" || ev.Notice != "" {
@@ -89,9 +92,16 @@ func TestStateEventForTheTrace(t *testing.T) {
 	if ev.Hook != "Notification" || ev.Notice != "permission_prompt" || ev.Tool != "" {
 		t.Errorf("notification: %+v", ev)
 	}
-	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash rm -rf","tool_use_id":"id with spaces","notification_type":"` + strings.Repeat("x", 65) + `"}`))
-	if ev.Tool != "" || ev.ToolID != "" || ev.Notice != "" {
-		t.Errorf("odd words kept: %+v", ev)
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"mcp__my.server__upload","tool_use_id":"id with spaces","notification_type":"` + strings.Repeat("x", 65) + `"}`))
+	if ev.Tool != "mcp__my.server__upload" || ev.ToolID != "id with spaces" || ev.Notice != "" {
+		t.Errorf("for matching: %+v", ev)
+	}
+	if runtime.TraceWord(ev.Tool) != "" || runtime.TraceWord(ev.ToolID) != "" {
+		t.Errorf("the trace would keep %q %q", runtime.TraceWord(ev.Tool), runtime.TraceWord(ev.ToolID))
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash\u001b[2J","tool_use_id":"` + strings.Repeat("x", 257) + `"}`))
+	if ev.Tool != "" || ev.ToolID != "" {
+		t.Errorf("unprintable or long kept: %+v", ev)
 	}
 }
 

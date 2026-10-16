@@ -168,6 +168,36 @@ func TestAPromptOffTheScreen(t *testing.T) {
 	}
 }
 
+// Review finding 5: a call's end never ends another call's prompt. A
+// request answered by its code is gone before its own call ends, and that
+// end leaves a request of the same tool that names no call (here a 0.2.2
+// one). With two calls a request may be, the first to end isn't its own
+// (a call waiting on a prompt doesn't end), so it's the other's.
+func TestACallsEndEndsOnlyItsOwnPrompt(t *testing.T) {
+	s := run(t, &State{State: Working}, pre("Bash", "toolu_a", "k-a"), approval("Bash", "k-a", "make"))
+	s.Open = append(s.Open, &Request{Code: "7f3", Kind: ForApproval, Tool: "Bash", Summary: "make deploy"})
+	GiveCode(filepath.Join(t.TempDir(), "w.json"), s)
+	s.Drop(s.Current().Code) // answered by its code
+	if s = run(t, s, done("Bash", "toolu_a")); s.State != Waiting || len(s.Requests()) != 1 || s.Current().Code != "7f3" {
+		t.Errorf("an answered call's end ended another: %+v", s.Requests())
+	}
+	// Two Bash calls, and a permission request whose input matches neither.
+	s = run(t, &State{State: Working}, pre("Bash", "toolu_1", "k-1"), pre("Bash", "toolu_2", "k-2"), approval("Bash", "k-other", "make"))
+	if r := s.Current(); r == nil || r.Call != "" || len(r.Maybe) != 2 {
+		t.Fatalf("unmatched: %+v", r)
+	}
+	before := s.Current()
+	if s = run(t, s, done("Bash", "toolu_2")); s.State != Waiting || s.Current() == nil || s.Current().Call != "toolu_1" || len(s.Current().Maybe) != 0 {
+		t.Errorf("the other call's end: %+v", s.Current())
+	}
+	if before.Call != "" || len(before.Maybe) != 2 {
+		t.Errorf("the state before changed: %+v", before)
+	}
+	if s = run(t, s, done("Bash", "toolu_1")); s.State != Working || s.Current() != nil {
+		t.Errorf("its own call's end: %+v", s)
+	}
+}
+
 // A state keeps at most MaxRequests requests and maxCalls calls: the
 // oldest go first.
 func TestAStateIsBounded(t *testing.T) {

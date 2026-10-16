@@ -126,9 +126,15 @@ func TestARequestLastsWhileItWaits(t *testing.T) {
 			t.Errorf("%s kept the requests", name)
 		}
 	}
-	// The runtime's idle reminder never ends a prompt cadrei has open.
+	// The runtime's idle reminder ends no prompt that still shows on the
+	// member's screen (or one cadrei couldn't read).
 	if next := Apply(s, runtime.StateEvent{Name: runtime.EvIdleReminder}, now.Add(time.Minute)); next.State != Waiting || len(next.Requests()) != 2 {
 		t.Errorf("idle reminder: %+v", next)
+	}
+	// Review finding 4: with no prompt on the screen (a no or Esc in its
+	// window), it ends them all and the member is idle, as in 0.2.2.
+	if next := Apply(s, runtime.StateEvent{Name: runtime.EvIdleReminder, NoPrompt: true}, now.Add(time.Minute)); next.State != Idle || next.Current() != nil || next.WaitingFor != "" {
+		t.Errorf("idle reminder, no prompt: %+v", next)
 	}
 }
 

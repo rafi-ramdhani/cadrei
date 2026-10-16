@@ -37,6 +37,24 @@ func TestThePromptLogNotesOpensAndEnds(t *testing.T) {
 	}
 }
 
+// Review finding 3: a request marked as being answered by its code is
+// logged by its code whatever ends it first, the answer or its tool's own
+// end. A mark left by an answer that died long ago doesn't count. An idle
+// reminder over a prompt that's gone from the screen is a no or Esc in
+// the window.
+func TestAnAnswerByCodeIsLoggedSoWhateverEndsIt(t *testing.T) {
+	build := t.TempDir()
+	now := time.Date(2026, 10, 16, 17, 0, 0, 0, time.UTC)
+	marked := &Request{Code: "7f3", Kind: ForQuestion, Tool: "AskUserQuestion", Answering: now.Add(-time.Second)}
+	stale := &Request{Code: "k2m", Kind: ForApproval, Tool: "Bash", Answering: now.Add(-time.Hour)}
+	idle := &Request{Code: "q9x", Kind: ForApproval, Tool: "Bash"}
+	LogPrompts(build, "w-dev-engineer", &State{State: Waiting, Open: []*Request{marked, stale}}, &State{State: Working}, Ending(runtime.EvToolDone), now)
+	LogPrompts(build, "w-dev-engineer", &State{State: Waiting, Open: []*Request{idle}}, &State{State: Idle}, Ending(runtime.EvIdleReminder), now)
+	if c := CountPrompts(build); c != (PromptCounts{ByCode: 1, InWindow: 2}) {
+		t.Errorf("counts %+v", c)
+	}
+}
+
 // Past its limit the log moves aside, replacing the one before, so it
 // keeps two files at most; the counts read both.
 func TestThePromptLogIsBounded(t *testing.T) {

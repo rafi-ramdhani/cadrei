@@ -92,8 +92,23 @@ type Request struct {
 	Multi    bool     `json:"multi,omitempty"` // only its window can answer it
 	// Call is the id of the tool call it belongs to, when cadrei knows it:
 	// that call's end ends the request.
-	Call   string `json:"call,omitempty"`
-	Source string `json:"source,omitempty"` // FromHook or FromScreen
+	Call string `json:"call,omitempty"`
+	// Maybe are the open calls it may belong to, when cadrei couldn't tell
+	// which: it's theirs once all but one of them end.
+	Maybe  []string `json:"maybe,omitempty"`
+	Source string   `json:"source,omitempty"` // FromHook or FromScreen
+	// Answering is when an answer by its code began: its key is pressed
+	// right after, so the tool's end may come before the answer drops it.
+	Answering time.Time `json:"answering,omitempty"`
+}
+
+// answeringFor is how long an answer by code's mark counts: the answer
+// takes seconds, and a mark left by one that died must not count later.
+const answeringFor = 30 * time.Second
+
+// ByCode reports whether r is being answered by its code at now.
+func (r *Request) ByCode(now time.Time) bool {
+	return !r.Answering.IsZero() && now.Sub(r.Answering) < answeringFor
 }
 
 // Requests are the state's open requests, oldest first.
@@ -244,13 +259,15 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 			// Recorded at its call's start already: the same request,
 			// with the same code.
 		default:
+			r := record(kind, ev.Request, call, FromHook)
 			if call == "" {
 				// With no call to go by, a new prompt takes the place of
 				// any other that names none: two such at once is rare, and
 				// one left from a prompt already answered isn't.
 				next.Open = slices.DeleteFunc(next.Open, func(r *Request) bool { return r.Call == "" })
+				r.Maybe = next.openCalls(ev.Tool)
 			}
-			next.add(record(kind, ev.Request, call, FromHook))
+			next.add(r)
 		}
 		become(Waiting)
 	case runtime.EvPromptShown:
@@ -276,9 +293,11 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		clear()
 		become(Idle)
 	case runtime.EvIdleReminder:
-		// The runtime reminds the user of an idle input line: never over a
-		// prompt cadrei still has open.
-		if next.State != Idle && len(next.Open) == 0 {
+		// The runtime reminds the user of an idle input line: over a
+		// prompt cadrei still has open only when the member's screen shows
+		// none (a no or Esc in its window ended it, with no hook to say
+		// so), since the reminder can come while a slow prompt is up.
+		if next.State != Idle && (len(next.Open) == 0 || ev.NoPrompt) {
 			clear()
 			become(Idle)
 		}
@@ -368,6 +387,21 @@ func (s *State) callFor(tool, key string) string {
 	return only
 }
 
+// openCalls are the open calls of tool with no request, when there's more
+// than one: those a request that names none may belong to.
+func (s *State) openCalls(tool string) []string {
+	var ids []string
+	for _, c := range s.Calls {
+		if c.Tool == tool && s.requestOf(c.ID) == nil {
+			ids = append(ids, c.ID)
+		}
+	}
+	if len(ids) < 2 {
+		return nil
+	}
+	return ids
+}
+
 // loneCall is the one open call with no request, or "".
 func (s *State) loneCall() string {
 	var only string
@@ -382,20 +416,39 @@ func (s *State) loneCall() string {
 	return only
 }
 
-// end ends call id: its note, and its request. With no request of its
-// own, it ends the oldest request of the same tool that names no call,
-// whose permission request came without the call's start.
+// end ends call id: its note, and its request. A request that may be one
+// of several calls' is none of the call that ended (a call waiting on a
+// prompt doesn't end), and once one is left, it's that one's. A call
+// whose start cadrei never saw, with no request of its own, ends the
+// oldest request of the same tool that names no call: its permission
+// request came without the call's start too.
 func (s *State) end(id, tool string) {
 	if id == "" {
 		return
 	}
+	known := slices.ContainsFunc(s.Calls, func(c Call) bool { return c.ID == id })
 	s.Calls = slices.DeleteFunc(s.Calls, func(c Call) bool { return c.ID == id })
 	if r := s.requestOf(id); r != nil {
 		s.Open = slices.DeleteFunc(s.Open, func(o *Request) bool { return o == r })
 		return
 	}
 	for i, r := range s.Open {
-		if r.Call == "" && tool != "" && r.Tool == tool {
+		if slices.Contains(r.Maybe, id) {
+			// A copy: the request is prev's too.
+			c := *r
+			c.Maybe = slices.DeleteFunc(slices.Clone(r.Maybe), func(m string) bool { return m == id })
+			if len(c.Maybe) == 1 {
+				c.Call, c.Maybe = c.Maybe[0], nil
+			}
+			s.Open[i] = &c
+			return
+		}
+	}
+	if known {
+		return
+	}
+	for i, r := range s.Open {
+		if r.Call == "" && len(r.Maybe) == 0 && tool != "" && r.Tool == tool {
 			s.Open = slices.Delete(s.Open, i, i+1)
 			return
 		}

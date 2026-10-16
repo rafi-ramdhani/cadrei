@@ -7,7 +7,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 ### Fixed
 
 - **A member's question shows as waiting right away.** cadrei records a question the moment the member asks it, before its box draws, and another tool finishing in the same turn no longer hides it. Two prompts at once each get their own code, and answering one leaves the other waiting.
-- **A prompt cadrei wasn't told about still gets a code.** When Claude Code says a prompt is up and cadrei has no record of it, cadrei reads it off the member's screen. You answer it with an option's number, and cadrei checks the screen still shows that same prompt before it presses anything. `cadrei ls --json` shows these with `waiting_for` and a request `kind` of `prompt`.
+- **A prompt cadrei wasn't told about still gets a code.** When Claude Code says a prompt is up and cadrei has no record of it, cadrei reads it off the member's screen. You answer it with an option's number, and cadrei checks the screen still shows that same prompt before it presses anything. For a permission prompt, that's only the plain "Yes" or "No", never a choice that allows more or changes the mode. A question that takes more than one pick goes to the member's window. `cadrei ls --json` shows these with `waiting_for` and a request `kind` of `prompt`.
 - Hooks that fire at the same moment no longer undo each other's record of what a member is doing.
 
 ### New

@@ -9,9 +9,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
@@ -21,17 +22,18 @@ import (
 // cadrei hook state for, and what each means for its state.
 var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop", "StopFailure", "Notification", "SessionEnd"}
 
-// traceRule is what a hook's own names and ids may be in a member's
-// trace: one word, so the trace never holds anything else the hook got.
-var traceRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-
-// traceWord is s when it fits traceRule, or "".
-func traceWord(s string) string {
-	if !traceRule.MatchString(s) {
+// callWord is a tool's name or a call's id as the hook got it, for
+// matching one call's hooks to each other: any printable text up to
+// callWordLimit bytes, or "". The trace keeps only what's one plain word
+// of it (runtime.TraceWord).
+func callWord(s string) string {
+	if len(s) > callWordLimit || !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 		return ""
 	}
 	return s
 }
+
+const callWordLimit = 256
 
 // StateHook is the command those hooks run.
 func StateHook(binary string) string { return hookCommand(binary, "state") }
@@ -55,8 +57,8 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	if json.NewDecoder(io.LimitReader(input, 1<<20)).Decode(&in) != nil {
 		return runtime.StateEvent{}
 	}
-	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript, Hook: traceWord(in.Event),
-		Tool: traceWord(in.Tool), ToolID: traceWord(in.ToolID), Notice: traceWord(in.Type)}
+	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript, Hook: runtime.TraceWord(in.Event),
+		Tool: callWord(in.Tool), ToolID: callWord(in.ToolID), Notice: runtime.TraceWord(in.Type)}
 	if !uuidRule.MatchString(ev.Session) {
 		ev.Session = ""
 	}

@@ -276,8 +276,8 @@ func feedInPane(t *testing.T, c, role, payload string) {
 // A prompt no hook recorded (here an MCP tool's, with its call's start
 // lost) is read off the member's screen when the runtime says a prompt is
 // up: its box and its options, under a code. The answer checks the screen
-// shows that same prompt, then presses the option's number, which can be
-// one that allows more than once, shown word for word.
+// shows that same prompt, then presses the option's number: only the one
+// labeled Yes or the one labeled No, never one that allows more.
 func TestAPromptOffTheScreenGetsACode(t *testing.T) {
 	home := sandbox(t)
 	withTmux(t, home)
@@ -297,8 +297,15 @@ func TestAPromptOffTheScreenGetsACode(t *testing.T) {
 	}
 	ownTerminal(t)
 	_, out, _ := call("answer")
-	if !strings.Contains(out, "  "+r.Code+"  The engineer in dev shows a prompt:") || !strings.Contains(out, "         2. Yes, and don't ask again for files - Upload commands in") {
+	if !strings.Contains(out, "  "+r.Code+"  The engineer in dev shows a prompt:") || !strings.Contains(out, "         1. Yes\n         3. No\n") || strings.Contains(out, "2. Yes, and") {
 		t.Errorf("listing:\n%s", out)
+	}
+	// Finding 2: the choice that would allow it for good isn't pressed.
+	if n, _, errOut := call("answer", r.Code, "2"); n == 0 || !strings.Contains(flat(errOut), "only presses 1 or 3 in that prompt") {
+		t.Errorf("option 2: %d %q", n, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "" {
+		t.Fatalf("pressed %q for option 2", k)
 	}
 	// What the screen shows must be what was recorded: a changed record
 	// presses nothing.
@@ -309,18 +316,18 @@ func TestAPromptOffTheScreenGetsACode(t *testing.T) {
 		changed.Open = []*session.Request{&other}
 		return &changed
 	})
-	if n, _, errOut := call("answer", r.Code, "2"); n == 0 || !strings.Contains(errOut, "I couldn't find that prompt on the engineer's screen") {
+	if n, _, errOut := call("answer", r.Code, "1"); n == 0 || !strings.Contains(errOut, "I couldn't find that prompt on the engineer's screen") {
 		t.Errorf("changed: %d %q", n, errOut)
 	}
 	if k := key(t, home, "engineer"); k != "" {
 		t.Fatalf("pressed %q for a changed prompt", k)
 	}
 	session.ChangeState(c+"/.claude/build", "work-dev-engineer", time.Second, func(*session.State) *session.State { return st })
-	n, out, errOut := call("answer", r.Code, "2")
-	if n != 0 || flat(out) != "+ Answered the engineer in dev: 2. Yes, and don't ask again for files - Upload commands in <work>…" {
+	n, out, errOut := call("answer", r.Code, "1")
+	if n != 0 || flat(out) != "+ Answered the engineer in dev: 1. Yes" {
 		t.Errorf("answer: %d %q %q", n, out, errOut)
 	}
-	if k := key(t, home, "engineer"); k != "2" {
+	if k := key(t, home, "engineer"); k != "1" {
 		t.Errorf("key %q", k)
 	}
 	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
@@ -379,5 +386,193 @@ func TestATallPromptOffTheScreenIsLeftToItsWindow(t *testing.T) {
 	ownTerminal(t)
 	if n, _, errOut := call("answer", st.Current().Code, "1"); n == 0 || !strings.Contains(errOut, "couldn't read that prompt whole") {
 		t.Errorf("answer: %d %q", n, errOut)
+	}
+}
+
+// Review finding 1 and 2: the catch-all offers only what one key answers.
+// A multi-select question (checkboxes), two questions at once (a Submit
+// tab) and a prompt with no plain Yes or No go to the window. A question
+// offers its own options, not the two the runtime adds; an approval only
+// Yes and No. A label that wraps is read whole.
+func TestTheCatchAllOffersOnlyWhatOneKeyAnswers(t *testing.T) {
+	two := strings.Replace(rawFixture(t, "question-live.txt"), " ☐ Upload", "←  ☐ Upload  ☐ Size  ✔ Submit  →", 1)
+	noPlain := strings.NewReplacer("❯ 1. Yes\n", "❯ 1. Yes, and keep going\n", "   4. No\n", "   4. No, and say why\n").Replace(rawFixture(t, "bash-prompt-live.txt"))
+	for name, screen := range map[string]string{"multi-select": rawFixture(t, "multi-live.txt"), "two questions": two, "no plain yes or no": noPlain} {
+		if r := screenRequest(screen); r == nil || !r.Multi {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	q := screenRequest(rawFixture(t, "question-live.txt"))
+	if q == nil || q.Multi || len(q.Options) != 4 || fmt.Sprint(picks(q.Options)) != "[1 2]" {
+		t.Errorf("a question: %+v %v", q, picks(q.Options))
+	}
+	b := screenRequest(rawFixture(t, "bash-prompt-live.txt"))
+	if b == nil || b.Multi || b.Options[1] != "Yes, and always allow access to <work> from this project" || fmt.Sprint(picks(b.Options)) != "[1 4]" {
+		t.Errorf("an approval: %+v %v", b, picks(b.Options))
+	}
+	opts, _, _ := screenPrompt(rawFixture(t, "write-live.txt"))
+	if len(opts) != 3 || opts[1].label != "Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)" {
+		t.Errorf("a wrapped label: %+v", opts)
+	}
+	// A question's descriptions aren't read as its labels.
+	if opts, _, _ := screenPrompt(rawFixture(t, "question-live.txt")); opts[0].label != "Yes" || opts[1].label != "No" {
+		t.Errorf("a question's labels: %+v", opts)
+	}
+}
+
+// Review finding 1, end to end: a multi-select question the hooks lost is
+// recorded for its window, and an answer by number presses nothing (one
+// key would tick a box and leave the dialog up).
+func TestAMultiSelectOffTheScreenIsLeftToItsWindow(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "multi-live.txt")
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feedInPane(t, c, "engineer", promptShown)
+	st := stateOf(c)
+	if st.State != session.Waiting || st.Current() == nil || !st.Current().Multi {
+		t.Fatalf("multi-select: %+v %+v", st, st.Current())
+	}
+	ownTerminal(t)
+	if n, _, errOut := call("answer", st.Current().Code, "1"); n == 0 || !strings.Contains(errOut, "couldn't read that prompt whole") {
+		t.Errorf("answer: %d %q", n, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "" {
+		t.Errorf("pressed %q", k)
+	}
+}
+
+// Review finding 3: the tool's own end can come between the key and the
+// answer dropping the code. The mark put on before the key makes the
+// prompt log count it as answered by its code, not in the window. A no
+// still leaves the member idle, though the tool's failure took the code.
+// With the mark taken off (the key didn't take), it's the window's.
+func TestAnAnswerRacingItsToolsEndIsByCode(t *testing.T) {
+	c := teamOf(t)
+	build := c + "/.claude/build"
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feed(t, c, "work-dev-engineer", shipStart)
+	w := &waitingOn{team: "dev", role: "engineer", name: "work-dev-engineer", req: stateOf(c).Current()}
+	if !answering(build, w, true) || !stateOf(c).Current().ByCode(time.Now()) {
+		t.Fatalf("not marked: %+v", stateOf(c).Current())
+	}
+	pressed := time.Now()
+	feed(t, c, "work-dev-engineer", shipEnd) // first, as it often is
+	answered(build, w, "1", pressed)
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("after a pick: %+v", st)
+	}
+	if n := session.CountPrompts(build); n != (session.PromptCounts{Opened: 1, ByCode: 1}) {
+		t.Errorf("a pick: %+v", n)
+	}
+	// A no, with the call's failure first.
+	feed(t, c, "work-dev-engineer", mkdirStart)
+	feed(t, c, "work-dev-engineer", mkdirRequest)
+	w.req = stateOf(c).Current()
+	answering(build, w, true)
+	pressed = time.Now()
+	feed(t, c, "work-dev-engineer", mkdirFailed)
+	answered(build, w, "no", pressed)
+	if st := stateOf(c); st.State != session.Idle || st.Current() != nil {
+		t.Errorf("after a no: %+v", st)
+	}
+	if n := session.CountPrompts(build); n != (session.PromptCounts{Opened: 2, ByCode: 2}) {
+		t.Errorf("a no: %+v", n)
+	}
+	// The key didn't take: the mark is off, and its end is the window's.
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	feed(t, c, "work-dev-engineer", mkdirStart)
+	feed(t, c, "work-dev-engineer", mkdirRequest)
+	w.req = stateOf(c).Current()
+	answering(build, w, true)
+	answering(build, w, false)
+	feed(t, c, "work-dev-engineer", mkdirFailed)
+	if n := session.CountPrompts(build); n != (session.PromptCounts{Opened: 3, ByCode: 2, InWindow: 1}) {
+		t.Errorf("unmarked: %+v", n)
+	}
+	// Gone before the mark: nothing's waiting under it.
+	if answering(build, w, true) {
+		t.Error("marked a request that's gone")
+	}
+}
+
+// A screen prompt's No ends the member's turn as an approval's no does:
+// idle, with every prompt in it ended.
+func TestAScreenPromptsNoLeavesTheMemberIdle(t *testing.T) {
+	c := teamOf(t)
+	build := c + "/.claude/build"
+	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
+	r := screenRequest(rawFixture(t, "bash-prompt-live.txt"))
+	ev := runtime.StateEvent{Name: runtime.EvPromptShown, Request: r}
+	session.ChangeState(build, "work-dev-engineer", time.Second, func(s *session.State) *session.State { return session.Apply(s, ev, time.Now()) })
+	w := &waitingOn{team: "dev", role: "engineer", name: "work-dev-engineer", req: stateOf(c).Current()}
+	if !saysNo(w, "4") || saysNo(w, "1") || saysNo(w, "2") {
+		t.Errorf("which is a no: %+v", w.req.Options)
+	}
+	answered(build, w, "4", time.Now())
+	if st := stateOf(c); st.State != session.Idle || st.Current() != nil {
+		t.Errorf("after its No: %+v", st)
+	}
+	// A question's own No is only an answer.
+	q := &waitingOn{req: &session.Request{Kind: session.ForPrompt, Options: []string{"Yes", "No", "Type something.", "Chat about this"}}}
+	if saysNo(q, "2") {
+		t.Error("a question's No ended the turn")
+	}
+}
+
+// The runtime's idle reminder, as 2.1.301 sends it.
+const idleReminder = `{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Claude is waiting for your input"}`
+
+// Review finding 4: a no or Esc in the member's window ends its prompt
+// with no hook to say so. The idle reminder after it reads the member's
+// screen: with the prompt still up, the request stays; with it gone, the
+// member is idle and the prompt log counts it as answered in the window.
+func TestAnIdleReminderEndsAPromptGoneFromTheScreen(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	for _, ev := range []string{`{"hook_event_name":"UserPromptSubmit"}`, mkdirStart, mkdirRequest} {
+		feed(t, c, "work-dev-engineer", ev)
+	}
+	// Any prompt the runtime draws counts, with or without an "Esc to
+	// cancel" line: a fetch's and a plan's have none.
+	for _, name := range []string{"fetch-live.txt", "plan-live.txt", "multi-live.txt", "bash-prompt-live.txt"} {
+		if noPrompt(rawFixture(t, name)) {
+			t.Errorf("%s reads as no prompt", name)
+		}
+	}
+	if noPrompt("") || !noPrompt("⏺ Done.\n\n────\n❯ \n────\n  ? for shortcuts\n") {
+		t.Error("noPrompt")
+	}
+	feedInPane(t, c, "engineer", idleReminder)
+	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil {
+		t.Fatalf("with the prompt up: %+v", st)
+	}
+	feed(t, c, "work-dev-engineer", idleReminder) // a screen it can't read
+	if st := stateOf(c); st.State != session.Waiting {
+		t.Fatalf("with no screen: %+v", st)
+	}
+	// Esc in its window: the stub takes the key, and its window shows the
+	// runtime's input line again.
+	os.WriteFile(home+"/after-engineer", []byte("⏺ Okay, I won't make it.\n\n────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n"), 0o600)
+	if err := session.Default().SendKeys(session.SessionName("work", "dev"), "engineer", false, "Escape"); err != nil {
+		t.Fatal(err)
+	}
+	if k := key(t, home, "engineer"); k == "" {
+		t.Fatal("no key")
+	}
+	for i := 0; i < 40 && !strings.Contains(session.Default().Screen(session.SessionName("work", "dev"), "engineer"), "for shortcuts"); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+	feedInPane(t, c, "engineer", idleReminder)
+	if st := stateOf(c); st.State != session.Idle || st.Current() != nil {
+		t.Errorf("with the prompt gone: %+v", st)
+	}
+	if n := session.CountPrompts(c + "/.claude/build"); n != (session.PromptCounts{Opened: 1, InWindow: 1}) {
+		t.Errorf("prompt log: %+v", n)
 	}
 }
