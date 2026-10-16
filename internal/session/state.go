@@ -3,6 +3,7 @@ package session
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -191,6 +192,45 @@ func StatePath(build, name string) string {
 		return ""
 	}
 	return filepath.Join(build, "state", name+".json")
+}
+
+// LockPath is the lock a member's state hooks take around a change of its
+// state file, or "" for a name cadrei does not make.
+func LockPath(build, name string) string {
+	p := StatePath(build, name)
+	if p == "" {
+		return ""
+	}
+	return strings.TrimSuffix(p, ".json") + ".lock"
+}
+
+// ChangeState changes member name's state file in build under the member's
+// lock, waiting up to wait for it: change gets what the file holds (nil
+// for none) and returns what it should hold (nil removes it). A new
+// request gets its code. The file is written only when it changes. It
+// returns the state before and after; on an error, nothing changed.
+func ChangeState(build, name string, wait time.Duration, change func(prev *State) *State) (prev, next *State, err error) {
+	path, lockPath := StatePath(build, name), LockPath(build, name)
+	if path == "" {
+		return nil, nil, errors.New("no state file for " + name)
+	}
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		return nil, nil, err
+	}
+	lock, err := fsx.Acquire(lockPath, wait)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer lock.Release()
+	prev = ReadState(path)
+	next = change(prev)
+	if (prev == nil) != (next == nil) || (next != nil && !Same(next, prev)) {
+		GiveCode(path, next)
+		if err := WriteState(path, next); err != nil {
+			return prev, prev, err
+		}
+	}
+	return prev, next, nil
 }
 
 // ReadState reads a state file cadrei wrote, or nil.

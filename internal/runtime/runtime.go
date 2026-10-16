@@ -285,6 +285,13 @@ type StateEvent struct {
 	Question   bool   // a permission request that is a question to the user
 	Session    string // the conversation id
 	Transcript string // the conversation's transcript
+	// What the member's trace notes about the event: the runtime's own
+	// name for it, the tool and the runtime's id for the tool call, and a
+	// notification's type. Never what the tool was given.
+	Hook   string
+	Tool   string
+	ToolID string
+	Notice string
 	// Request is what a permission request asks the user, as the runtime
 	// passed it to the hook: never the member's own description of it.
 	Request *Request

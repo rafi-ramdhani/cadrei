@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -17,6 +18,18 @@ import (
 // stateEvents are the hook events a member's settings copy runs
 // cadrei hook state for, and what each means for its state.
 var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "StopFailure", "Notification", "SessionEnd"}
+
+// traceRule is what a hook's own names and ids may be in a member's
+// trace: one word, so the trace never holds anything else the hook got.
+var traceRule = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// traceWord is s when it fits traceRule, or "".
+func traceWord(s string) string {
+	if !traceRule.MatchString(s) {
+		return ""
+	}
+	return s
+}
 
 // StateHook is the command those hooks run.
 func StateHook(binary string) string { return hookCommand(binary, "state") }
@@ -30,13 +43,15 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 		Session    string          `json:"session_id"`
 		Transcript string          `json:"transcript_path"`
 		Tool       string          `json:"tool_name"`
+		ToolID     string          `json:"tool_use_id"`
 		Input      json.RawMessage `json:"tool_input"`
 		Type       string          `json:"notification_type"`
 	}
 	if json.NewDecoder(io.LimitReader(input, 1<<20)).Decode(&in) != nil {
 		return runtime.StateEvent{}
 	}
-	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript}
+	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript, Hook: traceWord(in.Event),
+		Tool: traceWord(in.Tool), ToolID: traceWord(in.ToolID), Notice: traceWord(in.Type)}
 	if !uuidRule.MatchString(ev.Session) {
 		ev.Session = ""
 	}

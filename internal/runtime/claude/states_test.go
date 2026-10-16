@@ -64,9 +64,29 @@ func TestStateEvent(t *testing.T) {
 		`{"hook_event_name":"SessionEnd","session_id":"not-an-id","transcript_path":"relative"}`:          {Name: runtime.EvEnd},
 		`not json`: {},
 	} {
-		if got := (sessions{}).StateEvent(strings.NewReader(in)); !reflect.DeepEqual(got, want) {
+		got := (sessions{}).StateEvent(strings.NewReader(in))
+		got.Hook, got.Tool, got.ToolID, got.Notice = "", "", "", "" // TestStateEventForTheTrace
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+// 0.2.3: what a member's trace notes of an event is one plain word each:
+// the hook's name, the tool, the call's id and a notification's type.
+// Never what the tool got, and nothing else a hook could slip in.
+func TestStateEventForTheTrace(t *testing.T) {
+	ev := sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_01AbC","tool_input":{"command":"echo TEST_TOKEN_PLACEHOLDER"}}`))
+	if ev.Hook != "PreToolUse" || ev.Tool != "Bash" || ev.ToolID != "toolu_01AbC" || ev.Notice != "" {
+		t.Errorf("tool event: %+v", ev)
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission"}`))
+	if ev.Hook != "Notification" || ev.Notice != "permission_prompt" || ev.Tool != "" {
+		t.Errorf("notification: %+v", ev)
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash rm -rf","tool_use_id":"id with spaces","notification_type":"` + strings.Repeat("x", 65) + `"}`))
+	if ev.Tool != "" || ev.ToolID != "" || ev.Notice != "" {
+		t.Errorf("odd words kept: %+v", ev)
 	}
 }
 
