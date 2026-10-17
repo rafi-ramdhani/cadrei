@@ -447,7 +447,7 @@ More:
 - Each request has its own short code. If the member's prompt changed in the meantime, the old code answers nothing.
 - `yes` only ever picks the plain "Yes", the one-time allow. It never picks "always allow" or "switch to auto mode".
 - In `dontAsk`, `bypassPermissions` or `plan` mode, Claude Code can't ask you about your orchestrator's answer, so it doesn't run it: type the `!` line yourself.
-- Some things still need the member's window (`cadrei attach`): a question that takes more than one pick or holds several questions, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command too long for cadrei's record to hold whole), a prompt that doesn't fit the member's window even after cadrei makes the window bigger for a moment to check it, a member in `dontAsk` mode (it can't ask you at all), and the orchestrator the every-chat hook opens, where `cadrei answer` doesn't run.
+- Some things still need the member's window (`cadrei attach`): a question that takes more than one pick or holds several questions, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command over 8,000 characters), a prompt that doesn't fit the member's window even after cadrei makes the window bigger for a moment to check it, a member in `dontAsk` mode (it can't ask you at all), and the orchestrator the every-chat hook opens, where `cadrei answer` doesn't run.
 
 ### Your orchestrator's memory
 

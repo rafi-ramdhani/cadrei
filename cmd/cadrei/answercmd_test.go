@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,7 +55,10 @@ func runAs(t *testing.T, cmd *exec.Cmd) {
 // as Claude Code draws a prompt anew at a new size.
 func promptMember(t *testing.T, home, role, fixture string) {
 	t.Helper()
-	abs := filepath.Join(answerFixtures, fixture)
+	abs := fixture
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(answerFixtures, fixture)
+	}
 	grown := home + "/grown-" + role
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
@@ -247,6 +251,43 @@ func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
 	own, _ := exec.Command("tmux", "-L", socket, "show-options", "-wqv", "-t", "="+s+":=reviewer", "window-size").Output()
 	if strings.TrimSpace(string(own)) != "" {
 		t.Errorf("the reviewer's window keeps a size of its own: %q", own)
+	}
+}
+
+// W3: a command too long for the hook's 300-character summary is listed
+// and checked on the screen whole, from its own file, and answered; the
+// file goes with the request.
+func TestALongCommandIsAnsweredWhole(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	var lines []string
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, fmt.Sprintf("echo 'step %d of the long job, written out in full'", i))
+	}
+	long := approval(strings.Join(lines, "⏎"))
+	os.WriteFile(home+"/long.txt", []byte(drawn(t, long.req)), 0o644)
+	promptMember(t, home, "engineer", home+"/long.txt")
+	command, _ := json.Marshal(strings.Join(lines, "\n"))
+	code := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":`+string(command)+`}}`)
+	build := c + "/.claude/build"
+	if st := session.ReadState(session.StatePath(build, "work-dev-engineer")); !strings.HasSuffix(st.Current().Summary, "…") {
+		t.Fatalf("not cut short: %q", st.Current().Summary)
+	}
+	ownTerminal(t)
+	n, out, _ := call("answer")
+	if n != 0 || !strings.Contains(out, "         "+lines[11]+"\n       Allow it once:") || !strings.Contains(out, "\n         "+lines[0]+"\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" || !strings.Contains(out, "step 12 of the long job") {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "1" {
+		t.Errorf("key %q", k)
+	}
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); !os.IsNotExist(err) {
+		t.Errorf("its file stays: %v", err)
 	}
 }
 

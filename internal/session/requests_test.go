@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -213,6 +214,44 @@ func TestAStateIsBounded(t *testing.T) {
 	GiveCode(path, s)
 	if err := WriteState(path, s); err != nil || len(ReadState(path).Requests()) != MaxRequests {
 		t.Errorf("a full state doesn't read back: %v", err)
+	}
+}
+
+// W3 (PR B): a request the hook had to cut short keeps its whole text in
+// a file of its own, written with the state that offers its code, and
+// gone once the request ends. A file that doesn't go with the request
+// (its start isn't the summary) isn't read as its text.
+func TestARequestsWholeTextHasItsOwnFile(t *testing.T) {
+	build := t.TempDir()
+	whole := strings.Repeat("echo one && ", 40) + "echo done"
+	long := approval("Bash", "k1", runtime.RequestText(whole, runtime.SummaryLimit))
+	long.Request.Full = whole
+	change := func(evs ...runtime.StateEvent) *State {
+		t.Helper()
+		_, next, err := ChangeState(build, "w-dev-engineer", time.Second, func(s *State) *State { return run(t, s, evs...) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	s := change(pre("Bash", "toolu_1", "k1"), long, pre("Bash", "toolu_2", "k2"), approval("Bash", "k2", "make"))
+	cut, short := s.Requests()[0], s.Requests()[1]
+	if got := ReadFull(build, "w-dev-engineer", cut); got != whole {
+		t.Errorf("the whole text: %q", got)
+	}
+	if raw, _ := os.ReadFile(StatePath(build, "w-dev-engineer")); strings.Contains(string(raw), "echo done") {
+		t.Errorf("the state file holds it: %s", raw)
+	}
+	if _, err := os.Stat(FullPath(build, "w-dev-engineer", short.Code)); err == nil || ReadFull(build, "w-dev-engineer", short) != "" {
+		t.Errorf("a short request has a file")
+	}
+	os.WriteFile(FullPath(build, "w-dev-engineer", cut.Code), []byte("rm -rf / && "+whole), 0o600)
+	if got := ReadFull(build, "w-dev-engineer", cut); got != "" {
+		t.Errorf("another text: %q", got)
+	}
+	change(done("Bash", "toolu_1"))
+	if _, err := os.Stat(FullPath(build, "w-dev-engineer", cut.Code)); !os.IsNotExist(err) {
+		t.Errorf("the file outlived its request: %v", err)
 	}
 }
 

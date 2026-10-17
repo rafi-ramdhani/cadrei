@@ -78,14 +78,23 @@ func waitingIn(views []sessionView) []waitingOn {
 			if m.status.State != session.Waiting {
 				continue
 			}
-			dir := ""
+			dir, build := "", ""
 			if rt != nil && v.info.Home != "" {
-				if rec := session.ReadRecord(session.RecordPath(rt.BuildDir(v.info.Home), m.name)); rec != nil {
+				build = rt.BuildDir(v.info.Home)
+				if rec := session.ReadRecord(session.RecordPath(build, m.name)); rec != nil {
 					dir = rec.Dir
 				}
 			}
-			// Each open prompt is its own request, under its own code.
+			// Each open prompt is its own request, under its own code. One
+			// the hook had to cut short goes by its whole text, so the user
+			// sees all of what they answer, and the screen is checked for
+			// all of it.
 			for _, req := range m.status.Requests {
+				if full := session.ReadFull(build, m.name, req); full != "" {
+					whole := *req
+					whole.Summary = full
+					req = &whole
+				}
 				out = append(out, waitingOn{team: v.Team, project: v.Project, role: m.Role, session: v.info.Name, window: m.window,
 					name: m.name, dir: dir, since: m.status.Since, req: req})
 			}
@@ -512,7 +521,10 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 		case w.req.Kind == session.ForApproval:
 			_, object, kind := act(w.req)
 			e.say("%s", "  "+code+"  "+capital(w.place())+" wants to "+kind+":")
-			e.say("%s", "         "+object)
+			// A command of several lines, line by line.
+			for _, l := range strings.Split(object, "⏎") {
+				e.say("%s", "         "+l)
+			}
 			if !answerable(w.req) {
 				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
 				continue

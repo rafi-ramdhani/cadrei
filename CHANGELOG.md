@@ -10,6 +10,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - **A prompt cadrei wasn't told about still gets a code.** When Claude Code says a prompt is up and cadrei has no record of it, cadrei reads it off the member's screen. You answer it with an option's number, and cadrei checks the screen still shows that same prompt before it presses anything. For a permission prompt, that's only the plain "Yes" or "No", never a choice that allows more or changes the mode. A question that takes more than one pick goes to the member's window. `cadrei ls --json` shows these with `waiting_for` and a request `kind` of `prompt`.
 - Hooks that fire at the same moment no longer undo each other's record of what a member is doing.
 - **`cadrei answer` works on a prompt too big for the member's window.** Members now start in wide windows (220 by 60) instead of tmux's 80 by 24. When a prompt still doesn't fit (a tall command, a long path, or a window you have open on a small screen), cadrei makes the window bigger for a moment to check it, then puts it back. A question whose option or description wraps onto a second line is read right too, so its code works.
+- **A long command gets a code too.** cadrei's record of a request keeps 300 characters, so a longer command used to go to the member's window. Now cadrei keeps the whole command (up to 8,000 characters) in a file next to the member's state while the prompt waits, shows you all of it, line by line, checks all of it on the screen, and deletes the file once the prompt ends.
 
 ### New
 

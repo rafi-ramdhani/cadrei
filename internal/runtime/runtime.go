@@ -310,8 +310,11 @@ type StateEvent struct {
 // Request is what a member asks the user: a tool it wants to run, or a
 // question. Every text is one printable line (RequestText).
 type Request struct {
-	Tool     string   // the tool, as the runtime names it
-	Summary  string   // what it would run or touch: a command, a path, a URL
+	Tool    string // the tool, as the runtime names it
+	Summary string // what it would run or touch: a command, a path, a URL
+	// Full is Summary whole, when Summary had to be cut short (at most
+	// FullLimit, cut again past that), so an answer can check it all.
+	Full     string
 	Question string   // a question's text, for a question
 	Options  []string // a question's option labels, at most MaxOptions
 	// Multi: a question that takes more than one pick, holds more than one
@@ -323,6 +326,7 @@ type Request struct {
 // Limits on a request's text.
 const (
 	SummaryLimit = 300
+	FullLimit    = 8000
 	OptionLimit  = 80
 	MaxOptions   = 6
 )

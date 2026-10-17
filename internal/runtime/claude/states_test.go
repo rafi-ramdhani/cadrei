@@ -137,9 +137,17 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 			t.Errorf("%s %s: %+v", tc.tool, tc.input, got)
 		}
 	}
-	long := ev("Bash", `{"command":"`+strings.Repeat("a", 400)+`"}`).Summary
-	if n := len([]rune(long)); n != runtime.SummaryLimit+1 || !strings.HasSuffix(long, "…") {
-		t.Errorf("a long command: %d %q", n, long[len(long)-10:])
+	cut := ev("Bash", `{"command":"`+strings.Repeat("a", 400)+`\nb"}`)
+	if long := cut.Summary; len([]rune(long)) != runtime.SummaryLimit+1 || !strings.HasSuffix(long, "…") {
+		t.Errorf("a long command: %d %q", len([]rune(long)), long[len(long)-10:])
+	}
+	// W3 (PR B): one cut short keeps its whole text too, cut only past
+	// FullLimit; one that isn't cut has none.
+	if cut.Full != strings.Repeat("a", 400)+"⏎b" {
+		t.Errorf("the whole command: %q", cut.Full)
+	}
+	if huge := ev("Bash", `{"command":"`+strings.Repeat("a", runtime.FullLimit+5)+`"}`).Full; len([]rune(huge)) != runtime.FullLimit+1 || !strings.HasSuffix(huge, "…") {
+		t.Errorf("a huge command: %d", len([]rune(huge)))
 	}
 	label := ev("AskUserQuestion", `{"questions": [{"question": "Q", "options": [{"label": "`+strings.Repeat("b", 100)+`"}, {"label": "No"}]}]}`).Options[0]
 	if n := len([]rune(label)); n != runtime.OptionLimit+1 {
