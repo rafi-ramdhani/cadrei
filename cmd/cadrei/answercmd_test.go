@@ -291,6 +291,43 @@ func TestALongCommandIsAnsweredWhole(t *testing.T) {
 	}
 }
 
+// W6: when the runtime says a prompt is up, the state hook reads the
+// approval's choices off the member's screen, once it shows that same
+// prompt. The listing shows them word for word, and one is answered by
+// its number. A screen with another prompt adds none.
+func TestAnApprovalsChoicesComeOffTheScreen(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	other := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf <work>"}}`)
+	feedInPane(t, c, "engineer", promptShown)
+	if r := stateOf(c).Current(); r.Code != other || r.Options != nil {
+		t.Fatalf("another prompt got choices: %+v", r)
+	}
+	code := request(t, c, "engineer", mkdirRequest)
+	feedInPane(t, c, "engineer", promptShown)
+	if r := stateOf(c).Current(); r.Code != code || strings.Join(r.Options, "|") != strings.Join(bashChoices, "|") {
+		t.Fatalf("choices: %+v", r)
+	}
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	if !strings.Contains(out, "       Say no:         cadrei answer "+code+" no\n"+
+		"       Its other choices, which can last past this prompt:\n"+
+		"         2. Yes, and always allow access to <work> from this project\n"+
+		"         3. Yes, and switch to auto mode · auto mode handles these prompts for you\n"+
+		"       Pick one:       cadrei answer "+code+" 2\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	if n, out, errOut := call("answer", code, "2"); n != 0 || flat(out) != "+ Answered the engineer in dev: 2. Yes, and always allow access to <work> from this project" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "2" {
+		t.Errorf("key %q", k)
+	}
+}
+
 // Nothing is pressed for a request the screen doesn't show (it changed),
 // a code that names nothing, a choice that can't answer it, or a run in a
 // member.

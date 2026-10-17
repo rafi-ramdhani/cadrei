@@ -81,6 +81,85 @@ func tool(name, summary string) *waitingOn {
 	return w
 }
 
+// withOptions is w with its prompt's options, as the state hook reads
+// them off the screen.
+func withOptions(w *waitingOn, options ...string) *waitingOn {
+	w.req.Options = options
+	return w
+}
+
+// planApproval is the plan approval in plan-live.txt, as the state hook
+// would record it (its input isn't seen live), with its options read off
+// the screen.
+func planApproval() *waitingOn {
+	return withOptions(tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline).\n2. Append the line \"Plan test\" at the end of README.md, then confirm with a final read."}`),
+		// Its hint goes on at its label's column, so it's read as the rest
+		// of the label.
+		"Yes, and use auto mode", "Yes, manually approve edits", "Tell Claude what to change shift+tab to approve with this feedback")
+}
+
+// bashChoices are bash-prompt-live.txt's options, as read off the screen.
+var bashChoices = []string{"Yes", "Yes, and always allow access to <work> from this project", "Yes, and switch to auto mode · auto mode handles these prompts for you", "No"}
+
+// W6: an approval's other choices, read off the screen, are answered by
+// number when the screen shows the same ones, and the guard's ask says
+// the choice can last. A plan approval, which has no plain Yes, takes its
+// choices and no; not yes, nor its choice that asks for text.
+func TestAnApprovalsOtherChoices(t *testing.T) {
+	bash := screenFixture(t, "bash-prompt-live.txt")
+	w := withOptions(approval("mkdir e2e-yes"), bashChoices...)
+	for choice, key := range map[string]string{"yes": "1", "no": "4", "2": "2", "3": "3", "4": "4", "1": "1"} {
+		if got, why := keyFor(bash, w, choice); got != key || why != "" {
+			t.Errorf("%s: %q %q", choice, got, why)
+		}
+	}
+	if !saysNo(w, "4") || saysNo(w, "2") {
+		t.Error("only the option labeled No says no")
+	}
+	other := strings.Replace(bash, "   2. Yes, and always allow access to\n      <work> from this project\n", "   2. Yes, and always allow access to\n      / from this project\n", 1)
+	if key, why := keyFor(other, w, "2"); key != "" || !strings.Contains(why, "I couldn't find that prompt") {
+		t.Errorf("other options: %q %q", key, why)
+	}
+	for choice, want := range map[string]string{
+		"2": `Cadrei: answer the engineer in dev with "2. Yes, and always allow access to <work> from this project"? That choice can last past this one prompt, as its words say. It wants to run: mkdir e2e-yes`,
+		"1": "Cadrei: allow once? The engineer in dev wants to run: mkdir e2e-yes",
+		"4": "Cadrei: tell the engineer in dev no? It wants to run: mkdir e2e-yes",
+	} {
+		if got := askReason(w, choice); got != want {
+			t.Errorf("ask %s: %q", choice, got)
+		}
+	}
+	if note := w.note(); !strings.Contains(note, "Its choices, word for word, which can last past this prompt: 2. Yes, and always allow access to <work> from this project, 3. Yes, and switch to auto mode") {
+		t.Errorf("note: %q", note)
+	}
+
+	plan := screenFixture(t, "plan-live.txt")
+	p := planApproval()
+	for choice, key := range map[string]string{"1": "1", "2": "2", "no": "Escape"} {
+		if got, why := keyFor(plan, p, choice); got != key || why != "" {
+			t.Errorf("plan %s: %q %q", choice, got, why)
+		}
+	}
+	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n> (1. Yes, and use auto mode, 2. Yes, manually approve edits), or answer it in its window: cadrei attach dev` {
+		t.Errorf("plan yes: %q", why)
+	}
+	if why := checkChoice(p, "7f3", "3", plain); why != "7f3 takes yes, no, or one of its choices: 1, 2. Use cadrei answer 7f3 no, for example." {
+		t.Errorf("plan 3: %q", why)
+	}
+	if verb, object, _ := act(p.req); verb != "carry out this plan" || !strings.HasSuffix(object, "then confirm with a final read.") {
+		t.Errorf("plan act: %q %q", verb, object)
+	}
+	if note := p.note(); !strings.Contains(note, "It has no plain Yes: answer with cadrei answer 7f3 <n> for one of its choices, or no.") {
+		t.Errorf("plan note: %q", note)
+	}
+	// Before its choices are read off the screen, a plan approval has only
+	// no; yes says there's no plain Yes.
+	p.req.Options = nil
+	if _, why := keyFor(plan, p, "yes"); !strings.Contains(why, `no plain "Yes", only choices that would allow it for good`) {
+		t.Errorf("plan yes, no choices: %q", why)
+	}
+}
+
 // inApp is w with its member started in /Users/me/app.
 func inApp(w *waitingOn) *waitingOn {
 	w.dir = "/Users/me/app"
@@ -283,18 +362,20 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
 	}
-	// Review of 0.2.2 (M3): a plan approval (no plain Yes) is one cadrei
-	// can't check.
-	for name, tc := range map[string]*session.Request{
-		"plan-live.txt": {Code: "226", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"1. Read README.md"}`},
+	// W6: a plan approval shows a plan other than the recorded one, or
+	// only part of it; and its record names no plan (the hook's input for
+	// it isn't seen live), so cadrei can't check it.
+	planScreen := screenFixture(t, "plan-live.txt")
+	for name, w := range map[string]*waitingOn{
+		"another plan":     tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline).\n2. Delete README.md."}`),
+		"part of the plan": tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline)."}`),
 	} {
-		w := &waitingOn{team: "dev", role: "engineer", req: tc}
-		if key, why := keyFor(screenFixture(t, name), w, "yes"); key != "" || why == "" {
+		if key, why := keyFor(planScreen, w, "no"); key != "" || why == "" {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
-		if why := checkChoice(w, tc.Code, "yes", plain); why != "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev" {
-			t.Errorf("%s: %q", name, why)
-		}
+	}
+	if why := checkChoice(tool("ExitPlanMode", `{"planFile":"x.md"}`), "7f3", "no", plain); why != "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev" {
+		t.Errorf("no plan: %q", why)
 	}
 	// The full path shown matches, with the member's folder not known.
 	full := inApp("/Users/me/app/notes.txt")
@@ -339,8 +420,12 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
 		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash"}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
-		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"x"}`}}, "yes",
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
+		// W6: with its choices read off the screen, an approval takes one
+		// of them by number, but not one that asks for text.
+		{withOptions(approval("x"), "Yes", "Yes, and don't ask again for x commands", "No"), "4", "7f3 takes yes, no, or one of its choices: 1, 2, 3. Use cadrei answer 7f3 no, for example."},
+		{withOptions(approval("x"), "Yes", "No, and tell Claude what to do differently (esc)"), "2", "7f3 takes yes, no, or one of its choices: 1. Use cadrei answer 7f3 no, for example."},
 		// Re-review of 0.2.2 (L12): a command recorded cut short.
 		{approval("rm -rf build && " + strings.Repeat("x", 290) + "…"), "yes", "That's too long for cadrei to check whole, so answer it in its window: cadrei attach dev"},
 	} {

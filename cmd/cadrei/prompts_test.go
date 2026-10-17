@@ -339,8 +339,9 @@ func TestAPromptOffTheScreenGetsACode(t *testing.T) {
 	}
 }
 
-// With a request the hooks recorded, the catch-all leaves it: the screen
-// isn't read. Outside a pane, or with no prompt on the screen, nothing is
+// With a request the hooks recorded, the catch-all leaves it: no request
+// is read off the screen in its place, and it only gains its choices
+// (W6, PR B). Outside a pane, or with no prompt on the screen, nothing is
 // recorded.
 func TestTheCatchAllOnlyFillsAGap(t *testing.T) {
 	home := sandbox(t)
@@ -352,8 +353,10 @@ func TestTheCatchAllOnlyFillsAGap(t *testing.T) {
 	feed(t, c, "work-dev-engineer", mkdirRequest)
 	before := stateOf(c)
 	feedInPane(t, c, "engineer", promptShown)
-	if after := stateOf(c); !session.Same(before, after) {
-		t.Errorf("a recorded request changed: %+v", after.Requests())
+	after := stateOf(c)
+	before.Current().Options = bashChoices
+	if !session.Same(before, after) {
+		t.Errorf("a recorded request changed: %+v", after.Current())
 	}
 	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
 	feed(t, c, "work-dev-engineer", promptShown) // no $TMUX_PANE
