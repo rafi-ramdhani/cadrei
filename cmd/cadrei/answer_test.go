@@ -160,6 +160,40 @@ func TestAnApprovalsOtherChoices(t *testing.T) {
 	}
 }
 
+// W7: the review is sent only when it shows exactly the picks, for each
+// question in order: not one with a pick missing, one more, another
+// answer, the questions the other way round, or no option to send it.
+// A pick is read as one field per question.
+func TestTheReviewMustShowExactlyTheAnswers(t *testing.T) {
+	req := &session.Request{Code: "k2m", Kind: session.ForQuestion, Parts: []session.Part{
+		{Question: "Which files go to the signing site?", Options: []string{"resume.pdf", "cover.pdf"}, Multi: true},
+		{Question: "Send them now?", Options: []string{"Yes", "No"}}}}
+	review := filesAndSendScreens()[4]
+	if key, ok := reviewShows(review, req, [][]int{{1, 2}, {1}}); key != "1" || !ok {
+		t.Errorf("the review: %q %v", key, ok)
+	}
+	for name, picks := range map[string][][]int{"one pick less": {{1}, {1}}, "the other answer": {{1, 2}, {2}}} {
+		if _, ok := reviewShows(review, req, picks); ok {
+			t.Errorf("%s: sent", name)
+		}
+	}
+	for name, screen := range map[string]string{
+		"a pick more":     strings.Replace(review, "→ Yes", "→ Yes, No", 1),
+		"the other order": strings.Replace(strings.Replace(review, "Which files go to the signing site?", "Q1", 1), "Send them now?", "Which files go to the signing site?", 1),
+		"no way to send":  strings.Replace(review, "1. Submit answers", "1. Go back", 1),
+		"no review":       strings.Replace(review, "Ready to submit your answers?", "", 1),
+	} {
+		if _, ok := reviewShows(screen, req, [][]int{{1, 2}, {1}}); ok {
+			t.Errorf("%s: sent", name)
+		}
+	}
+	for choice, ok := range map[string]bool{"1,2 1": true, "2 2": true, "1": false, "1 1,2": false, "3 1": false, "1,1 1": false, "1 1 1": false, "01 1": false} {
+		if _, got := partPicks(req, choice); got != ok {
+			t.Errorf("%q: %v", choice, got)
+		}
+	}
+}
+
 // inApp is w with its member started in /Users/me/app.
 func inApp(w *waitingOn) *waitingOn {
 	w.dir = "/Users/me/app"
@@ -414,7 +448,7 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 		{ask, "4", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{ask, "0", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{ask, "01", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
-		{multi, "1", "This question needs more than one pick, so answer it in its window: cadrei attach docs"},
+		{multi, "1", "That question has more options or questions than cadrei keeps, so answer it in its window: cadrei attach docs"},
 		// Review of 0.2.2 (M3): a prompt cadrei can't check on the screen.
 		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Glob", Summary: `Glob {"pattern":"**/*.pdf"}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},

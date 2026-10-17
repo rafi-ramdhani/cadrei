@@ -90,6 +90,9 @@ type Request struct {
 	Question string   `json:"question,omitempty"` // a question's text, or a screen prompt's box
 	Options  []string `json:"options,omitempty"`
 	Multi    bool     `json:"multi,omitempty"` // only its window can answer it
+	// Parts are each of a question's questions, when it holds several or
+	// takes more than one pick (Question and Options are the first's).
+	Parts []Part `json:"parts,omitempty"`
 	// Call is the id of the tool call it belongs to, when cadrei knows it:
 	// that call's end ends the request.
 	Call string `json:"call,omitempty"`
@@ -104,6 +107,14 @@ type Request struct {
 	// keeps it in its own file (FullPath), out of the state file every
 	// hook reads.
 	full string
+}
+
+// Part is one question of a request that holds several, or takes more
+// than one pick.
+type Part struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+	Multi    bool     `json:"multi,omitempty"` // it takes one or more picks
 }
 
 // answeringFor is how long an answer by code's mark counts: the answer
@@ -326,8 +337,12 @@ func unchanged(prev *State) *State {
 
 // record is a new request from what the runtime (or the screen) said.
 func record(kind string, r *runtime.Request, call, source string) *Request {
-	return &Request{Kind: kind, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
+	req := &Request{Kind: kind, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
 		Options: slices.Clone(r.Options), Multi: r.Multi, Call: call, Source: source, full: r.Full}
+	for _, p := range r.Parts {
+		req.Parts = append(req.Parts, Part{Question: p.Question, Options: slices.Clone(p.Options), Multi: p.Multi})
+	}
+	return req
 }
 
 // add opens a request, dropping the oldest past MaxRequests.

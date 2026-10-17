@@ -51,6 +51,9 @@ func answerCrew(t *testing.T) (c, eng, writer string) {
 // command as the Bash prompt frames it, or a question with Yes and No.
 func drawn(t *testing.T, req *session.Request) string {
 	t.Helper()
+	if many(req) {
+		return strings.Replace(screenFixture(t, "multi-live.txt"), "\nWhich files go to the signing site?\n", "\n"+req.Question+"\n", 1)
+	}
 	if req.Kind == session.ForQuestion {
 		return strings.Replace(screenFixture(t, "question-live.txt"), "\nUpload resume.pdf to the signing site?\n", "\n"+req.Question+"\n", 1)
 	}
@@ -336,18 +339,41 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	}
 }
 
+// W7: a multi-select question is asked about with every pick, word for
+// word, in order; a pick past its options, or two where it takes one per
+// question, is refused with how to answer.
+func TestTheGuardAsksAboutEveryPick(t *testing.T) {
+	c, _, _ := answerCrew(t)
+	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which files go to the signing site?","options":[{"label":"resume.pdf"},{"label":"cover.pdf"}],"multiSelect":true}]}}`)
+	code := session.ReadState(c + "/.claude/build/state/work-docs-writer.json").Current().Code
+	n, out, errOut := guardAs(t, c, "", "default", "cadrei answer "+code+" 2,1")
+	if n != 0 || errOut != "" || !strings.Contains(out, `Cadrei: answer the writer in docs with Which files go to the signing site? \"2. cover.pdf\", \"1. resume.pdf\"?`) {
+		t.Errorf("ask: %d %q %q", n, out, errOut)
+	}
+	for _, choice := range []string{"3", "1,1", "1 2", "yes"} {
+		n, out, errOut := guardAs(t, c, "", "default", "cadrei answer "+code+" "+choice)
+		if n != 2 || out != "" || strings.TrimSpace(errOut) != code+" takes one or more of its options 1 to 2, joined by commas. Use cadrei answer "+code+" 1,2, for example." {
+			t.Errorf("%s: %d %q %q", choice, n, out, errOut)
+		}
+	}
+	if n, _, errOut := guardAs(t, c, "", "default", "cadrei answer "+code+" 1 2 3 4 5"); n != 2 || !strings.Contains(errOut, "cadrei answer <code> <choice> on its own") {
+		t.Errorf("five answers: %d %q", n, errOut)
+	}
+}
+
 // Review of 0.2.2 (M3): a request cadrei can't check on the screen (a
-// multi-select question, a tool it has no recorded screen for) is denied
-// before any ask, as is any code when the guard doesn't know the crew.
+// question with more options than it keeps, a tool it has no recorded
+// screen for) is denied before any ask, as is any code when the guard
+// doesn't know the crew.
 func TestTheGuardDeniesWhatItCantAnswer(t *testing.T) {
 	c, _, _ := answerCrew(t)
-	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}]}}`)
+	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"a"},{"label":"b"},{"label":"c"},{"label":"d"},{"label":"e"},{"label":"f"},{"label":"g"}]}]}}`)
 	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Glob","tool_input":{"pattern":"/w/**/*.pdf"}}`)
 	code := func(name string) string {
 		return session.ReadState(c + "/.claude/build/state/" + name + ".json").Current().Code
 	}
 	for command, why := range map[string]string{
-		"cadrei answer " + code("work-docs-writer") + " 1":           "This question needs more than one pick, so answer it in its window: cadrei attach docs",
+		"cadrei answer " + code("work-docs-writer") + " 1":           "That question has more options or questions than cadrei keeps, so answer it in its window: cadrei attach docs",
 		"cadrei answer " + code("work-dev-my-app-engineer") + " yes": "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev my-app",
 	} {
 		if n, out, errOut := guardAs(t, c, "", "default", command); n != 2 || out != "" || strings.TrimSpace(errOut) != why {

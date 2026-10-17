@@ -126,10 +126,18 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 		{"mcp__files__upload", `{"path": "/w/resume.pdf"}`, runtime.Request{Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/resume.pdf"}`}},
 		{"AskUserQuestion", `{"questions": [{"question": "Upload the test file to the signing site?", "header": "Upload", "options": [{"label": "Yes", "description": "Upload the test file to the signing site."}, {"label": "No", "description": "Do not upload the test file."}], "multiSelect": false}]}`,
 			runtime.Request{Tool: "AskUserQuestion", Question: "Upload the test file to the signing site?", Options: []string{"Yes", "No"}}},
+		// W7 (PR B): a multi-select question, or several questions, keep
+		// each question as a part, answered from the orchestrator.
 		{"AskUserQuestion", `{"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}], "multiSelect": true}]}`,
-			runtime.Request{Tool: "AskUserQuestion", Question: "Which?", Options: []string{"A", "B"}, Multi: true}},
+			runtime.Request{Tool: "AskUserQuestion", Question: "Which?", Options: []string{"A", "B"}, Parts: []runtime.Part{{Question: "Which?", Options: []string{"A", "B"}, Multi: true}}}},
 		{"AskUserQuestion", `{"questions": [{"question": "One?", "options": [{"label": "A"}]}, {"question": "Two?", "options": [{"label": "B"}]}]}`,
-			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Multi: true}},
+			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Parts: []runtime.Part{{Question: "One?", Options: []string{"A"}}, {Question: "Two?", Options: []string{"B"}}}}},
+		// More questions than it keeps, or a question with no options, is
+		// left to the window.
+		{"AskUserQuestion", `{"questions": [{"question": "1?", "options": [{"label": "A"}]}, {"question": "2?", "options": [{"label": "A"}]}, {"question": "3?", "options": [{"label": "A"}]}, {"question": "4?", "options": [{"label": "A"}]}, {"question": "5?", "options": [{"label": "A"}]}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "1?", Options: []string{"A"}, Multi: true, Parts: []runtime.Part{{Question: "1?", Options: []string{"A"}}, {Question: "2?", Options: []string{"A"}}, {Question: "3?", Options: []string{"A"}}, {Question: "4?", Options: []string{"A"}}}}},
+		{"AskUserQuestion", `{"questions": [{"question": "One?", "options": [{"label": "A"}]}, {"question": "Two?", "options": []}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Multi: true, Parts: []runtime.Part{{Question: "One?", Options: []string{"A"}}, {Question: "Two?"}}}},
 		{"AskUserQuestion", `{"questions": [{"question": "Pick", "options": [{"label": "1"}, {"label": "2"}, {"label": "3"}, {"label": "4"}, {"label": "5"}, {"label": "6"}, {"label": "7"}]}]}`,
 			runtime.Request{Tool: "AskUserQuestion", Question: "Pick", Options: []string{"1", "2", "3", "4", "5", "6"}, Multi: true}},
 	} {

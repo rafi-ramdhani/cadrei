@@ -76,7 +76,7 @@ func runHookGuard(e *env) int {
 	if m[1] != "cadrei" && !isThisCadrei(m[1]) {
 		return guardRefuses(e, "Run cadrei answer <code> <choice> with cadrei by its name, so cadrei can ask you.")
 	}
-	code, choice := m[2], m[3]
+	code, choice := m[2], strings.Join(strings.Fields(m[3]), " ")
 	if !promptModes[call.Mode] {
 		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves, or to answer in the member's window.")
 	}
@@ -146,9 +146,13 @@ var promptModes = setOf("default", "acceptEdits", "auto")
 
 // strictAnswer is cadrei answer <code> <choice> as one simple command:
 // cadrei by its name or a full path, literal words, nothing around it.
-// answerListing is cadrei answer with nothing after it.
+// The choice is yes, no, or a pick for each of up to four questions (a
+// number, or numbers joined by commas). answerListing is cadrei answer
+// with nothing after it.
+const picksRule = `[0-9]{1,2}(?:,[0-9]{1,2}){0,5}`
+
 var (
-	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|[0-9]{1,2})\s*$`)
+	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|` + picksRule + `(?:[ \t]+` + picksRule + `){0,3})\s*$`)
 	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer\s*$`)
 )
 

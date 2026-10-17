@@ -317,10 +317,20 @@ type Request struct {
 	Full     string
 	Question string   // a question's text, for a question
 	Options  []string // a question's option labels, at most MaxOptions
-	// Multi: a question that takes more than one pick, holds more than one
-	// question or has more options than recorded, so only its window can
-	// answer it.
+	// Multi: a question that has no options, more options than recorded,
+	// or more questions than recorded, so only its window can answer it.
 	Multi bool
+	// Parts are each of its questions, when it holds more than one, or
+	// takes more than one pick (Question and Options are the first's).
+	Parts []Part
+}
+
+// Part is one question of a request that holds several, or takes more
+// than one pick.
+type Part struct {
+	Question string
+	Options  []string // at most MaxOptions
+	Multi    bool     // it takes one or more picks
 }
 
 // Limits on a request's text.
@@ -329,6 +339,7 @@ const (
 	FullLimit    = 8000
 	OptionLimit  = 80
 	MaxOptions   = 6
+	MaxParts     = 4
 )
 
 // traceRule is what a hook's own names and ids may be in a member's

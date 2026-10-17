@@ -328,6 +328,113 @@ func TestAnApprovalsChoicesComeOffTheScreen(t *testing.T) {
 	}
 }
 
+// stepsMember starts role in team dev with a stub Claude Code that shows
+// screens[0], then after each key it gets, the next screen (nothing after
+// the last), and notes each key in home/keys-<role>, an arrow as →.
+func stepsMember(t *testing.T, home, role string, screens ...string) {
+	t.Helper()
+	dir := filepath.Join(home, "steps-"+role)
+	os.MkdirAll(dir, 0o755)
+	for i, s := range screens {
+		os.WriteFile(filepath.Join(dir, strconv.Itoa(i)), []byte(s), 0o644)
+	}
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
+		"[ -n \"$TMUX\" ] || exit 0\n"+
+		stubReady+"sleep 1\n"+
+		"show() { printf '\\033[H\\033[2J'; [ -e \""+dir+"/$1\" ] && awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"; }\n"+
+		"i=0; show 0; stty raw -echo\n"+
+		"while :; do\n"+
+		"  k=$(dd bs=1 count=1 2>/dev/null)\n"+
+		"  [ \"$k\" = \"$(printf '\\033')\" ] && { dd bs=1 count=2 >/dev/null 2>&1; k=→; }\n"+
+		"  printf '%s|' \"$k\" >> \""+home+"/keys-"+role+"\"\n"+
+		"  i=$((i+1)); show $i\n"+
+		"done\n")
+	must(t, "up", "dev/"+role)
+	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
+	for i := 0; i < 100 && !strings.Contains(session.Default().Screen(session.SessionName("work", "dev"), role), "Esc to cancel"); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// filesAndSend is a question that asks two things at once, the first
+// with several picks, as the hook gets it, and the screens Claude Code
+// 2.1.302 is taken to draw for an answer of 1,2 then 1, from the recorded
+// multi-select screen and its own text (NOT seen live: PR E's live run
+// checks it): the first question, its boxes ticked one by one, the
+// second question, and the review.
+const filesAndSend = `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[` +
+	`{"question":"Which files go to the signing site?","options":[{"label":"resume.pdf"},{"label":"cover.pdf"}],"multiSelect":true},` +
+	`{"question":"Send them now?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`
+
+func filesAndSendScreens() []string {
+	files := func(a, b string) string {
+		return "────────────────────────────────────────\n←  ☐ Files  ☐ Send  ✔ Submit  →\n\nWhich files go to the signing site?\n\n" +
+			"❯ 1. [" + a + "] resume.pdf\n         Send resume.pdf to the signing site\n" +
+			"  2. [" + b + "] cover.pdf\n         Send cover.pdf to the signing site\n" +
+			"  3. [ ] Type something\n     Submit\n────────────────────────────────────────\n  4. Chat about this\n\n" +
+			"Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+	}
+	send := "────────────────────────────────────────\n←  ☒ Files  ☐ Send  ✔ Submit  →\n\nSend them now?\n\n" +
+		"❯ 1. Yes\n     Send both files now\n  2. No\n     Keep them for later\n  3. Type something.\n" +
+		"────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n"
+	review := "────────────────────────────────────────\n←  ☒ Files  ☒ Send  ✔ Submit  →\n\nReview your answers\n\n" +
+		" ● Which files go to the signing site?\n   → resume.pdf, cover.pdf\n ● Send them now?\n   → Yes\n\n" +
+		"Ready to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n"
+	return []string{files(" ", " "), files("✔", " "), files("✔", "✔"), send, review}
+}
+
+// W7: a question that asks two things, the first with several picks, is
+// answered one key at a time: each pick once the screen shows its
+// question, the arrow on from the multi-select one, and the review sent
+// only once it shows exactly these answers. A screen that doesn't show
+// the tick a pick should give stops it there, with nothing sent.
+func TestSeveralQuestionsAreAnsweredStepByStep(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	stepsMember(t, home, "engineer", filesAndSendScreens()...)
+	code := request(t, c, "engineer", filesAndSend)
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	if !strings.Contains(out, "  "+code+"  The engineer in dev asks 2 questions:\n"+
+		"         Which files go to the signing site? (pick one or more)\n           1. resume.pdf\n           2. cover.pdf\n"+
+		"         Send them now?\n           1. Yes\n           2. No\n"+
+		"       Answer:         cadrei answer "+code+" 1,2 1\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	n, out, errOut := call("answer", code, "1,2", "1")
+	if n != 0 || flat(out) != `+ Answered the engineer in dev: Which files go to the signing site? "1. resume.pdf", "2. cover.pdf"; Send them now? "1. Yes"` {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|2|→|1|1|" {
+		t.Errorf("keys %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("after the answer: %+v", st)
+	}
+
+	// No tick after the first pick: stopped, nothing sent, still waiting.
+	screens := filesAndSendScreens()
+	screens[1] = screens[0]
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	stepWait = 500 * time.Millisecond
+	t.Cleanup(func() { stepWait = 2 * time.Second })
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "I pressed part of your answer, but the engineer's screen didn't show what I expected next, so I stopped before sending it.") {
+		t.Errorf("no tick: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|" {
+		t.Errorf("keys after no tick %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil || st.Current().Code != code || !st.Current().Answering.IsZero() {
+		t.Errorf("after stopping: %+v", st.Current())
+	}
+}
+
 // Nothing is pressed for a request the screen doesn't show (it changed),
 // a code that names nothing, a choice that can't answer it, or a run in a
 // member.

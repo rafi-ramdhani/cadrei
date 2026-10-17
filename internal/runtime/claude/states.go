@@ -133,15 +133,26 @@ func request(tool string, input json.RawMessage) *runtime.Request {
 			r.Multi = true
 			return r
 		}
-		q := in.Questions[0]
-		r.Question = runtime.RequestText(q.Question, runtime.SummaryLimit)
-		for i, o := range q.Options {
-			if i == runtime.MaxOptions {
+		r.Multi = len(in.Questions) > runtime.MaxParts
+		for n, q := range in.Questions {
+			if n == runtime.MaxParts {
 				break
 			}
-			r.Options = append(r.Options, runtime.RequestText(o.Label, runtime.OptionLimit))
+			p := runtime.Part{Question: runtime.RequestText(q.Question, runtime.SummaryLimit), Multi: q.MultiSelect}
+			for i, o := range q.Options {
+				if i == runtime.MaxOptions {
+					break
+				}
+				p.Options = append(p.Options, runtime.RequestText(o.Label, runtime.OptionLimit))
+			}
+			r.Multi = r.Multi || len(q.Options) == 0 || len(q.Options) > runtime.MaxOptions
+			r.Parts = append(r.Parts, p)
 		}
-		r.Multi = len(in.Questions) > 1 || q.MultiSelect || len(q.Options) == 0 || len(q.Options) > runtime.MaxOptions
+		r.Question, r.Options = r.Parts[0].Question, r.Parts[0].Options
+		// One question with one pick is the question itself.
+		if len(r.Parts) == 1 && !r.Parts[0].Multi {
+			r.Parts = nil
+		}
 		return r
 	}
 	var in map[string]json.RawMessage

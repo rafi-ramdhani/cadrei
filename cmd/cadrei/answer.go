@@ -181,6 +181,11 @@ func planText(summary string) string {
 func answerable(req *session.Request) bool {
 	switch req.Kind {
 	case session.ForQuestion:
+		for _, p := range req.Parts {
+			if p.Question == "" || len(p.Options) == 0 {
+				return false
+			}
+		}
 		return !req.Multi && req.Question != "" && len(req.Options) > 0
 	case session.ForPrompt:
 		return !req.Multi && req.Question != "" && len(picks(req.Options)) > 0
@@ -315,6 +320,17 @@ func (w *waitingOn) note() string {
 				". The user picks one with cadrei answer " + w.req.Code + " <n>."
 		}
 		return who + " wants to " + verb + ": " + object + "." + answer
+	case many(w.req) && answerable(w.req):
+		var parts []string
+		for _, p := range w.req.Parts {
+			parts = append(parts, partText(p))
+		}
+		lead := " asks: "
+		if len(w.req.Parts) > 1 {
+			lead = fmt.Sprintf(" asks %d questions: ", len(w.req.Parts))
+		}
+		return who + lead + strings.Join(parts, " ") + " The user answers by typing ! cadrei answer " + w.req.Code +
+			" and one answer per question, in order, several picks for one joined by commas (" + partsExample(w.req) + ")."
 	case w.req.Kind == session.ForQuestion && answerable(w.req):
 		return who + " asks: " + w.req.Question + " Options: " + numbered(w.req) + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	case w.req.Kind == session.ForQuestion:
@@ -347,7 +363,7 @@ func nothingWaiting(code string, c func(string) string) string {
 func checkChoice(w *waitingOn, code, choice string, c func(string) string) string {
 	switch {
 	case w.req.Kind == session.ForQuestion && w.req.Multi:
-		return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
+		return "That question has more options or questions than cadrei keeps, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForPrompt && !answerable(w.req):
 		return "Cadrei couldn't read that prompt whole off the screen, so answer it in its window: " + c(w.attach())
 	case cutShort(w.req) && checkable(w.req.Tool):
@@ -366,6 +382,10 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 			return code + " takes yes, no, or one of its choices: " + strings.Join(nums, ", ") + ". Use " + c("cadrei answer "+code+" no") + ", for example."
 		}
 		return code + " is a yes-or-no prompt. Use " + c("cadrei answer "+code+" yes") + " or " + c("cadrei answer "+code+" no") + "."
+	case many(w.req):
+		if _, ok := partPicks(w.req, choice); !ok {
+			return partsUsage(w.req, code, c)
+		}
 	case w.req.Kind == session.ForQuestion:
 		n, err := strconv.Atoi(choice)
 		if err != nil || strconv.Itoa(n) != choice || n < 1 || n > len(w.req.Options) {
@@ -389,6 +409,9 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 // askReason is the guard's text in the runtime's permission prompt: what
 // a yes there does, built from the record only.
 func askReason(w *waitingOn, choice string) string {
+	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
+		return "Cadrei: answer " + w.place() + " with " + picked(w.req, picks) + "?"
+	}
 	switch w.req.Kind {
 	case session.ForQuestion:
 		n, _ := strconv.Atoi(choice)
@@ -413,8 +436,11 @@ var answerWait = 2 * time.Second
 
 // runAnswer is cadrei answer [<code> yes|no|<n>].
 func runAnswer(e *env) int {
-	if len(e.args) != 0 && len(e.args) != 2 {
+	if len(e.args) == 1 {
 		return e.failWith("Use " + cmd("cadrei answer") + " to see who's waiting on you, or " + cmd("cadrei answer <code> yes|no|<n>") + " to answer.")
+	}
+	if len(e.args) > 1+runtime.MaxParts {
+		return e.failWith("Use " + cmd("cadrei answer <code> <n> <n>") + ", one answer for each question, at most " + strconv.Itoa(runtime.MaxParts) + ".")
 	}
 	if e.memberAnyway("answer for you") {
 		return 1
@@ -434,7 +460,8 @@ func runAnswer(e *env) int {
 	if len(e.args) == 0 {
 		return e.listWaiting(r, t)
 	}
-	code, choice := e.args[0], e.args[1]
+	// A question asked with others takes an answer for each.
+	code, choice := e.args[0], strings.Join(e.args[1:], " ")
 	w := findWaiting(r, t, code)
 	if w == nil {
 		return e.failWith(nothingWaiting(code, cmd))
@@ -455,7 +482,13 @@ func runAnswer(e *env) int {
 		return e.failWith(nothingWaiting(code, cmd))
 	}
 	pressed := time.Now()
-	if err := t.SendKeys(w.session, w.window, false, key); err != nil {
+	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
+		if why := answerSteps(t, w, picks); why != "" {
+			answering(build, w, false)
+			e.warn("", why)
+			return 1
+		}
+	} else if err := t.SendKeys(w.session, w.window, false, key); err != nil {
 		answering(build, w, false)
 		return e.fail("%s", err)
 	}
@@ -476,12 +509,15 @@ func runAnswer(e *env) int {
 	}
 	answered(build, w, choice, pressed)
 	verb, object, _ := act(w.req)
-	label, picked := approvalPick(w.req, choice)
+	label, isPick := approvalPick(w.req, choice)
 	switch {
+	case many(w.req):
+		picks, _ := partPicks(w.req, choice)
+		e.note("", markDone, "Answered "+w.place()+": "+picked(w.req, picks))
 	case w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt:
 		n, _ := strconv.Atoi(choice)
 		e.note("", markDone, "Answered "+w.place()+": "+choice+". "+w.req.Options[n-1])
-	case picked && !plainChoice(label):
+	case isPick && !plainChoice(label):
 		e.note("", markDone, "Answered "+w.place()+": "+choice+". "+label)
 	case choice == "yes" || label == "Yes":
 		e.note("", markDone, "Allowed once: "+w.place()+" can "+verb+" "+object+".")
@@ -527,6 +563,9 @@ func fitSize(w *waitingOn) (width, height int) {
 	}
 	if w.req.Kind != session.ForApproval {
 		lines = append(strings.Split(w.req.Question, "⏎"), w.req.Options...)
+	}
+	for _, p := range w.req.Parts[min(1, len(w.req.Parts)):] {
+		lines = append(append(lines, strings.Split(p.Question, "⏎")...), p.Options...)
 	}
 	longest := 0
 	for _, l := range lines {
@@ -642,6 +681,23 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 				}
 				e.say("%s", "       "+pad("Pick one:")+cmd("cadrei answer "+code+" "+strconv.Itoa(others[0])))
 			}
+		case many(w.req) && answerable(w.req):
+			lead := " asks:"
+			if len(w.req.Parts) > 1 {
+				lead = fmt.Sprintf(" asks %d questions:", len(w.req.Parts))
+			}
+			e.say("%s", "  "+code+"  "+capital(w.place())+lead)
+			for _, p := range w.req.Parts {
+				more := ""
+				if p.Multi {
+					more = " (pick one or more)"
+				}
+				e.say("%s", "         "+p.Question+more)
+				for i, o := range p.Options {
+					e.say("%s", fmt.Sprintf("           %d. %s", i+1, o))
+				}
+			}
+			e.say("%s", "       "+pad("Answer:")+cmd(partsExample(w.req)))
 		case w.req.Kind == session.ForQuestion && answerable(w.req):
 			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
 			for i, o := range w.req.Options {
@@ -650,7 +706,7 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" 1"))
 		case w.req.Kind == session.ForQuestion:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
-			e.say("%s", "       This needs more than one pick. Answer it in its window: "+cmd(w.attach()))
+			e.say("%s", "       It has more options or questions than cadrei keeps. Answer it in its window: "+cmd(w.attach()))
 		case w.req.Kind == session.ForPrompt && answerable(w.req):
 			e.say("%s", "  "+code+"  "+capital(w.place())+" shows a prompt:")
 			for _, l := range strings.Split(w.req.Question, "⏎") {
@@ -901,6 +957,10 @@ func squeeze(text string) string {
 // else, between the dashed rules; a file by its path from the member's
 // folder (or in full), on the line under the box's title.
 func promptShows(screen string, w *waitingOn) bool {
+	if many(w.req) {
+		// Before its first key, its first question.
+		return answerable(w.req) && partShows(screen, w.req.Parts[0])
+	}
 	opts, box, ok := promptOf(screen, w)
 	if !ok || !answerable(w.req) {
 		return false
