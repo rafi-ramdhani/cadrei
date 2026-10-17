@@ -355,6 +355,64 @@ func (t Tmux) LastLine(session, window string) string {
 	return ""
 }
 
+// The size a member's window starts at.
+const (
+	WindowWidth  = 220
+	WindowHeight = 60
+)
+
+// Largest size Grow makes a window: tmux's own limit is far above it.
+const (
+	maxGrowWidth  = 1000
+	maxGrowHeight = 500
+)
+
+// WindowSize is a window's width and height, or 0, 0 when tmux can't say.
+func (t Tmux) WindowSize(session, window string) (width, height int) {
+	out, err := t.run("display", "-p", "-t", target(session)+"="+window, "#{window_width} #{window_height}")
+	if err != nil {
+		return 0, 0
+	}
+	if n, _ := fmt.Sscan(out, &width, &height); n != 2 {
+		return 0, 0
+	}
+	return width, height
+}
+
+// Grow makes a window at least width by height (up to maxGrowWidth by
+// maxGrowHeight) for a moment, so a prompt too big for it can be read
+// whole, and reports whether it changed it. restore puts the window's
+// size back as it was: back to following the session's size and whoever
+// has it open, or to a size set on the window itself.
+func (t Tmux) Grow(session, window string, width, height int) (restore func(), grown bool) {
+	none := func() {}
+	w, h := t.WindowSize(session, window)
+	if w == 0 || h == 0 {
+		return none, false
+	}
+	width, height = max(w, min(width, maxGrowWidth)), max(h, min(height, maxGrowHeight))
+	if width == w && height == h {
+		return none, false
+	}
+	win := target(session) + "=" + window
+	own, _ := t.run("show-options", "-wqv", "-t", win, "window-size")
+	if _, err := t.run("resize-window", "-t", win, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height)); err != nil {
+		return none, false
+	}
+	return func() {
+		t.run("resize-window", "-t", win, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h))
+		// resize-window set the window's own window-size to manual. Put
+		// back as it was, the size follows the session's and whoever opens
+		// the window again (tmux 3.8 doesn't size it anew when it's unset,
+		// hence the resize first).
+		if own = strings.TrimSpace(own); own == "" {
+			t.run("set-option", "-wu", "-t", win, "window-size")
+		} else {
+			t.run("set-option", "-w", "-t", win, "window-size", own)
+		}
+	}, true
+}
+
 // UnsetWindowOption removes a window option set on one window, so the
 // global value applies again.
 func (t Tmux) UnsetWindowOption(session, window, name string) {
@@ -549,7 +607,11 @@ func (t Tmux) Start(s StartSpec) error {
 	}
 	isNew := !t.Has(s.Session)
 	if isNew {
-		add("new-session", "-d", "-s", s.Session, "-n", bootWindow, "-c", startDir(s.Dir), "--", "sleep", "30")
+		// Wide and tall, so a member's prompts fit on its screen while no
+		// one has its window open (tmux's own default is 80x24): cadrei
+		// checks a prompt on the screen before it answers it.
+		add("new-session", "-d", "-s", s.Session, "-n", bootWindow, "-x", strconv.Itoa(WindowWidth), "-y", strconv.Itoa(WindowHeight), "-c", startDir(s.Dir), "--", "sleep", "30")
+		set("-q", target(s.Session), Option{"default-size", strconv.Itoa(WindowWidth) + "x" + strconv.Itoa(WindowHeight)})
 		for _, o := range s.SessionOptions {
 			set("-q", target(s.Session), o)
 		}

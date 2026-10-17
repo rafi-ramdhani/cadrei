@@ -57,6 +57,23 @@ func rawFixture(t *testing.T, name string) string {
 	return string(raw)
 }
 
+// wrappedDescription is question-live.txt with the first option's
+// description wrapped at 80 columns (item 9, as seen live).
+func wrappedDescription(t *testing.T) string {
+	return strings.Replace(screenFixture(t, "question-live.txt"), "     Upload resume.pdf to the signing site\n",
+		"     Upload resume.pdf to the signing site, which keeps a copy of it for thirty\n     days\n", 1)
+}
+
+// longLabel is a label too long for an 80-column window.
+const longLabel = "Yes, upload resume.pdf to the signing site now and keep a copy for the records"
+
+// wrappedLabel is question-live.txt with longLabel for the first option,
+// wrapped at 80 columns above its description.
+func wrappedLabel(t *testing.T) string {
+	return strings.Replace(screenFixture(t, "question-live.txt"), "❯ 1. Yes\n",
+		"❯ 1. Yes, upload resume.pdf to the signing site now and keep a copy for the\n     records\n", 1)
+}
+
 // approval and question are records as the state hook writes them.
 func approval(summary string) *waitingOn {
 	return &waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash", Summary: summary}}
@@ -109,6 +126,11 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		{ask, question("Upload the test file to the signing site?", "Yes", "No"), "2", "2"},
 		// A long label recorded cut short still matches.
 		{strings.Replace(ask, "❯ 1. Yes", "❯ 1. Yes, upload it now to the signing site", 1), question("Upload the test file to the signing site?", "Yes, upload it…", "No"), "1", "1"},
+		// Item 9: at 80 columns a description wraps onto a second line at
+		// its own column, and so does a long label, before its description.
+		{wrappedDescription(t), question("Upload resume.pdf to the signing site?", "Yes", "No"), "1", "1"},
+		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", "1"},
+		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", "Yes, upload resume.pdf to the signing site now…", "No"), "2", "2"},
 	} {
 		key, why := keyFor(tc.screen, tc.w, tc.choice)
 		if key != tc.key || why != "" {
@@ -132,10 +154,15 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		choice string
 		why    string
 	}{
-		"another command":      {bash, approval("rm -rf e2e-yes"), "yes", lost},
-		"a question instead":   {ask, approval("mkdir e2e-yes"), "yes", lost},
-		"another question":     {ask, question("Delete the test file?", "Yes", "No"), "1", lostWriter},
-		"other options":        {ask, question("Upload the test file to the signing site?", "No", "Yes"), "1", lostWriter},
+		"another command":    {bash, approval("rm -rf e2e-yes"), "yes", lost},
+		"a question instead": {ask, approval("mkdir e2e-yes"), "yes", lost},
+		"another question":   {ask, question("Delete the test file?", "Yes", "No"), "1", lostWriter},
+		"other options":      {ask, question("Upload the test file to the signing site?", "No", "Yes"), "1", lostWriter},
+		// Item 9: a wrapped label must go on exactly as recorded, and whole.
+		"a label going on otherwise": {strings.Replace(wrappedLabel(t), "     records\n", "     archive\n", 1),
+			question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", lostWriter},
+		"a label without its end": {strings.Replace(wrappedLabel(t), "     records\n", "", 1),
+			question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", lostWriter},
 		"no prompt":            {"⏺ Done.\n\n❯ \n? for shortcuts\n", approval("mkdir e2e-yes"), "yes", lost},
 		"options gone":         {strings.Replace(bash, " Esc to cancel · Tab to amend\n", "", 1), approval("mkdir e2e-yes"), "yes", lost},
 		"a gap in the numbers": {strings.Replace(bash, "   2. Yes, and always", "   5. Yes, and always", 1), approval("mkdir e2e-yes"), "yes", lost},

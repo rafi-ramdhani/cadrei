@@ -131,7 +131,7 @@ $ cadrei answer 7f3 yes
 ✓ Allowed once: the engineer on my-app can run gh pr merge 42.
 ```
 
-`yes` only ever picks the plain "Yes", the one-time allow, never a choice that allows more or changes the member's mode. `no` stops the member's turn: it waits for what to do instead. Some are answered in the member's window: a question that takes more than one pick, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command too long for cadrei's record to hold whole), a prompt taller than the member's window (its top isn't on the screen, so cadrei can't see it whole), and a file whose path the window shows cut short. `cadrei answer` says so, and your orchestrator's guard says so before it asks you.
+`yes` only ever picks the plain "Yes", the one-time allow, never a choice that allows more or changes the member's mode. `no` stops the member's turn: it waits for what to do instead. Some are answered in the member's window: a question that takes more than one pick, a prompt with no plain "Yes", a prompt cadrei can't check on the member's screen (anything but a command, or a file to write or edit, and a command too long for cadrei's record to hold whole), and a prompt that doesn't fit the member's window even after cadrei makes the window bigger for a moment to check it. `cadrei answer` says so, and your orchestrator's guard says so before it asks you.
 
 ### `cadrei compact <team>/<role> [project]`
 

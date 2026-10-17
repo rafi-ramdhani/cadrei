@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,13 +49,21 @@ func runAs(t *testing.T, cmd *exec.Cmd) {
 
 // promptMember starts role in team dev with a stub Claude Code that shows
 // its ready footer, then a recorded prompt, and notes in home/key the one
-// key it gets. With home/stay, the prompt stays after the key.
+// key it gets. With home/stay, the prompt stays after the key. With
+// home/grown-<role>, it shows that instead once its window's size changes,
+// as Claude Code draws a prompt anew at a new size.
 func promptMember(t *testing.T, home, role, fixture string) {
 	t.Helper()
 	abs := filepath.Join(answerFixtures, fixture)
+	grown := home + "/grown-" + role
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
 		stubReady+"sleep 1\nprintf '\\033[H\\033[2J'\ncat '"+abs+"'\n"+
+		"if [ -e \""+grown+"\" ]; then (set -- $(stty size </dev/tty); rows=$1 cols=$2; while sleep 0.1; do\n"+
+		"  set -- $(stty size </dev/tty); [ \"$1\" -gt \"$rows\" ] || [ \"$2\" -gt \"$cols\" ] || continue\n"+
+		// The key's read has the terminal raw: each line ends in \r\n.
+		"  printf '\\033[H\\033[2J'; awk '{ printf \"%s\\r\\n\", $0 }' \""+grown+"\"; exit 0\n"+
+		"done) & fi\n"+
 		"stty raw -echo\nk=$(dd bs=1 count=1 2>/dev/null)\n"+
 		// Any key after it (an Enter, say) in the next half second.
 		"stty min 0 time 5\ne=$(dd bs=1 count=8 2>/dev/null)\nstty sane\n"+
@@ -193,6 +202,51 @@ func TestAnswerSaysWhenThePromptStays(t *testing.T) {
 	n, out, errOut := call("answer", code, "yes")
 	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+}
+
+// tallRequest is the permission request for tallCommand, as the hook gets
+// it.
+func tallRequest() string {
+	command, _ := json.Marshal(strings.ReplaceAll(tallCommand, "⏎", "\n"))
+	return `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":` + string(command) + `}}`
+}
+
+// W1, W2: members start in 220x60 windows. A prompt too big for its
+// member's window (a heredoc taller than it, with its top gone) is read
+// with the window grown for a moment, and the window's size goes back
+// after: to one set on the window itself (as on a small screen, or by
+// cadrei 0.2.2's 80x24), or to following the session's.
+func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
+	home := sandbox(t)
+	socket := withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	tm, s := session.Default(), session.SessionName("work", "dev")
+	for _, role := range []string{"engineer", "reviewer"} {
+		os.WriteFile(home+"/grown-"+role, []byte(drawn(t, approval(tallCommand).req)), 0o644)
+		promptMember(t, home, role, "tall-live.txt")
+		if w, h := tm.WindowSize(s, role); w != 220 || h != 60 {
+			t.Errorf("%s started at %dx%d", role, w, h)
+		}
+	}
+	exec.Command("tmux", "-L", socket, "resize-window", "-t", "="+s+":=engineer", "-x", "80", "-y", "24").Run()
+	ownTerminal(t)
+	for role, size := range map[string][2]int{"engineer": {80, 24}, "reviewer": {220, 60}} {
+		code := request(t, c, role, tallRequest())
+		if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
+			t.Errorf("%s: exit %d: %q %q", role, n, out, errOut)
+		}
+		if k := key(t, home, role); k != "1" {
+			t.Errorf("%s: key %q", role, k)
+		}
+		if w, h := tm.WindowSize(s, role); w != size[0] || h != size[1] {
+			t.Errorf("%s: back at %dx%d", role, w, h)
+		}
+	}
+	own, _ := exec.Command("tmux", "-L", socket, "show-options", "-wqv", "-t", "="+s+":=reviewer", "window-size").Output()
+	if strings.TrimSpace(string(own)) != "" {
+		t.Errorf("the reviewer's window keeps a size of its own: %q", own)
 	}
 }
 

@@ -42,7 +42,7 @@ func answerCrew(t *testing.T) (c, eng, writer string) {
 	// Each member's window shows what it waits on, as Claude Code draws
 	// it. TestTheGuardLooksAtTheScreenFirst reads real windows.
 	read := guardScreen
-	guardScreen = func(w *waitingOn) string { return drawn(t, w.req) }
+	guardScreen = func(w *waitingOn) (string, func()) { return drawn(t, w.req), func() {} }
 	t.Cleanup(func() { guardScreen = read })
 	return c, code("work-dev-my-app-engineer"), code("work-docs-writer")
 }

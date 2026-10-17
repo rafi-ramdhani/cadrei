@@ -338,7 +338,9 @@ func runAnswer(e *env) int {
 	if why := checkChoice(w, code, choice, cmd); why != "" {
 		return e.failWith(why)
 	}
-	key, why := keyFor(t.Screen(w.session, w.window), w, choice)
+	screen, restore := promptScreen(t, w)
+	defer restore()
+	key, why := keyFor(screen, w, choice)
 	if why != "" {
 		return e.failWith(why)
 	}
@@ -380,6 +382,49 @@ func runAnswer(e *env) int {
 		e.note("", markDone, "Told "+w.place()+" no. It won't "+verb+" "+object+", and it's waiting for what to do instead.")
 	}
 	return 0
+}
+
+// growWait is how long a window cadrei grew may take to show the prompt
+// again: the runtime draws it anew at the new size.
+var growWait = 1500 * time.Millisecond
+
+// promptScreen is what w's window shows, for a check of w's prompt: as it
+// is, or when the prompt doesn't show whole there, with the window grown
+// for a moment to a size it fits in (restore puts the size back). A window
+// someone has open on a small screen, or one cadrei 0.2.2 started at
+// 80x24, can be too small for a long command or path.
+func promptScreen(t session.Tmux, w *waitingOn) (screen string, restore func()) {
+	screen = t.Screen(w.session, w.window)
+	if promptShows(screen, w) || !answerable(w.req) {
+		return screen, func() {}
+	}
+	width, height := fitSize(w)
+	restore, grown := t.Grow(w.session, w.window, width, height)
+	for start := time.Now(); grown && time.Since(start) < growWait; {
+		time.Sleep(100 * time.Millisecond)
+		if screen = t.Screen(w.session, w.window); promptShows(screen, w) {
+			break
+		}
+	}
+	return screen, restore
+}
+
+// fitSize is a window size w's prompt fits in whole, from its record:
+// wide enough for each line of what it shows (a command, a path, a
+// question and its options) to stay on one line, and tall enough for
+// all of them and the rest of the prompt around them.
+func fitSize(w *waitingOn) (width, height int) {
+	lines := strings.Split(w.req.Summary, "⏎")
+	if w.req.Kind != session.ForApproval {
+		lines = append(strings.Split(w.req.Question, "⏎"), w.req.Options...)
+	}
+	longest := 0
+	for _, l := range lines {
+		longest = max(longest, utf8.RuneCountInString(l))
+	}
+	// Room for the frame and the option numbers, and for the title, the
+	// options with a line each for a description, and the footer.
+	return max(session.WindowWidth, longest+12), max(session.WindowHeight, len(lines)+2*len(w.req.Options)+30)
 }
 
 // answering marks w's request in its member's state as being answered by
@@ -697,7 +742,7 @@ func promptShows(screen string, w *waitingOn) bool {
 			return false
 		}
 		for i, o := range req.Options {
-			if !sameLabel(opts[i].label, o) {
+			if !labelShown(opts[i], o) {
 				return false
 			}
 		}
@@ -761,6 +806,30 @@ func sameLabel(screen, recorded string) bool {
 		return strings.HasPrefix(screen, cut)
 	}
 	return screen == recorded
+}
+
+// labelShown reports whether a question's option on the screen shows the
+// recorded label: on its own line, or going on to the lines under it, as
+// a label too long for the window wraps. A description starts at the
+// same column, so a line goes with the label only while the label, read
+// squeezed, goes on with it, and the whole label must be there.
+func labelShown(o promptOption, recorded string) bool {
+	if sameLabel(o.label, recorded) {
+		return true
+	}
+	want, _ := strings.CutSuffix(recorded, "…")
+	want = squeeze(want)
+	got := squeeze(o.label)
+	for _, u := range o.under {
+		if got == "" || !strings.HasPrefix(want, got) || indent(u) != o.col {
+			return false
+		}
+		got += squeeze(u)
+		if got == want || strings.HasSuffix(recorded, "…") && strings.HasPrefix(got, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // keyFor is the one key that gives choice in w's prompt, checked against
