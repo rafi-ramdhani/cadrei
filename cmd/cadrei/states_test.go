@@ -89,7 +89,7 @@ func TestLsShowsWhatMembersDo(t *testing.T) {
 	// ready-made (0.2.2: the request, with its code).
 	t.Setenv("CADREI_HOME", c)
 	t.Setenv("CADREI_ORCHESTRATOR", "1")
-	code := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json").Request.Code
+	code := session.ReadState(c + "/.claude/build/state/work-dev-engineer.json").Current().Code
 	if s := snapshotText(t, "resume"); !strings.Contains(s, "- Waiting on the user: The engineer in dev ("+code+") wants to run: make test. Answer with cadrei answer "+code+" yes, or no. Its window: cadrei attach dev\n") {
 		t.Errorf("snapshot:\n%s", s)
 	}

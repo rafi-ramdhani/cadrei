@@ -100,82 +100,108 @@ func TestSafeguardReadsAnUnchangedTranscriptOnce(t *testing.T) {
 
 // 0.2.2 (6.4): a permission request records what the runtime passed,
 // waiting for a code; leaving waiting drops it; a new request is a new
-// request.
+// request. 0.2.3: each is its own request, and a tool call starting
+// leaves them open.
 func TestARequestLastsWhileItWaits(t *testing.T) {
 	now := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
 	ask := runtime.StateEvent{Name: runtime.EvPermission, Request: &runtime.Request{Tool: "Bash", Summary: "gh pr merge 42 --squash"}}
 	s := Apply(nil, ask, now)
-	if s.State != Waiting || s.Request == nil || !Same(&State{Request: s.Request}, &State{Request: &Request{Kind: ForApproval, Tool: "Bash", Summary: "gh pr merge 42 --squash"}}) {
-		t.Fatalf("approval: %+v %+v", s, s.Request)
+	if s.State != Waiting || len(s.Requests()) != 1 || !Same(&State{Open: s.Requests()}, &State{Open: []*Request{{Kind: ForApproval, Tool: "Bash", Summary: "gh pr merge 42 --squash", Source: FromHook}}}) {
+		t.Fatalf("approval: %+v %+v", s, s.Current())
 	}
+	// Another request that names no call takes the place of this one.
 	q := runtime.StateEvent{Name: runtime.EvPermission, Question: true, Request: &runtime.Request{Tool: "AskUserQuestion", Question: "Ship?", Options: []string{"Yes", "No"}}}
 	s = Apply(s, q, now)
-	if s.Request.Kind != ForQuestion || s.Request.Question != "Ship?" || len(s.Request.Options) != 2 || s.Request.Code != "" {
-		t.Errorf("question: %+v", s.Request)
+	if r := s.Requests(); len(r) != 1 || r[0].Kind != ForQuestion || r[0].Question != "Ship?" || len(r[0].Options) != 2 || r[0].Code != "" || s.WaitingFor != ForQuestion {
+		t.Errorf("question: %+v", s.Requests())
 	}
-	for _, name := range []string{runtime.EvToolUse, runtime.EvStop, runtime.EvPrompt, runtime.EvStopFailure, runtime.EvIdleReminder} {
-		if next := Apply(s, runtime.StateEvent{Name: name}, now.Add(time.Minute)); next.Request != nil {
-			t.Errorf("%s kept the request", name)
+	// One of a call joins it.
+	s = Apply(s, runtime.StateEvent{Name: runtime.EvToolUse, Tool: "Bash", ToolID: "toolu_b", InputKey: "k"}, now)
+	s = Apply(s, runtime.StateEvent{Name: runtime.EvPermission, Tool: "Bash", InputKey: "k", Request: &runtime.Request{Tool: "Bash", Summary: "make"}}, now)
+	if next := Apply(s, runtime.StateEvent{Name: runtime.EvToolUse}, now.Add(time.Minute)); next.State != Waiting || len(next.Requests()) != 2 {
+		t.Errorf("a tool call starting dropped them: %+v", next)
+	}
+	for _, name := range []string{runtime.EvStop, runtime.EvPrompt, runtime.EvStopFailure, runtime.EvStart} {
+		if next := Apply(s, runtime.StateEvent{Name: name}, now.Add(time.Minute)); next.Current() != nil || next.WaitingFor != "" {
+			t.Errorf("%s kept the requests", name)
 		}
+	}
+	// The runtime's idle reminder ends no prompt that still shows on the
+	// member's screen (or one cadrei couldn't read).
+	if next := Apply(s, runtime.StateEvent{Name: runtime.EvIdleReminder}, now.Add(time.Minute)); next.State != Waiting || len(next.Requests()) != 2 {
+		t.Errorf("idle reminder: %+v", next)
+	}
+	// Review finding 4: with no prompt on the screen (a no or Esc in its
+	// window), it ends them all and the member is idle, as in 0.2.2.
+	if next := Apply(s, runtime.StateEvent{Name: runtime.EvIdleReminder, NoPrompt: true}, now.Add(time.Minute)); next.State != Idle || next.Current() != nil || next.WaitingFor != "" {
+		t.Errorf("idle reminder, no prompt: %+v", next)
 	}
 }
 
 // Same compares states, their requests too.
 func TestSameComparesRequests(t *testing.T) {
-	a := &State{State: Waiting, Request: &Request{Code: "7f3", Kind: ForQuestion, Options: []string{"Yes", "No"}}}
-	b := &State{State: Waiting, Request: &Request{Code: "7f3", Kind: ForQuestion, Options: []string{"Yes", "No"}}}
+	a := &State{State: Waiting, Open: []*Request{{Code: "7f3", Kind: ForQuestion, Options: []string{"Yes", "No"}}}}
+	b := &State{State: Waiting, Open: []*Request{{Code: "7f3", Kind: ForQuestion, Options: []string{"Yes", "No"}}}}
 	if !Same(a, b) || !Same(nil, nil) || Same(a, nil) {
 		t.Error("the same")
 	}
 	for _, change := range []func(*State){
-		func(s *State) { s.Request.Code = "k2m" },
-		func(s *State) { s.Request.Options = []string{"Yes"} },
-		func(s *State) { s.Request.Options = []string{"No", "Yes"} },
-		func(s *State) { s.Request = nil },
+		func(s *State) { s.Open[0].Code = "k2m" },
+		func(s *State) { s.Open[0].Options = []string{"Yes"} },
+		func(s *State) { s.Open[0].Options = []string{"No", "Yes"} },
+		func(s *State) { s.Open[0].Call = "toolu_1" },
+		func(s *State) { s.Open = nil },
+		func(s *State) { s.Open = append(s.Open, &Request{Kind: ForApproval}) },
+		func(s *State) { s.Calls = []Call{{ID: "toolu_1"}} },
 		func(s *State) { s.State = Idle },
 	} {
 		c := *b
-		r := *b.Request
-		c.Request = &r
+		r := *b.Open[0]
+		c.Open = []*Request{&r}
 		change(&c)
 		if Same(a, &c) {
-			t.Errorf("a change went unseen: %+v", c.Request)
+			t.Errorf("a change went unseen: %+v", c.Open)
 		}
 	}
 }
 
 // A new request gets a code of three of a-z and 2-9 without 0, 1, l and o,
-// that no other state file in the folder has.
+// that no other state file in the folder has, nor another request in the
+// same state.
 func TestARequestsCode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "w-dev-engineer.json")
 	seen := map[string]bool{}
 	for i := 0; i < 200; i++ {
-		s := &State{State: Waiting, Request: &Request{Kind: ForApproval}}
+		s := &State{State: Waiting, Open: []*Request{{Kind: ForApproval}}}
 		GiveCode(path, s)
-		if !CodeRule.MatchString(s.Request.Code) || strings.ContainsAny(s.Request.Code, "01lo") {
-			t.Fatalf("code %q", s.Request.Code)
+		if !CodeRule.MatchString(s.Current().Code) || strings.ContainsAny(s.Current().Code, "01lo") {
+			t.Fatalf("code %q", s.Current().Code)
 		}
-		seen[s.Request.Code] = true
+		seen[s.Current().Code] = true
 	}
 	if len(seen) < 150 {
 		t.Errorf("only %d codes in 200", len(seen))
 	}
 	// Taken by another member: never given again.
 	for code := range seen {
-		WriteState(filepath.Join(dir, "w-dev-"+code+".json"), &State{State: Waiting, Request: &Request{Code: code, Kind: ForApproval}})
+		WriteState(filepath.Join(dir, "w-dev-"+code+".json"), &State{State: Waiting, Open: []*Request{{Code: code, Kind: ForApproval}}})
 	}
 	for i := 0; i < 200; i++ {
-		s := &State{State: Waiting, Request: &Request{Kind: ForApproval}}
+		s := &State{State: Waiting, Open: []*Request{{Kind: ForApproval}}}
 		GiveCode(path, s)
-		if seen[s.Request.Code] {
-			t.Fatalf("%s was taken", s.Request.Code)
+		if seen[s.Current().Code] {
+			t.Fatalf("%s was taken", s.Current().Code)
 		}
 	}
-	// A request with a code keeps it.
-	s := &State{State: Waiting, Request: &Request{Code: "7f3", Kind: ForApproval}}
-	GiveCode(path, s)
-	if s.Request.Code != "7f3" {
-		t.Errorf("code %q", s.Request.Code)
+	// A request with a code keeps it, and the new one beside it gets
+	// another.
+	for i := 0; i < 50; i++ {
+		s := &State{State: Waiting, Open: []*Request{{Code: "7f3", Kind: ForApproval}, {Kind: ForApproval}, {Kind: ForQuestion}}}
+		GiveCode(path, s)
+		r := s.Requests()
+		if r[0].Code != "7f3" || r[1].Code == "" || r[1].Code == "7f3" || r[2].Code == r[1].Code || r[2].Code == "7f3" {
+			t.Fatalf("codes %q %q %q", r[0].Code, r[1].Code, r[2].Code)
+		}
 	}
 }

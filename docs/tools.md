@@ -145,7 +145,7 @@ Each member in a running team:
 | `role` | string | Its role, like `engineer` |
 | `state` | string | What it's doing: `starting`, `working`, `waiting` (on you), `idle`, `unknown` (cadrei can't tell) or `stopped_by_safeguards` (Claude's safeguards stopped its reply, so it won't answer until you look) |
 | `since` | time, optional | When it got to that state. Left out for `unknown` |
-| `waiting_for` | string, optional | With `waiting` only: `approval` (it wants to run something) or `question` (it asked you something) |
+| `waiting_for` | string, optional | With `waiting` only: `approval` (it wants to run something), `question` (it asked you something) or `prompt` (a prompt cadrei read off its screen, when Claude Code didn't say what it asks) |
 | `no_activity_since` | time, optional | With `working` or `waiting` only: its chat hasn't changed since then, for 10 minutes or more. Maybe someone stopped it with Esc |
 | `turn_error` | bool, optional | With `idle` only: `true` when its last turn ended in an error |
 | `request` | object, optional | With `waiting` only: what it waits on you for, as Claude Code recorded it, when cadrei recorded it (a member started before 0.2.2 has none) |
@@ -170,10 +170,10 @@ A member that hasn't replied yet, or whose chat cadrei can't find, has no `conte
 | Field | Type | What it is |
 |---|---|---|
 | `code` | string | Three letters and digits, like `7f3`. `cadrei answer <code> yes`, `no` or an option's number answers it. A new request gets a new code |
-| `kind` | string | `approval` (a permission prompt) or `question`. Treat any other kind as one to answer in the member's window |
+| `kind` | string | `approval` (a permission prompt), `question`, or `prompt` (read off the member's screen: an option's number answers it). Treat any other kind as one to answer in the member's window |
 | `tool` | string, optional | The tool it wants to use, like `Bash` |
-| `summary` | string, optional | What it would run or touch (a command, a path, a URL), or a question's text. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
-| `options` | list of strings, optional | A question's option labels, at most 6 |
+| `summary` | string, optional | What it would run or touch (a command, a path, a URL), a question's text, or the text of a prompt read off the screen. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
+| `options` | list of strings, optional | A question's or a screen prompt's option labels, at most 6, numbered from 1 as the screen shows them. In a screen prompt, `cadrei answer` only presses the plain `Yes` or `No`, or a question's own options |
 | `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, holds more than one question, has no options or more than 6, or cadrei couldn't read it |
 
 Each project in `projects`:

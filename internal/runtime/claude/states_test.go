@@ -58,15 +58,50 @@ func TestStateEvent(t *testing.T) {
 		`{"hook_event_name":"PreToolUse","tool_name":"Bash"}`:                                             {Name: runtime.EvToolUse},
 		`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`:                                      {Name: runtime.EvPermission, Request: &runtime.Request{Tool: "Bash"}},
 		`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`:                           {Name: runtime.EvPermission, Question: true, Request: &runtime.Request{Tool: "AskUserQuestion", Multi: true}},
-		`{"hook_event_name":"Notification","notification_type":"permission_prompt"}`:                      {},
-		`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`:                            {Name: runtime.EvIdleReminder},
-		`{"hook_event_name":"StopFailure","error":"rate_limit"}`:                                          {Name: runtime.EvStopFailure},
-		`{"hook_event_name":"SessionEnd","session_id":"not-an-id","transcript_path":"relative"}`:          {Name: runtime.EvEnd},
+		`{"hook_event_name":"Notification","notification_type":"permission_prompt"}`:                      {Name: runtime.EvPromptShown},
+		`{"hook_event_name":"Notification","notification_type":"agent_completed"}`:                        {},
+		`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`:                                            {Name: runtime.EvToolDone},
+		`{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}`:                                     {Name: runtime.EvToolDone},
+		`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship?","options":[{"label":"Yes"},{"label":"No"}]}]}}`: {Name: runtime.EvToolUse, Question: true,
+			Request: &runtime.Request{Tool: "AskUserQuestion", Question: "Ship?", Options: []string{"Yes", "No"}}},
+		`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`:                   {Name: runtime.EvIdleReminder},
+		`{"hook_event_name":"StopFailure","error":"rate_limit"}`:                                 {Name: runtime.EvStopFailure},
+		`{"hook_event_name":"SessionEnd","session_id":"not-an-id","transcript_path":"relative"}`: {Name: runtime.EvEnd},
 		`not json`: {},
 	} {
-		if got := (sessions{}).StateEvent(strings.NewReader(in)); !reflect.DeepEqual(got, want) {
+		got := (sessions{}).StateEvent(strings.NewReader(in))
+		got.Hook, got.Tool, got.ToolID, got.Notice, got.InputKey = "", "", "", "", "" // TestStateEventForTheTrace, TestAnInputsKey
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %+v, want %+v", in, got, want)
 		}
+	}
+}
+
+// 0.2.3: what a member's trace notes of an event is one plain word each:
+// the hook's name, the tool, the call's id and a notification's type.
+// Never what the tool got, and nothing else a hook could slip in. The
+// tool and the id are kept as they came, printable and short, for
+// matching (an MCP tool's name or an id outside the trace's words still
+// matches its call); the trace filters them itself (runtime.TraceWord).
+func TestStateEventForTheTrace(t *testing.T) {
+	ev := sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_01AbC","tool_input":{"command":"echo TEST_TOKEN_PLACEHOLDER"}}`))
+	if ev.Hook != "PreToolUse" || ev.Tool != "Bash" || ev.ToolID != "toolu_01AbC" || ev.Notice != "" {
+		t.Errorf("tool event: %+v", ev)
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Claude needs your permission"}`))
+	if ev.Hook != "Notification" || ev.Notice != "permission_prompt" || ev.Tool != "" {
+		t.Errorf("notification: %+v", ev)
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"mcp__my.server__upload","tool_use_id":"id with spaces","notification_type":"` + strings.Repeat("x", 65) + `"}`))
+	if ev.Tool != "mcp__my.server__upload" || ev.ToolID != "id with spaces" || ev.Notice != "" {
+		t.Errorf("for matching: %+v", ev)
+	}
+	if runtime.TraceWord(ev.Tool) != "" || runtime.TraceWord(ev.ToolID) != "" {
+		t.Errorf("the trace would keep %q %q", runtime.TraceWord(ev.Tool), runtime.TraceWord(ev.ToolID))
+	}
+	ev = sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"PreToolUse","tool_name":"Bash\u001b[2J","tool_use_id":"` + strings.Repeat("x", 257) + `"}`))
+	if ev.Tool != "" || ev.ToolID != "" {
+		t.Errorf("unprintable or long kept: %+v", ev)
 	}
 }
 
@@ -322,5 +357,28 @@ func TestSentReadsASendMessageCall(t *testing.T) {
 	}
 	if got := string(ops.SentContext("x")); got != `{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"x"}}`+"\n" {
 		t.Errorf("SentContext: %s", got)
+	}
+}
+
+// 0.2.3: a permission request is matched to its call by a digest of the
+// tool's input, which PreToolUse and PermissionRequest both carry: the
+// same however the JSON is spaced or its keys ordered, and different for
+// another input. The input itself isn't kept.
+func TestAnInputsKey(t *testing.T) {
+	key := func(hook, input string) string {
+		return sessions{}.StateEvent(strings.NewReader(`{"hook_event_name":"` + hook + `","tool_name":"Bash","tool_input":` + input + `}`)).InputKey
+	}
+	a := key("PreToolUse", `{"command":"make deploy","description":"Deploy"}`)
+	if a == "" || len(a) != 32 || strings.Contains(a, "make") {
+		t.Fatalf("key %q", a)
+	}
+	if b := key("PermissionRequest", `{ "description" : "Deploy", "command" : "make deploy" }`); b != a {
+		t.Errorf("same input, keys %q %q", a, b)
+	}
+	if c := key("PermissionRequest", `{"command":"make deploy-prod","description":"Deploy"}`); c == a {
+		t.Error("another input, same key")
+	}
+	if key("PreToolUse", `null`) != "" || key("PostToolUse", `{"command":"x"}`) != "" {
+		t.Error("a key without an input, or for an event that doesn't match")
 	}
 }

@@ -146,8 +146,11 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 
 // waitingFor says what a waiting member waits for.
 func waitingFor(what string) string {
-	if what == session.ForQuestion {
+	switch what {
+	case session.ForQuestion:
 		return "an answer to its question"
+	case session.ForPrompt:
+		return "an answer to the prompt on its screen"
 	}
 	return "an approval"
 }
