@@ -342,7 +342,7 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 func TestTheGuardDeniesWhatItCantAnswer(t *testing.T) {
 	c, _, _ := answerCrew(t)
 	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}]}}`)
-	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"mcp__files__upload","tool_input":{"path":"/w/a.pdf"}}`)
+	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Glob","tool_input":{"pattern":"/w/**/*.pdf"}}`)
 	code := func(name string) string {
 		return session.ReadState(c + "/.claude/build/state/" + name + ".json").Current().Code
 	}

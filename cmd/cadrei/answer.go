@@ -3,7 +3,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	neturl "net/url"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -143,15 +146,20 @@ func act(req *session.Request) (verb, object, kind string) {
 }
 
 // screenTools are the tools whose permission prompt cadrei knows how to
-// check on a member's screen, from recorded screens: a command, a file to
-// write or edit. A page to fetch isn't one: its prompt (2.1.296) has no
-// "Esc to cancel" line to find it by, and shows the URL its own way.
-var screenTools = setOf("Bash", "Write", "Edit")
+// check on a member's screen (promptShows), besides MCP tools: from
+// recorded screens, a command, a file to write or edit, a page to fetch;
+// from Claude Code 2.1.302's own text, not seen live yet, a file to read
+// or edit in several places, a notebook, a web search.
+var screenTools = setOf("Bash", "Write", "Edit", "WebFetch", "MultiEdit", "NotebookEdit", "Read", "WebSearch")
+
+// checkable reports whether cadrei can check tool's permission prompt on
+// a member's screen.
+func checkable(tool string) bool { return screenTools[tool] || strings.HasPrefix(tool, "mcp__") }
 
 // answerable reports whether cadrei can answer req from here: a question
-// with one pick, a prompt for one of screenTools with what it would run
-// or touch recorded in full, or a prompt read off the screen whole, with
-// an option cadrei may press. Any other is answered in the member's
+// with one pick, a prompt for a tool cadrei can check with what it would
+// run or touch recorded in full, or a prompt read off the screen whole,
+// with an option cadrei may press. Any other is answered in the member's
 // window.
 func answerable(req *session.Request) bool {
 	switch req.Kind {
@@ -160,7 +168,7 @@ func answerable(req *session.Request) bool {
 	case session.ForPrompt:
 		return !req.Multi && req.Question != "" && len(picks(req.Options)) > 0
 	case session.ForApproval:
-		return screenTools[req.Tool] && req.Summary != "" && !cutShort(req)
+		return checkable(req.Tool) && req.Summary != "" && !cutShort(req)
 	}
 	return false
 }
@@ -267,7 +275,7 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 		return "This question needs more than one pick, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForPrompt && !answerable(w.req):
 		return "Cadrei couldn't read that prompt whole off the screen, so answer it in its window: " + c(w.attach())
-	case cutShort(w.req) && screenTools[w.req.Tool]:
+	case cutShort(w.req) && checkable(w.req.Tool):
 		return "That's too long for cadrei to check whole, so answer it in its window: " + c(w.attach())
 	case !answerable(w.req):
 		return "Cadrei can't check this kind of prompt on the screen, so answer it in its window: " + c(w.attach())
@@ -579,7 +587,23 @@ var optionLine = regexp.MustCompile(`^(\s*(?:[❯›>]\s*)?)([1-9])\.\s+(.*?)\s*
 // screen (the runtime draws on the whole screen, with nothing kept above).
 // A label that wraps is read whole, with the lines it goes on to.
 func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
-	opts, box, ok = screenOptions(screen)
+	return screenPromptOf(screen, false)
+}
+
+// openTools are the tools whose permission prompt has no "Esc to cancel"
+// line under its options, recorded live: a page fetch's and a plan's.
+var openTools = setOf("WebFetch", "ExitPlanMode")
+
+// promptOf is screenPrompt for w's prompt: one of openTools' is also read
+// with no "Esc to cancel" line (openFoot). Any other must have one.
+func promptOf(screen string, w *waitingOn) (opts []promptOption, box []string, ok bool) {
+	return screenPromptOf(screen, w.req.Kind == session.ForApproval && openTools[w.req.Tool])
+}
+
+// screenPromptOf is screenPrompt, and with open, also a prompt with no
+// "Esc to cancel" line.
+func screenPromptOf(screen string, open bool) (opts []promptOption, box []string, ok bool) {
+	opts, box, ok = screenOptions(screen, open)
 	// What goes on where a label starts is the rest of it, except in a
 	// question, whose options have their descriptions there.
 	if !slices.ContainsFunc(opts, func(o promptOption) bool { return questionExtra(o.label) }) {
@@ -595,9 +619,9 @@ func screenPrompt(screen string) (opts []promptOption, box []string, ok bool) {
 	return opts, box, ok
 }
 
-// screenOptions is screenPrompt, with each option's label as its own line
-// has it.
-func screenOptions(screen string) (opts []promptOption, box []string, ok bool) {
+// screenOptions is screenPromptOf, with each option's label as its own
+// line has it.
+func screenOptions(screen string, open bool) (opts []promptOption, box []string, ok bool) {
 	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
 	foot := -1
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -605,6 +629,9 @@ func screenOptions(screen string) (opts []promptOption, box []string, ok bool) {
 			foot = i
 			break
 		}
+	}
+	if foot < 0 && open {
+		foot = openFoot(lines)
 	}
 	if foot < 0 {
 		return nil, nil, false
@@ -660,6 +687,45 @@ func screenOptions(screen string) (opts []promptOption, box []string, ok bool) {
 		box = append([]string{lines[i]}, box...)
 	}
 }
+
+// openFoot is where a prompt drawn with no "Esc to cancel" line under it
+// ends (a page fetch's, a plan's, both recorded live): its options are the
+// last on the screen, one with the pointer, and under the last one's own
+// lines come at most footLines more, after a blank line. It's the index
+// of the line after the options, or -1 for none.
+func openFoot(lines []string) int {
+	at := -1
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-maxPromptLines; i-- {
+		if pointerLine.MatchString(lines[i]) {
+			at = i
+			break
+		}
+	}
+	if at < 0 {
+		return -1
+	}
+	end := at + 1
+	for end < len(lines) && strings.TrimSpace(lines[end]) != "" {
+		end++
+	}
+	rest := 0
+	for _, l := range lines[end:] {
+		if strings.TrimSpace(l) != "" {
+			rest++
+		}
+	}
+	if rest > footLines {
+		return -1
+	}
+	return end
+}
+
+// Bounds on a prompt with no "Esc to cancel" line: how far up from the
+// screen's bottom its pointer may be, and how many lines may follow it.
+const (
+	maxPromptLines = 30
+	footLines      = 3
+)
 
 // checkbox is how a multi-select question's options start.
 var checkbox = regexp.MustCompile(`^\[[ ✔✓xX]\]`)
@@ -732,7 +798,7 @@ func squeeze(text string) string {
 // else, between the dashed rules; a file by its path from the member's
 // folder (or in full), on the line under the box's title.
 func promptShows(screen string, w *waitingOn) bool {
-	opts, box, ok := screenPrompt(screen)
+	opts, box, ok := promptOf(screen, w)
 	if !ok || !answerable(w.req) {
 		return false
 	}
@@ -760,14 +826,151 @@ func promptShows(screen string, w *waitingOn) bool {
 		}
 		return strings.Contains(squeeze(strings.Join(box, "\n")), squeeze(req.Question))
 	}
+	rules := dashedRules(box)
 	switch req.Tool {
 	case "Write", "Edit":
 		// The box's title (Create file, Edit file), then the file, then
 		// the file's text between two dashed rules, and no other.
-		rules := dashedRules(box)
 		return len(rules) == 2 && rules[0] == 2 && pathShown(box[1:2], req.Summary, w.dir)
+	case "MultiEdit", "NotebookEdit":
+		// Not seen live: as an Edit's, under the title Claude Code gives
+		// it, with its changes between dashed rules.
+		return titled(box, fileTitles[req.Tool]) && len(rules) >= 2 && rules[0] == 2 && pathShown(box[1:2], req.Summary, w.dir)
+	case "Read":
+		// Not seen live: the title, then the file.
+		return titled(box, fileTitles[req.Tool]) && len(box) > 1 && pathShown(box[1:2], req.Summary, w.dir)
+	case "WebFetch":
+		return fetchShown(box, req.Summary)
+	case "WebSearch":
+		return searchShown(box, req.Summary)
+	case "Bash":
+		return commandShown(box, req.Summary)
 	}
-	return commandShown(box, req.Summary)
+	return strings.HasPrefix(req.Tool, "mcp__") && mcpShown(box, req.Tool, req.Summary)
+}
+
+// fileTitles are the titles of the prompts of file tools cadrei hasn't
+// seen live, from Claude Code 2.1.302's own text.
+var fileTitles = map[string][]string{
+	"MultiEdit":    {"Edit file"},
+	"NotebookEdit": {"Edit notebook"},
+	"Read":         {"Read file"},
+}
+
+// titled reports whether box starts with one of titles.
+func titled(box []string, titles []string) bool {
+	return len(box) > 0 && slices.Contains(titles, strings.TrimSpace(box[0]))
+}
+
+// framed is what box has between its first two dashed rules, or nil.
+func framed(box []string) []string {
+	rules := dashedRules(box)
+	if len(rules) < 2 {
+		return nil
+	}
+	return box[rules[0]+1 : rules[1]]
+}
+
+// fetchShown reports whether a page fetch's box (recorded live, 2.1.296)
+// is for url: under its title, Fetch, and the line naming the site, the
+// framed lines hold "url: " and the URL, whole (a long one wrapped onto
+// the lines under it), then the prompt for the page. Claude Code shows a
+// URL with no path with a slash after its host.
+func fetchShown(box []string, url string) bool {
+	if rules := dashedRules(box); !titled(box, []string{"Fetch"}) || len(rules) < 2 || rules[0] != 2 {
+		return false
+	}
+	var shown []string
+	for _, l := range framed(box) {
+		l = strings.TrimSpace(strings.Trim(l, " │┃"))
+		if strings.HasPrefix(l, "prompt:") {
+			break
+		}
+		shown = append(shown, l)
+	}
+	got, ok := strings.CutPrefix(strings.Join(shown, ""), "url:")
+	got = strings.TrimSpace(got)
+	if !ok || url == "" {
+		return false
+	}
+	if got == url {
+		return true
+	}
+	u, err := neturl.Parse(url)
+	return err == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" && got == url+"/"
+}
+
+// searchLead is how a web search's prompt says what it searches for,
+// after the runtime's name, in Claude Code 2.1.302's own text (not seen
+// live).
+const searchLead = " wants to search the web for: "
+
+// searchShown reports whether a web search's box is for query: the line
+// under its title that says so, with the query whole after it (wrapped
+// onto the lines under it, up to a blank line or a rule), and nothing
+// more, like a list of the only sites it may search.
+func searchShown(box []string, query string) bool {
+	if !titled(box, []string{"Web Search"}) || len(box) < 2 {
+		return false
+	}
+	_, after, ok := strings.Cut(box[1], searchLead)
+	if !ok || query == "" {
+		return false
+	}
+	got := squeeze(after)
+	for _, m := range box[2:] {
+		if strings.TrimSpace(m) == "" || dashedRule(m) || solidRule(m) {
+			break
+		}
+		got += squeeze(m)
+	}
+	return got == squeeze(query)
+}
+
+// mcpShown reports whether an MCP tool's box (recorded live, 2.1.296) is
+// for tool, called with what summary records: its title, Tool use, then
+// the server's name, a dash, the tool's own and "(MCP)", then each of its
+// arguments, in order, as "name: value" (the value as JSON) between
+// dashed rules, and no other.
+func mcpShown(box []string, tool, summary string) bool {
+	parts := strings.SplitN(tool, "__", 3)
+	input, ok := strings.CutPrefix(summary, tool+" ")
+	if len(parts) != 3 || parts[1] == "" || !ok || !titled(box, []string{"Tool use"}) || len(box) < 2 {
+		return false
+	}
+	head, rules := strings.TrimSpace(box[1]), dashedRules(box)
+	if !strings.HasPrefix(head, parts[1]+" - ") || !strings.HasSuffix(head, "(MCP)") || len(rules) < 2 || rules[0] != 2 {
+		return false
+	}
+	args, ok := argLines(input)
+	return ok && len(args) > 0 && squeeze(strings.Join(framed(box), "")) == squeeze(strings.Join(args, ""))
+}
+
+// argLines are a tool call's arguments as an MCP tool's prompt shows them,
+// in order: "name: value", the value as compact JSON. ok is false for
+// input that isn't one JSON object.
+func argLines(input string) (lines []string, ok bool) {
+	dec := json.NewDecoder(strings.NewReader(input))
+	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+		return nil, false
+	}
+	for dec.More() {
+		t, err := dec.Token()
+		name, isName := t.(string)
+		var raw json.RawMessage
+		if err != nil || !isName || dec.Decode(&raw) != nil {
+			return nil, false
+		}
+		var value bytes.Buffer
+		if json.Compact(&value, raw) != nil {
+			return nil, false
+		}
+		lines = append(lines, name+": "+value.String())
+	}
+	if t, err := dec.Token(); err != nil || t != json.Delim('}') || dec.More() {
+		return nil, false
+	}
+	return lines, true
 }
 
 // dashedRules are the indexes of box's dashed rules.
@@ -857,16 +1060,16 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (key, why string) {
 	window := " Answer it in its window: " + c(w.attach())
 	if !promptShows(screen, w) {
-		opts, box, _ := screenPrompt(screen)
+		opts, box, _ := promptOf(screen, w)
 		switch {
 		case len(opts) > 0 && box == nil:
 			return "", "That prompt is taller than the " + w.role + "'s window, so cadrei can't see it whole." + window
-		case (w.req.Tool == "Write" || w.req.Tool == "Edit") && len(box) > 1 && strings.HasPrefix(strings.TrimSpace(box[1]), "…"):
+		case slices.Contains([]string{"Write", "Edit", "MultiEdit", "NotebookEdit", "Read"}, w.req.Tool) && len(box) > 1 && strings.HasPrefix(strings.TrimSpace(box[1]), "…"):
 			return "", "The " + w.role + "'s window shows that file's path cut short, so cadrei can't check it." + window
 		}
 		return "", "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything." + window
 	}
-	opts, _, _ := screenPrompt(screen)
+	opts, _, _ := promptOf(screen, w)
 	if w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt {
 		return choice, ""
 	}

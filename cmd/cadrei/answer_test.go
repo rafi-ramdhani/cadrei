@@ -74,6 +74,19 @@ func wrappedLabel(t *testing.T) string {
 		"❯ 1. Yes, upload resume.pdf to the signing site now and keep a copy for the\n     records\n", 1)
 }
 
+// tool is a permission request for tool, with what it would touch.
+func tool(name, summary string) *waitingOn {
+	w := approval(summary)
+	w.req.Tool = name
+	return w
+}
+
+// inApp is w with its member started in /Users/me/app.
+func inApp(w *waitingOn) *waitingOn {
+	w.dir = "/Users/me/app"
+	return w
+}
+
 // approval and question are records as the state hook writes them.
 func approval(summary string) *waitingOn {
 	return &waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash", Summary: summary}}
@@ -131,6 +144,23 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		{wrappedDescription(t), question("Upload resume.pdf to the signing site?", "Yes", "No"), "1", "1"},
 		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", "1"},
 		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", "Yes, upload resume.pdf to the signing site now…", "No"), "2", "2"},
+		// W5, recorded live: a page fetch (no "Esc to cancel" line, the URL
+		// with a slash after its host, no plain No, so no is Escape) and an
+		// MCP tool (its arguments as name: JSON).
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com"), "yes", "1"},
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com"), "no", "Escape"},
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com/"), "yes", "1"},
+		{screenFixture(t, "mcp-live.txt"), tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"}`), "yes", "1"},
+		{screenFixture(t, "mcp-live.txt"), tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"}`), "no", "3"},
+		// W5, NOT seen live (the -unconfirmed screens are built from Claude
+		// Code 2.1.302's own text and the recorded Edit prompt; PR E's live
+		// run checks them): a web search, a file to read, a notebook, an
+		// edit in several places.
+		{screenFixture(t, "search-unconfirmed.txt"), tool("WebSearch", "tmux default-size detached session"), "yes", "1"},
+		{screenFixture(t, "read-unconfirmed.txt"), tool("Read", "/Users/me/shared/notes.md"), "yes", "1"},
+		{screenFixture(t, "read-unconfirmed.txt"), tool("Read", "/Users/me/shared/notes.md"), "no", "3"},
+		{screenFixture(t, "notebook-unconfirmed.txt"), inApp(tool("NotebookEdit", "/Users/me/app/analysis.ipynb")), "yes", "1"},
+		{screenFixture(t, "edit-live.txt"), inApp(tool("MultiEdit", "/Users/me/app/README.md")), "yes", "1"},
 	} {
 		key, why := keyFor(tc.screen, tc.w, tc.choice)
 		if key != tc.key || why != "" {
@@ -223,14 +253,40 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
 	}
-	// Review of 0.2.2 (M3): prompts recorded live that cadrei can't check
-	// get no key, whatever the record: a page fetch (no "Esc to cancel",
-	// the URL its own way), an MCP tool (its input not as recorded), a plan
-	// approval (no plain Yes).
+	// W5: a page fetch, an MCP tool, a web search and a file to read
+	// show exactly what the record says, or get no key: another URL, one
+	// the record goes on past, a fetch without its footer where a Bash
+	// prompt's is needed; other arguments, more of them, another server;
+	// another query, one with a list of sites; another file.
+	fetch, mcp := screenFixture(t, "fetch-live.txt"), screenFixture(t, "mcp-live.txt")
+	search, read := screenFixture(t, "search-unconfirmed.txt"), screenFixture(t, "read-unconfirmed.txt")
+	upload := `mcp__files__upload {"path":"resume.pdf"}`
+	for name, tc := range map[string]struct {
+		screen string
+		w      *waitingOn
+	}{
+		"another URL":        {fetch, tool("WebFetch", "https://example.org")},
+		"a longer URL":       {fetch, tool("WebFetch", "https://example.com/admin")},
+		"a URL with a query": {strings.Replace(fetch, "url: https://example.com/", "url: https://example.com/?a=1", 1), tool("WebFetch", "https://example.com")},
+		"a fetch as Bash":    {fetch, approval("https://example.com")},
+		"other arguments":    {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"cover.pdf"}`)},
+		"more arguments":     {strings.Replace(mcp, ` path: "resume.pdf"`, ` path: "resume.pdf"`+"\n"+` to: "anyone"`, 1), tool("mcp__files__upload", upload)},
+		"fewer arguments":    {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf","to":"anyone"}`)},
+		"another server":     {mcp, tool("mcp__drive__upload", `mcp__drive__upload {"path":"resume.pdf"}`)},
+		"input that's cut":   {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"`)},
+		"another query":      {search, tool("WebSearch", "tmux default-size")},
+		"only some sites":    {strings.Replace(search, "detached session\n", "detached session, only allowing domains: example.com\n", 1), tool("WebSearch", "tmux default-size detached session")},
+		"another file":       {read, tool("Read", "/Users/me/shared/other.md")},
+		"a read as an edit":  {read, tool("Edit", "/Users/me/shared/notes.md")},
+	} {
+		if key, why := keyFor(tc.screen, tc.w, "yes"); key != "" || why == "" {
+			t.Errorf("%s: %q %q", name, key, why)
+		}
+	}
+	// Review of 0.2.2 (M3): a plan approval (no plain Yes) is one cadrei
+	// can't check.
 	for name, tc := range map[string]*session.Request{
-		"fetch-live.txt": {Code: "jsw", Kind: session.ForApproval, Tool: "WebFetch", Summary: "https://example.com"},
-		"mcp-live.txt":   {Code: "rxn", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"resume.pdf"}`},
-		"plan-live.txt":  {Code: "226", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"1. Read README.md"}`},
+		"plan-live.txt": {Code: "226", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"1. Read README.md"}`},
 	} {
 		w := &waitingOn{team: "dev", role: "engineer", req: tc}
 		if key, why := keyFor(screenFixture(t, name), w, "yes"); key != "" || why == "" {
@@ -279,7 +335,7 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 		{ask, "01", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{multi, "1", "This question needs more than one pick, so answer it in its window: cadrei attach docs"},
 		// Review of 0.2.2 (M3): a prompt cadrei can't check on the screen.
-		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/a.pdf"}`}}, "yes",
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Glob", Summary: `Glob {"pattern":"**/*.pdf"}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
 		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash"}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},

@@ -1,0 +1,13 @@
+
+⏺ I'll search the web for that.
+
+────────────────────────────────────────────────────────────────────────────────
+ Web Search
+ Claude wants to search the web for: tmux default-size detached session
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for Web Search in <work>
+   3. No
+
+ Esc to cancel · Tab to amend
