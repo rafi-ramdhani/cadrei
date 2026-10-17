@@ -576,6 +576,23 @@ func ReadFull(build, name string, r *Request) string {
 	return string(raw)
 }
 
+// ResetState writes a member's state file whole outside ChangeState, as a
+// start does (nil removes it, as a stop does), and removes the whole texts
+// of its requests with it: none of them is open anymore.
+func ResetState(path string, s *State) error {
+	if path != "" {
+		dir, base := filepath.Split(strings.TrimSuffix(path, ".json"))
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			code, ok := strings.CutPrefix(e.Name(), base+".req-")
+			if code, txt := strings.CutSuffix(code, ".txt"); ok && txt && CodeRule.MatchString(code) {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return WriteState(path, s)
+}
+
 // ReadState reads a state file cadrei wrote, or nil.
 func ReadState(path string) *State {
 	raw, err := fsx.ReadOwn(path, 64<<10)

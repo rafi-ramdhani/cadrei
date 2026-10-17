@@ -254,6 +254,37 @@ func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
 	}
 }
 
+// A window a check left grown (killed before it put the size back), or
+// one another check still has grown, goes back to its size from before:
+// the next grow puts back that size, not the grown one, and so does an
+// answer whose prompt shows at the size left behind.
+func TestAGrownWindowGoesBackAfterAKill(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	tm, s := session.Default(), session.SessionName("work", "dev")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	tm.Grow(s, "engineer", 300, 100) // killed: its restore never runs
+	restore, grown := tm.Grow(s, "engineer", 400, 120)
+	if w, h := tm.WindowSize(s, "engineer"); !grown || w != 400 || h != 120 || !tm.Grown(s, "engineer") {
+		t.Fatalf("grown %v to %dx%d", grown, w, h)
+	}
+	restore()
+	if w, h := tm.WindowSize(s, "engineer"); w != 220 || h != 60 || tm.Grown(s, "engineer") {
+		t.Errorf("back at %dx%d, grown %v", w, h, tm.Grown(s, "engineer"))
+	}
+	tm.Grow(s, "engineer", 300, 100) // killed again
+	code := request(t, c, "engineer", mkdirRequest)
+	ownTerminal(t)
+	if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if w, h := tm.WindowSize(s, "engineer"); w != 220 || h != 60 || tm.Grown(s, "engineer") {
+		t.Errorf("after the answer, at %dx%d, grown %v", w, h, tm.Grown(s, "engineer"))
+	}
+}
+
 // W3: a command too long for the hook's 300-character summary is listed
 // and checked on the screen whole, from its own file, and answered; the
 // file goes with the request.
@@ -289,6 +320,17 @@ func TestALongCommandIsAnsweredWhole(t *testing.T) {
 	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); !os.IsNotExist(err) {
 		t.Errorf("its file stays: %v", err)
 	}
+	// One still open when its member stops goes with the state file.
+	code = request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":`+string(command)+`}}`)
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); err != nil {
+		t.Fatalf("no file: %v", err)
+	}
+	if n, _, errOut := call("stop", "dev/engineer"); n != 0 {
+		t.Fatalf("stop: %d %q", n, errOut)
+	}
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); !os.IsNotExist(err) {
+		t.Errorf("its file stays after a stop: %v", err)
+	}
 }
 
 // W6: when the runtime says a prompt is up, the state hook reads the
@@ -314,11 +356,14 @@ func TestAnApprovalsChoicesComeOffTheScreen(t *testing.T) {
 	ownTerminal(t)
 	_, out, _ := call("answer")
 	if !strings.Contains(out, "       Say no:         cadrei answer "+code+" no\n"+
-		"       Its other choices, which can last past this prompt:\n"+
-		"         2. Yes, and always allow access to <work> from this project\n"+
-		"         3. Yes, and switch to auto mode · auto mode handles these prompts for you\n"+
+		"       Its other choices:\n"+
+		"         2. Yes, and always allow access to <work> from this project (saved, so it lasts after this prompt)\n"+
 		"       Pick one:       cadrei answer "+code+" 2\n") {
 		t.Errorf("the listing:\n%s", out)
+	}
+	// Switching the member to auto mode stays in its window.
+	if n, _, errOut := call("answer", code, "3"); n != 1 || !strings.Contains(flat(errOut), "takes yes, no, or one of its choices: 1, 2, 4.") {
+		t.Errorf("the mode switch: %d %q", n, errOut)
 	}
 	if n, out, errOut := call("answer", code, "2"); n != 0 || flat(out) != "+ Answered the engineer in dev: 2. Yes, and always allow access to <work> from this project" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
@@ -432,6 +477,42 @@ func TestSeveralQuestionsAreAnsweredStepByStep(t *testing.T) {
 	}
 	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil || st.Current().Code != code || !st.Current().Answering.IsZero() {
 		t.Errorf("after stopping: %+v", st.Current())
+	}
+
+	// A box already ticked (an earlier try left it): nothing pressed, as a
+	// pick would untick it.
+	screens = filesAndSendScreens()
+	screens[0] = strings.Replace(screens[0], "1. [ ] resume.pdf", "1. [✔] resume.pdf", 1)
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "The engineer's screen didn't show that question as I expected, with its boxes empty, so I didn't press anything.") {
+		t.Errorf("a box ticked: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); len(raw) != 0 {
+		t.Errorf("keys with a box ticked %q", raw)
+	}
+
+	// The review stays after its key (it didn't take): not taken for sent.
+	screens = filesAndSendScreens()
+	screens = append(screens, screens[len(screens)-1])
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	answerWait = 500 * time.Millisecond
+	t.Cleanup(func() { answerWait = 2 * time.Second })
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "I pressed your answer, but the prompt is still on the engineer's screen.") {
+		t.Errorf("the review stayed: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|2|→|1|1|" {
+		t.Errorf("keys with the review staying %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil || st.Current().Code != code || !st.Current().Answering.IsZero() {
+		t.Errorf("after the review stayed: %+v", st.Current())
 	}
 }
 

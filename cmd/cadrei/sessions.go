@@ -645,7 +645,8 @@ func (e *env) forget(c cadreis.Cadrei, names []string) {
 	e.show("  ", "Their next start is a fresh chat.")
 }
 
-// dropStates removes the state files of members that were stopped.
+// dropStates removes the state files of members that were stopped, with
+// the whole texts of their requests.
 func dropStates(home string, names []string) {
 	rt, err := runtime.Get(runtimeName())
 	if err != nil {
@@ -653,7 +654,7 @@ func dropStates(home string, names []string) {
 	}
 	for _, n := range names {
 		if p := session.StatePath(rt.BuildDir(home), n); p != "" {
-			os.Remove(p)
+			session.ResetState(p, nil)
 		}
 	}
 }

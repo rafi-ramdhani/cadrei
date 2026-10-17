@@ -262,6 +262,30 @@ func TestARequestsWholeTextHasItsOwnFile(t *testing.T) {
 	if _, err := os.Stat(FullPath(build, "w-dev-engineer", cut.Code)); !os.IsNotExist(err) {
 		t.Errorf("the file outlived its request: %v", err)
 	}
+
+	// A start or a stop writes the state file outside ChangeState: the
+	// files of the requests it held go with them, and no other member's.
+	for _, s := range []*State{{State: Starting, Since: time.Now()}, nil} {
+		rs := change(pre("Bash", "toolu_3", "k1"), long).Requests()
+		cut = rs[len(rs)-1]
+		if ReadFull(build, "w-dev-engineer", cut) != whole {
+			t.Fatalf("no whole text for %+v", cut)
+		}
+		other := FullPath(build, "w-dev-engineer2", cut.Code)
+		os.WriteFile(other, []byte(whole), 0o600)
+		if err := ResetState(StatePath(build, "w-dev-engineer"), s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(FullPath(build, "w-dev-engineer", cut.Code)); !os.IsNotExist(err) {
+			t.Errorf("reset to %+v: the file outlived its request: %v", s, err)
+		}
+		if _, err := os.Stat(other); err != nil {
+			t.Errorf("reset to %+v: another member's file went: %v", s, err)
+		}
+		if got := ReadState(StatePath(build, "w-dev-engineer")); (got == nil) != (s == nil) {
+			t.Errorf("reset to %+v: %+v", s, got)
+		}
+	}
 }
 
 // A 0.2.2 state file's one request reads as the first open one.

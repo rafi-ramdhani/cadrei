@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -103,15 +104,20 @@ var bashChoices = []string{"Yes", "Yes, and always allow access to <work> from t
 
 // W6: an approval's other choices, read off the screen, are answered by
 // number when the screen shows the same ones, and the guard's ask says
-// the choice can last. A plan approval, which has no plain Yes, takes its
-// choices and no; not yes, nor its choice that asks for text.
+// plainly how a lasting one lasts. One that changes the member's mode is
+// never offered (the user's call). A plan approval, which has no plain
+// Yes, takes its choice that keeps the member asking, and no; not yes,
+// nor its choice that asks for text.
 func TestAnApprovalsOtherChoices(t *testing.T) {
 	bash := screenFixture(t, "bash-prompt-live.txt")
 	w := withOptions(approval("mkdir e2e-yes"), bashChoices...)
-	for choice, key := range map[string]string{"yes": "1", "no": "4", "2": "2", "3": "3", "4": "4", "1": "1"} {
+	for choice, key := range map[string]string{"yes": "1", "no": "4", "2": "2", "4": "4", "1": "1"} {
 		if got, why := keyFor(bash, w, choice); got != key || why != "" {
 			t.Errorf("%s: %q %q", choice, got, why)
 		}
+	}
+	if why := checkChoice(w, "7f3", "3", plain); why != "7f3 takes yes, no, or one of its choices: 1, 2, 4. Use cadrei answer 7f3 no, for example." {
+		t.Errorf("the mode switch: %q", why)
 	}
 	if !saysNo(w, "4") || saysNo(w, "2") {
 		t.Error("only the option labeled No says no")
@@ -121,7 +127,7 @@ func TestAnApprovalsOtherChoices(t *testing.T) {
 		t.Errorf("other options: %q %q", key, why)
 	}
 	for choice, want := range map[string]string{
-		"2": `Cadrei: answer the engineer in dev with "2. Yes, and always allow access to <work> from this project"? That choice can last past this one prompt, as its words say. It wants to run: mkdir e2e-yes`,
+		"2": `Cadrei: answer the engineer in dev with "2. Yes, and always allow access to <work> from this project"? That choice is saved and lasts: the engineer in dev won't ask again for what it names, after this prompt too. It wants to run: mkdir e2e-yes`,
 		"1": "Cadrei: allow once? The engineer in dev wants to run: mkdir e2e-yes",
 		"4": "Cadrei: tell the engineer in dev no? It wants to run: mkdir e2e-yes",
 	} {
@@ -129,22 +135,53 @@ func TestAnApprovalsOtherChoices(t *testing.T) {
 			t.Errorf("ask %s: %q", choice, got)
 		}
 	}
-	if note := w.note(); !strings.Contains(note, "Its choices, word for word, which can last past this prompt: 2. Yes, and always allow access to <work> from this project, 3. Yes, and switch to auto mode") {
+	if note := w.note(); !strings.HasSuffix(note, " Its other choices, word for word: 2. Yes, and always allow access to <work> from this project (saved, so it lasts after this prompt). The user picks one with cadrei answer 7f3 <n>.") {
 		t.Errorf("note: %q", note)
+	}
+
+	// Never a mode switch, however it's put, nor a label cut short; a
+	// choice for the rest of the session says so.
+	for label, how := range map[string]string{
+		"Yes, and don't ask again for example.com":                                   lastsSaved,
+		"Yes, allow reading from shared/ during this session":                        lastsSession,
+		"Yes, and switch to auto mode · auto mode handles these prompts for you":     "",
+		"Yes, and switch to accept edits (auto-approve file edits and common file":   "",
+		"Yes, allow all edits during this session (shift+tab)":                       "",
+		"Yes, and bypass permissions":                                                "",
+		"Yes, and don't ask again for git commands in /Users/me/app and its folder…": "",
+		"No, and tell Claude what to do differently":                                 "",
+	} {
+		if got := lasting(label); got != how {
+			t.Errorf("%q lasts %q", label, got)
+		}
+	}
+	read := withOptions(tool("Read", "/Users/me/shared/notes.md"), "Yes", "Yes, allow reading from shared/ during this session", "No")
+	if got := askReason(read, "2"); !strings.Contains(got, `"2. Yes, allow reading from shared/ during this session"? That choice lasts for the rest of the member's session: the engineer in dev won't ask again for what it names.`) {
+		t.Errorf("ask for the session: %q", got)
 	}
 
 	plan := screenFixture(t, "plan-live.txt")
 	p := planApproval()
-	for choice, key := range map[string]string{"1": "1", "2": "2", "no": "Escape"} {
+	for choice, key := range map[string]string{"2": "2", "no": "Escape"} {
 		if got, why := keyFor(plan, p, choice); got != key || why != "" {
 			t.Errorf("plan %s: %q %q", choice, got, why)
 		}
 	}
-	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n> (1. Yes, and use auto mode, 2. Yes, manually approve edits), or answer it in its window: cadrei attach dev` {
+	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n> (2. Yes, manually approve edits), or answer it in its window: cadrei attach dev` {
 		t.Errorf("plan yes: %q", why)
 	}
-	if why := checkChoice(p, "7f3", "3", plain); why != "7f3 takes yes, no, or one of its choices: 1, 2. Use cadrei answer 7f3 no, for example." {
-		t.Errorf("plan 3: %q", why)
+	for _, choice := range []string{"1", "3"} {
+		if why := checkChoice(p, "7f3", choice, plain); why != "7f3 takes yes, no, or one of its choices: 2. Use cadrei answer 7f3 no, for example." {
+			t.Errorf("plan %s: %q", choice, why)
+		}
+	}
+	if got := askReason(p, "2"); !strings.HasPrefix(got, `Cadrei: answer the engineer in dev with "2. Yes, manually approve edits"? It wants to carry out this plan: 1. Read README.md`) {
+		t.Errorf("plan ask: %q", got)
+	}
+	// A plan that offers to bypass permissions doesn't get it picked.
+	bypass := withOptions(tool("ExitPlanMode", p.req.Summary), "Yes, and bypass permissions", "Yes, manually approve edits", "No")
+	if got := choices(bypass.req); !slices.Equal(got, []int{2, 3}) {
+		t.Errorf("bypass: %v", got)
 	}
 	if verb, object, _ := act(p.req); verb != "carry out this plan" || !strings.HasSuffix(object, "then confirm with a final read.") {
 		t.Errorf("plan act: %q %q", verb, object)
@@ -157,6 +194,20 @@ func TestAnApprovalsOtherChoices(t *testing.T) {
 	p.req.Options = nil
 	if _, why := keyFor(plan, p, "yes"); !strings.Contains(why, `no plain "Yes", only choices that would allow it for good`) {
 		t.Errorf("plan yes, no choices: %q", why)
+	}
+}
+
+// The orchestrator's note keeps a long command as the hook cuts it, not
+// its whole text, which only the listing shows.
+func TestTheNoteKeepsALongCommandShort(t *testing.T) {
+	whole := strings.Repeat("echo one && ", 600) + "echo done"
+	w := approval(whole)
+	note := w.note()
+	if strings.Contains(note, "echo done") || !strings.Contains(note, "… (cadrei answer shows it whole). Answer with cadrei answer 7f3 yes, or no.") || len(note) > 600 {
+		t.Errorf("note: %q", note)
+	}
+	if note := approval("make").note(); strings.Contains(note, "shows it whole") {
+		t.Errorf("a short one: %q", note)
 	}
 }
 
@@ -177,11 +228,26 @@ func TestTheReviewMustShowExactlyTheAnswers(t *testing.T) {
 			t.Errorf("%s: sent", name)
 		}
 	}
+	// Only the dialog's own lines count: text printed above it (an old
+	// review, the member's own words) neither makes a wrong one match nor
+	// keeps a right one from it.
+	earlier := "⏺ Which files go to the signing site?\n   → resume.pdf, cover.pdf\n  Send them now?\n   → Yes\n  Ready to submit your answers?\n\n"
+	if _, ok := reviewShows(earlier+strings.Replace(review, "→ resume.pdf, cover.pdf", "→ resume.pdf", 1), req, [][]int{{1, 2}, {1}}); ok {
+		t.Error("an earlier review above made a wrong one match")
+	}
+	if key, ok := reviewShows("⏺ I need to know: Which files go to the signing site? And: Send them now?\n\n"+review, req, [][]int{{1, 2}, {1}}); key != "1" || !ok {
+		t.Errorf("the questions' own text above it: %q %v", key, ok)
+	}
 	for name, screen := range map[string]string{
-		"a pick more":     strings.Replace(review, "→ Yes", "→ Yes, No", 1),
-		"the other order": strings.Replace(strings.Replace(review, "Which files go to the signing site?", "Q1", 1), "Send them now?", "Which files go to the signing site?", 1),
-		"no way to send":  strings.Replace(review, "1. Submit answers", "1. Go back", 1),
-		"no review":       strings.Replace(review, "Ready to submit your answers?", "", 1),
+		"a pick more":                   strings.Replace(review, "→ Yes", "→ Yes, No", 1),
+		"the other order":               strings.Replace(strings.Replace(review, "Which files go to the signing site?", "Q1", 1), "Send them now?", "Which files go to the signing site?", 1),
+		"no way to send":                strings.Replace(review, "1. Submit answers", "1. Go back", 1),
+		"no review":                     strings.Replace(review, "Ready to submit your answers?", "", 1),
+		"no title":                      strings.Replace(review, "Review your answers", "", 1),
+		"no top over the title":         strings.Replace(strings.Replace(review, "────────────────────────────────────────\n", "", 1), "←  ☒ Files  ☒ Send  ✔ Submit  →\n", "", 1),
+		"something before the first":    strings.Replace(review, "Review your answers\n\n", "Review your answers\n\n ● Which file?\n   → notes.txt\n", 1),
+		"a rule inside the dialog":      strings.Replace(review, " ● Send them now?", "────────────────────────────────────────\n ● Send them now?", 1),
+		"the second question not shown": strings.Replace(review, " ● Send them now?\n   → Yes\n", "", 1),
 	} {
 		if _, ok := reviewShows(screen, req, [][]int{{1, 2}, {1}}); ok {
 			t.Errorf("%s: sent", name)

@@ -149,32 +149,78 @@ func ticked(screen string, n int) bool {
 	return on
 }
 
-// reviewLead is the line of the review of a question's answers, before
-// they're sent, in Claude Code 2.1.302's own text.
-const reviewLead = "Ready to submit your answers?"
+// reviewLead is the last line of the review of a question's answers,
+// before they're sent, and reviewHead its title, in Claude Code 2.1.302's
+// own text.
+const (
+	reviewLead = "Ready to submit your answers?"
+	reviewHead = "Review your answers"
+)
+
+// reviewOf is the review dialog at the bottom of screen: the lines between
+// its title and its last line, and its options under that. Only the last
+// review line on the screen counts, and its title must come right under
+// the dialog's top (its tab bar, or a solid rule), with no rule between
+// them, so nothing printed above the dialog is read as part of it.
+func reviewOf(screen string) (rows []string, opts []promptOption, ok bool) {
+	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
+	at := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == reviewLead {
+			at = i
+			break
+		}
+	}
+	head := -1
+	for i := at - 1; i >= 0 && !solidRule(lines[i]); i-- {
+		if strings.TrimSpace(lines[i]) == reviewHead {
+			head = i
+			break
+		}
+	}
+	if at < 0 || head < 0 {
+		return nil, nil, false
+	}
+	top := head - 1
+	for top >= 0 && strings.TrimSpace(lines[top]) == "" {
+		top--
+	}
+	if top < 0 || !solidRule(lines[top]) && !tabBar(lines[top]) {
+		return nil, nil, false
+	}
+	opts, _, _ = screenPromptOf(strings.Join(lines[at:], "\n"), true)
+	return lines[head+1 : at], opts, len(opts) > 0
+}
+
+// tabBar reports whether a line is the tab bar of a dialog of several
+// questions: it ends in a Submit tab.
+func tabBar(line string) bool { return strings.Contains(line, "✔ Submit") }
 
 // reviewShows reports whether screen shows the review of picks for req's
-// questions: its line, each question in order, and after each, the arrow
-// and the labels picked, and no other of its labels; and the key of its
-// option that sends them.
+// questions in its dialog: each question in order, nothing before the
+// first, and after each, the arrow and the labels picked, and no other of
+// its labels; and the key of its option that sends them.
 func reviewShows(screen string, req *session.Request, picks [][]int) (key string, ok bool) {
-	at := strings.Index(screen, reviewLead)
-	if at < 0 {
+	rows, opts, ok := reviewOf(screen)
+	if !ok {
 		return "", false
 	}
-	text := squeeze(screen[:at])
+	// Each question is a bullet.
+	text := strings.ReplaceAll(squeeze(strings.Join(rows, "\n")), "●", "")
 	pos := 0
 	for i, p := range req.Parts {
-		q := strings.Index(text[pos:], squeeze(p.Question))
-		if q < 0 {
+		q := squeeze(p.Question)
+		if !strings.HasPrefix(text[pos:], q) {
 			return "", false
 		}
-		pos += q + len(squeeze(p.Question))
+		pos += len(q)
 		end := len(text)
 		if i+1 < len(req.Parts) {
-			if next := strings.Index(text[pos:], squeeze(req.Parts[i+1].Question)); next >= 0 {
-				end = pos + next
+			next := strings.Index(text[pos:], squeeze(req.Parts[i+1].Question))
+			if next < 0 {
+				return "", false
 			}
+			end = pos + next
 		}
 		answer, isAnswer := strings.CutPrefix(text[pos:end], "→")
 		if !isAnswer {
@@ -186,14 +232,27 @@ func reviewShows(screen string, req *session.Request, picks [][]int) (key string
 				return "", false
 			}
 		}
+		pos = end
 	}
-	opts, _, _ := screenPromptOf(screen[at:], true)
 	for _, o := range opts {
 		if o.label == "Submit answers" {
 			return strconv.Itoa(o.n), true
 		}
 	}
 	return "", false
+}
+
+// stillAsks reports whether screen still shows req's questions: any of
+// them, or the review line near its bottom. An answer isn't taken as
+// sent until neither shows.
+func stillAsks(screen string, req *session.Request) bool {
+	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
+	for _, l := range lines[max(0, len(lines)-maxPromptLines):] {
+		if strings.TrimSpace(l) == reviewLead {
+			return true
+		}
+	}
+	return slices.ContainsFunc(req.Parts, func(p session.Part) bool { return partShows(screen, p) })
 }
 
 // inAny reports whether label is part of one of the picked options' own
@@ -224,37 +283,59 @@ func waitFor(t session.Tmux, w *waitingOn, ok func(string) bool) (string, bool) 
 	}
 }
 
+// unticked reports whether none of the boxes of question p on the screen
+// is ticked yet.
+func unticked(screen string, p session.Part) bool {
+	for n := range p.Options {
+		if ticked(screen, n+1) {
+			return false
+		}
+	}
+	return true
+}
+
 // answerSteps answers w's questions with picks, one key at a time, each
-// once the screen shows what it should, and the review's last. It says
-// why it stopped, or "" once the review is sent.
+// once the screen shows what it should, and the review's last. A question
+// that takes several picks must show every box empty before its first, so
+// a pick can't untick a box an earlier try left ticked. It says why it
+// stopped, or "" once the review is sent.
 func answerSteps(t session.Tmux, w *waitingOn, picks [][]int) string {
-	stopped := "I pressed part of your answer, but the " + w.role + "'s screen didn't show what I expected next, so I stopped before sending it. Finish it in its window: " + cmd(w.attach())
-	press := func(key string) bool { return t.SendKeys(w.session, w.window, false, key) == nil }
+	pressed := false
+	stopped := func() string {
+		if !pressed {
+			return "The " + w.role + "'s screen didn't show that question as I expected, with its boxes empty, so I didn't press anything. Answer it in its window: " + cmd(w.attach())
+		}
+		return "I pressed part of your answer, but the " + w.role + "'s screen didn't show what I expected next, so I stopped before sending it. Finish it in its window: " + cmd(w.attach())
+	}
+	press := func(key string) bool {
+		pressed = true
+		return t.SendKeys(w.session, w.window, false, key) == nil
+	}
 	for i, p := range w.req.Parts {
-		if _, ok := waitFor(t, w, func(s string) bool { return partShows(s, p) }); !ok {
-			return stopped
+		if _, ok := waitFor(t, w, func(s string) bool { return partShows(s, p) && (!p.Multi || unticked(s, p)) }); !ok {
+			return stopped()
 		}
 		for _, n := range picks[i] {
 			if !press(strconv.Itoa(n)) {
-				return stopped
+				return stopped()
 			}
 			if p.Multi {
 				if _, ok := waitFor(t, w, func(s string) bool { return partShows(s, p) && ticked(s, n) }); !ok {
-					return stopped
+					return stopped()
 				}
 			}
 		}
 		if p.Multi && !press("Right") {
-			return stopped
+			return stopped()
 		}
 	}
 	screen, ok := waitFor(t, w, func(s string) bool { _, ok := reviewShows(s, w.req, picks); return ok })
 	if !ok {
-		return stopped
+		return stopped()
 	}
 	key, _ := reviewShows(screen, w.req, picks)
 	if !press(key) {
-		return stopped
+		return stopped()
 	}
 	return ""
 }

@@ -7,12 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	neturl "net/url"
+	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -201,17 +204,80 @@ var asksForText = regexp.MustCompile(`(?i)^(no, and )?tell \S+ what to `)
 
 // choices are the numbers of the options of an approval's prompt, read
 // off the member's screen once it showed (none before), that an answer
-// may pick by number: all but one that asks for text. One that allows
-// more than once, or changes the mode, is shown word for word, and the
-// guard's ask says it can last.
+// may pick by number: the plain Yes and No, one that stops the member
+// asking again for what it names (lasting), and a plan's approval that
+// keeps it asking before each edit. Never one that asks for text, one cut
+// short (its end, often what it covers, isn't kept), or one that changes
+// the member's permission mode (auto mode, accepting edits, bypassing
+// permissions): those are answered in its window. Each is shown word for
+// word, and the guard's ask says how a lasting one lasts.
 func choices(req *session.Request) []int {
 	var out []int
 	for i, o := range req.Options {
-		if !asksForText.MatchString(o) {
+		if plainChoice(o) || o == planManual || lasting(o) != "" {
 			out = append(out, i+1)
 		}
 	}
 	return out
+}
+
+// planManual is a plan approval's option that carries out the plan with
+// the member asking before each edit, as it did before: no mode it
+// didn't have.
+const planManual = "Yes, manually approve edits"
+
+// savedRule and sessionRule are an approval's options that stop the
+// member asking again for what they name: saved in its settings, or for
+// the rest of its session. modeWords is one that changes its permission
+// mode, which no answer picks, whatever else it says.
+var (
+	savedRule   = regexp.MustCompile(`^Yes, and (don't ask again|always allow) `)
+	sessionRule = regexp.MustCompile(`^Yes, (and )?allow .+ during this session$`)
+	modeWords   = regexp.MustCompile(`(?i)\bmodes?\b|\baccept(ing)? edits\b|\bauto-|\bbypass|shift\+tab|\ball edits\b`)
+)
+
+// Ways an approval's option lasts past its prompt.
+const (
+	lastsSaved   = "saved"
+	lastsSession = "session"
+)
+
+// lasting says how an approval's option lasts past its prompt (lastsSaved,
+// lastsSession), or "" for one that doesn't, or that no answer picks.
+func lasting(label string) string {
+	switch {
+	case strings.HasSuffix(label, "…") || modeWords.MatchString(label) || asksForText.MatchString(label):
+		return ""
+	case savedRule.MatchString(label):
+		return lastsSaved
+	case sessionRule.MatchString(label):
+		return lastsSession
+	}
+	return ""
+}
+
+// lastsTag says in a few words how an option lasts, for the listing and
+// the note, or "".
+func lastsTag(label string) string {
+	switch lasting(label) {
+	case lastsSaved:
+		return " (saved, so it lasts after this prompt)"
+	case lastsSession:
+		return " (lasts for the rest of its session)"
+	}
+	return ""
+}
+
+// lastsSentence says plainly how an option lasts, for the guard's ask, or
+// "".
+func lastsSentence(w *waitingOn, label string) string {
+	switch lasting(label) {
+	case lastsSaved:
+		return " That choice is saved and lasts: " + w.place() + " won't ask again for what it names, after this prompt too."
+	case lastsSession:
+		return " That choice lasts for the rest of the member's session: " + w.place() + " won't ask again for what it names."
+	}
+	return ""
 }
 
 // otherChoices are those of choices that aren't the plain Yes or No.
@@ -309,17 +375,21 @@ func (w *waitingOn) note() string {
 	case w.req.Kind == session.ForApproval:
 		verb, object, _ := act(w.req)
 		if !answerable(w.req) {
-			return who + " wants to " + verb + ": " + object + "." + window
+			return who + " wants to " + verb + ": " + noteText(object) + "." + window
 		}
 		answer := " Answer with cadrei answer " + w.req.Code + " yes, or no."
 		if !hasPlainYes(w.req) {
 			answer = " It has no plain Yes: answer with cadrei answer " + w.req.Code + " <n> for one of its choices, or no."
 		}
 		if others := otherChoices(w.req); len(others) > 0 {
-			answer += " Its choices, word for word, which can last past this prompt: " + numberedOf(w.req, others) +
+			var opts []string
+			for _, n := range others {
+				opts = append(opts, fmt.Sprintf("%d. %s%s", n, w.req.Options[n-1], lastsTag(w.req.Options[n-1])))
+			}
+			answer += " Its other choices, word for word: " + strings.Join(opts, ", ") +
 				". The user picks one with cadrei answer " + w.req.Code + " <n>."
 		}
-		return who + " wants to " + verb + ": " + object + "." + answer
+		return who + " wants to " + verb + ": " + noteText(object) + "." + answer
 	case many(w.req) && answerable(w.req):
 		var parts []string
 		for _, p := range w.req.Parts {
@@ -339,6 +409,17 @@ func (w *waitingOn) note() string {
 		return who + " shows a prompt: " + w.req.Question + " Options: " + numbered(w.req) + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
+}
+
+// noteText is what a request would run or touch, for the orchestrator's
+// note: cut as the hook cuts a summary, so a long command's whole text
+// (up to runtime.FullLimit) doesn't go in every note. The listing shows
+// it whole.
+func noteText(object string) string {
+	if cut := runtime.RequestText(object, runtime.SummaryLimit); cut != object {
+		return cut + " (cadrei answer shows it whole)"
+	}
+	return object
 }
 
 // numbered lists the options an answer may pick in req as 1. a, 2. b.
@@ -426,7 +507,7 @@ func askReason(w *waitingOn, choice string) string {
 	case choice == "no" || label == "No":
 		return "Cadrei: tell " + w.place() + " no? It wants to " + verb + ": " + object
 	case picked && label != "Yes":
-		return "Cadrei: answer " + w.place() + " with \"" + choice + ". " + label + "\"? That choice can last past this one prompt, as its words say. It wants to " + verb + ": " + object
+		return "Cadrei: answer " + w.place() + " with \"" + choice + ". " + label + "\"?" + lastsSentence(w, label) + " It wants to " + verb + ": " + object
 	}
 	return "Cadrei: allow once? " + capital(w.place()) + " wants to " + verb + ": " + object
 }
@@ -471,6 +552,23 @@ func runAnswer(e *env) int {
 	}
 	screen, restore := promptScreen(t, w)
 	defer restore()
+	// Stopped partway (Esc on the orchestrator's command, a kill), a grown
+	// window still goes back to its size.
+	stop := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	defer func() {
+		signal.Stop(stop)
+		close(done) // the goroutine below ends with this call
+	}()
+	go func() {
+		select {
+		case <-stop:
+			restore()
+			os.Exit(1)
+		case <-done:
+		}
+	}()
 	key, why := keyFor(screen, w, choice)
 	if why != "" {
 		return e.failWith(why)
@@ -495,9 +593,16 @@ func runAnswer(e *env) int {
 		answering(build, w, false)
 		return e.fail("%s", err)
 	}
+	// Gone once the screen no longer shows it: for questions answered one
+	// step at a time, none of them and not their review, so a review whose
+	// last key didn't take isn't taken for sent.
+	shows := func(screen string) bool { return promptShows(screen, w) }
+	if many(w.req) {
+		shows = func(screen string) bool { return stillAsks(screen, w.req) }
+	}
 	gone := false
 	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
-		if !promptShows(t.Screen(w.session, w.window), w) {
+		if !shows(t.Screen(w.session, w.window)) {
 			gone = true
 			break
 		}
@@ -538,10 +643,11 @@ var growWait = 1500 * time.Millisecond
 // is, or when the prompt doesn't show whole there, with the window grown
 // for a moment to a size it fits in (restore puts the size back). A window
 // someone has open on a small screen, or one cadrei 0.2.2 started at
-// 80x24, can be too small for a long command or path.
+// 80x24, can be too small for a long command or path. A window an earlier
+// check left grown (it was killed first) is put back too.
 func promptScreen(t session.Tmux, w *waitingOn) (screen string, restore func()) {
 	screen = t.Screen(w.session, w.window)
-	if promptShows(screen, w) || !answerable(w.req) {
+	if !answerable(w.req) || promptShows(screen, w) && !t.Grown(w.session, w.window) {
 		return screen, func() {}
 	}
 	width, height := fitSize(w)
@@ -679,9 +785,9 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 			e.say("%s", "       "+pad("Say no:")+cmd("cadrei answer "+code+" no"))
 			// Its other choices, as its screen showed them.
 			if others := otherChoices(w.req); len(others) > 0 {
-				e.say("%s", "       Its other choices, which can last past this prompt:")
+				e.say("%s", "       Its other choices:")
 				for _, n := range others {
-					e.say("%s", fmt.Sprintf("         %d. %s", n, w.req.Options[n-1]))
+					e.say("%s", fmt.Sprintf("         %d. %s%s", n, w.req.Options[n-1], lastsTag(w.req.Options[n-1])))
 				}
 				e.say("%s", "       "+pad("Pick one:")+cmd("cadrei answer "+code+" "+strconv.Itoa(others[0])))
 			}
