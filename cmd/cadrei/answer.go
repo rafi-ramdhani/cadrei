@@ -478,7 +478,10 @@ func runAnswer(e *env) int {
 	// Marked first: the hook of the tool's own end can come before the
 	// answer below drops the code, and the prompt log tells it by the mark.
 	build := rt.BuildDir(r.Path)
-	if !answering(build, w, true) {
+	switch open, err := answering(build, w, true); {
+	case err != nil:
+		return e.failWith("The " + w.role + "'s record is busy right now, so I didn't press anything. Try again in a moment.")
+	case !open:
 		return e.failWith(nothingWaiting(code, cmd))
 	}
 	pressed := time.Now()
@@ -578,10 +581,11 @@ func fitSize(w *waitingOn) (width, height int) {
 
 // answering marks w's request in its member's state as being answered by
 // its code, or with on false takes the mark off, under the member's lock.
-// It reports whether the request is still open.
-func answering(build string, w *waitingOn, on bool) bool {
+// It reports whether the request is still open, and an error when the
+// state couldn't be changed (its lock stayed busy, say).
+func answering(build string, w *waitingOn, on bool) (bool, error) {
 	found := false
-	session.ChangeState(build, w.name, 2*time.Second, func(st *session.State) *session.State {
+	_, _, err := session.ChangeState(build, w.name, 2*time.Second, func(st *session.State) *session.State {
 		i := slices.IndexFunc(st.Requests(), func(r *session.Request) bool { return r.Code == w.req.Code })
 		if i < 0 {
 			return st
@@ -597,7 +601,7 @@ func answering(build string, w *waitingOn, on bool) bool {
 		next.Open[i] = &marked
 		return &next
 	})
-	return found
+	return found && err == nil, err
 }
 
 // answered ends w's request in its member's state, under the member's
@@ -907,19 +911,48 @@ func takesMore(box []string, opts []promptOption) bool {
 // draws, with or without an "Esc to cancel" line under it.
 var pointerLine = regexp.MustCompile(`^\s*❯\s*[1-9]\.\s`)
 
-// noPrompt reports whether a member's screen, read whole, shows no
-// prompt: no "Esc to cancel" line, and no option with the pointer at it.
-// No screen at all is one cadrei couldn't read, so it doesn't count.
+// noPrompt reports whether a member's screen shows no prompt at its
+// bottom, where the runtime draws one: the empty input line, framed by
+// solid rules, near the bottom, or in the lines a prompt's options take
+// there, no "Esc to cancel" line and no option with the pointer at it.
+// Earlier output above (an old "Esc to cancel", an echoed "❯ 1." line)
+// doesn't count. No screen at all is one cadrei couldn't read, so it
+// doesn't count either.
 func noPrompt(screen string) bool {
 	if screen == "" {
 		return false
 	}
-	for _, l := range strings.Split(screen, "\n") {
+	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
+	bottom := lines[max(0, len(lines)-maxPromptLines):]
+	if idleInput(lines) {
+		return true
+	}
+	for _, l := range bottom {
 		if strings.Contains(l, "Esc to cancel") || pointerLine.MatchString(l) {
 			return false
 		}
 	}
 	return true
+}
+
+// inputLine is the runtime's input line: the pointer, then what's typed.
+var inputLine = regexp.MustCompile(`^\s*❯(\s|$)`)
+
+// idleInput reports whether the bottom lines of a screen hold the input
+// line the runtime shows when no prompt is up, a solid rule right above
+// it and one just under it.
+func idleInput(lines []string) bool {
+	for i := len(lines) - 1; i >= 1 && i >= len(lines)-footLines-3; i-- {
+		if !inputLine.MatchString(lines[i]) || pointerLine.MatchString(lines[i]) || !solidRule(lines[i-1]) {
+			continue
+		}
+		for _, l := range lines[i+1 : min(len(lines), i+3)] {
+			if solidRule(l) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // solidRule reports whether a line is a rule of ─, as the prompt's box

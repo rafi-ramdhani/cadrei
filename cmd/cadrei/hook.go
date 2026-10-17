@@ -312,6 +312,12 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		if ev.Name == runtime.EvIdleReminder && len(prev.Requests()) > 0 {
 			ev.NoPrompt = noPrompt(session.OwnScreen())
 		}
+		// The end of a call a request may be one of several calls': with no
+		// prompt on the screen, the request's prompt is gone too, so it isn't
+		// handed on to a call still running.
+		if ev.Name == runtime.EvToolDone && slices.ContainsFunc(prev.Requests(), func(r *session.Request) bool { return slices.Contains(r.Maybe, ev.ToolID) }) {
+			ev.NoPrompt = noPrompt(session.OwnScreen())
+		}
 		return session.Apply(prev, ev, time.Now())
 	})
 	if err == nil {

@@ -296,7 +296,8 @@ type StateEvent struct {
 	ToolID string
 	Notice string
 	// NoPrompt: the member's own screen, read when an idle reminder comes
-	// while a request is open, shows no prompt.
+	// while a request is open, or a call ends that one may belong to,
+	// shows no prompt.
 	NoPrompt bool
 	// InputKey is a digest of what the tool got, so a permission request,
 	// which names no call, is matched to the call it belongs to.

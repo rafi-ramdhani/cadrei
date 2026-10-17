@@ -458,7 +458,7 @@ func TestAnAnswerRacingItsToolsEndIsByCode(t *testing.T) {
 	feed(t, c, "work-dev-engineer", `{"hook_event_name":"UserPromptSubmit"}`)
 	feed(t, c, "work-dev-engineer", shipStart)
 	w := &waitingOn{team: "dev", role: "engineer", name: "work-dev-engineer", req: stateOf(c).Current()}
-	if !answering(build, w, true) || !stateOf(c).Current().ByCode(time.Now()) {
+	if open, err := answering(build, w, true); !open || err != nil || !stateOf(c).Current().ByCode(time.Now()) {
 		t.Fatalf("not marked: %+v", stateOf(c).Current())
 	}
 	pressed := time.Now()
@@ -496,8 +496,60 @@ func TestAnAnswerRacingItsToolsEndIsByCode(t *testing.T) {
 		t.Errorf("unmarked: %+v", n)
 	}
 	// Gone before the mark: nothing's waiting under it.
-	if answering(build, w, true) {
-		t.Error("marked a request that's gone")
+	if open, err := answering(build, w, true); open || err != nil {
+		t.Errorf("marked a request that's gone: %v", err)
+	}
+}
+
+// Low items A and C (PR B): a request that may be one of two Bash calls'
+// ends with its own call, when that ends first and the member's screen
+// shows no prompt, though an old one's footer is still above its empty
+// input line. The prompt log counts it in the window.
+func TestARequestEndsWithItsCallWhenTheScreenShowsNone(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	stepsMember(t, home, "engineer", rawFixture(t, "bash-prompt-live.txt")+"\n⏺ Made it.\n\n"+
+		"────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n")
+	for _, ev := range []string{`{"hook_event_name":"UserPromptSubmit"}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"make"}}`,
+		`{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_2","tool_input":{"command":"make test"}}`,
+		`{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}`} {
+		feed(t, c, "work-dev-engineer", ev)
+	}
+	if r := stateOf(c).Current(); r == nil || len(r.Maybe) != 2 {
+		t.Fatalf("not one of two: %+v", r)
+	}
+	feedInPane(t, c, "engineer", `{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"toolu_1"}`)
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("handed on: %+v", st.Current())
+	}
+	if n := session.CountPrompts(c + "/.claude/build"); n.InWindow != 1 {
+		t.Errorf("prompt log: %+v", n)
+	}
+}
+
+// Low item B (PR B): with the member's lock busy, an answer says so, not
+// that nothing's waiting, and presses nothing.
+func TestAnAnswerWithTheLockBusySaysSo(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	code := request(t, c, "engineer", mkdirRequest)
+	lock, err := fsx.Acquire(session.LockPath(c+"/.claude/build", "work-dev-engineer"), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	ownTerminal(t)
+	if n, out, errOut := call("answer", code, "yes"); n != 1 || out != "" || flat(errOut) != "cadrei: the engineer's record is busy right now, so I didn't press anything. Try again in a moment." {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "" {
+		t.Errorf("pressed %q", k)
 	}
 }
 
@@ -550,6 +602,20 @@ func TestAnIdleReminderEndsAPromptGoneFromTheScreen(t *testing.T) {
 	}
 	if noPrompt("") || !noPrompt("⏺ Done.\n\n────\n❯ \n────\n  ? for shortcuts\n") {
 		t.Error("noPrompt")
+	}
+	// Low item C (PR B): only the bottom of the screen counts, where the
+	// runtime draws a prompt. The empty input line there means none is up,
+	// whatever earlier output shows above it: an old prompt's footer, a
+	// prompt the user echoed, or a reply that runs long.
+	idle := "\n────────────────────────────────────────\n❯ \n────────────────────────────────────────\n  ? for shortcuts\n"
+	for name, screen := range map[string]string{
+		"an old prompt above": rawFixture(t, "bash-prompt-live.txt") + "\n⏺ Okay, I won't.\n" + idle,
+		"an echoed prompt":    "❯ 1. Yes, go on\n\n⏺ Going on.\n" + idle,
+		"a long reply":        " Esc to cancel\n" + strings.Repeat("⏺ more\n", maxPromptLines) + "  (no input line)\n",
+	} {
+		if !noPrompt(screen) {
+			t.Errorf("%s reads as a prompt", name)
+		}
 	}
 	feedInPane(t, c, "engineer", idleReminder)
 	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil {

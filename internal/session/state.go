@@ -259,7 +259,7 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		}
 		settle()
 	case runtime.EvToolDone:
-		next.end(ev.ToolID, ev.Tool)
+		next.end(ev.ToolID, ev.Tool, ev.NoPrompt)
 		settle()
 	case runtime.EvPermission:
 		kind := ForApproval
@@ -437,11 +437,12 @@ func (s *State) loneCall() string {
 
 // end ends call id: its note, and its request. A request that may be one
 // of several calls' is none of the call that ended (a call waiting on a
-// prompt doesn't end), and once one is left, it's that one's. A call
-// whose start cadrei never saw, with no request of its own, ends the
-// oldest request of the same tool that names no call: its permission
-// request came without the call's start too.
-func (s *State) end(id, tool string) {
+// prompt doesn't end), and once one is left, it's that one's; but with
+// gone (the member's screen shows no prompt), its prompt ended too, so
+// it ends. A call whose start cadrei never saw, with no request of its
+// own, ends the oldest request of the same tool that names no call: its
+// permission request came without the call's start too.
+func (s *State) end(id, tool string, gone bool) {
 	if id == "" {
 		return
 	}
@@ -452,6 +453,10 @@ func (s *State) end(id, tool string) {
 		return
 	}
 	for i, r := range s.Open {
+		if slices.Contains(r.Maybe, id) && gone {
+			s.Open = slices.Delete(s.Open, i, i+1)
+			return
+		}
 		if slices.Contains(r.Maybe, id) {
 			// A copy: the request is prev's too.
 			c := *r

@@ -197,6 +197,15 @@ func TestACallsEndEndsOnlyItsOwnPrompt(t *testing.T) {
 	if s = run(t, s, done("Bash", "toolu_1")); s.State != Working || s.Current() != nil {
 		t.Errorf("its own call's end: %+v", s)
 	}
+	// Low item A (PR B): its own call's end comes first, while the other
+	// runs. The screen shows no prompt, so it ends, rather than go on
+	// under the running call's code.
+	s = run(t, &State{State: Working}, pre("Bash", "toolu_1", "k-1"), pre("Bash", "toolu_2", "k-2"), approval("Bash", "k-other", "make"))
+	end := done("Bash", "toolu_1")
+	end.NoPrompt = true
+	if s = run(t, s, end); s.State != Working || s.Current() != nil || len(s.Calls) != 1 {
+		t.Errorf("with no prompt on the screen: %+v", s)
+	}
 }
 
 // A state keeps at most MaxRequests requests and maxCalls calls: the
