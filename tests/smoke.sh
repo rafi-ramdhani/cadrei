@@ -425,6 +425,22 @@ state_hook asked
 check "its own call's end ends it" bash -c "grep -q '\"state\":\"working\"' '$st/demo-dev-app-engineer.json' && ! grep -q '\"requests\"' '$st/demo-dev-app-engineer.json'"
 check "each hook run is traced, without what the tool got" bash -c "test \$(grep -c '\"phase\":\"end\"' '$st/demo-dev-app-engineer.trace') -ge 5 && ! grep -q 'smoke build' '$st/demo-dev-app-engineer.trace'"
 check "the prompt log notes it answered in its window" bash -c "grep -q '\"ended\":\"in_window\"' '$st/prompts.log' && ! grep -q 'smoke build' '$st/prompts.log'"
+# 0.2.3 (PR B): a member's window starts wide, a command too long for the
+# record keeps its whole text in a file of its own until its prompt ends,
+# and a question with several picks keeps each question.
+check "a member's window starts at 220x60" test "$(tm display -p -t =cadrei-demo-dev-app:=engineer '#{window_width}x#{window_height}')" = "220x60"
+long=""
+for _ in $(seq 30); do long="$long echo step-of-the-smoke-job;"; done
+printf '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"%s echo smoke-end"}}\n' "$long" > "$T/prb-long.json"
+printf '%s\n' '{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_use_id":"toolu_late"}' > "$T/prb-ended.json"
+printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_use_id":"toolu_m","tool_input":{"questions":[{"question":"Which smoke files?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}]}}' > "$T/prb-multi.json"
+prb_hook() { CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state < "$T/prb-$1.json"; }
+prb_hook long
+check "a long command's whole text has a file of its own" bash -c "grep -l 'smoke-end' '$st'/demo-dev-app-engineer.req-*.txt && ! grep -q 'smoke-end' '$st/demo-dev-app-engineer.json'"
+prb_hook ended
+check "the file goes with its prompt" bash -c "! ls '$st'/demo-dev-app-engineer.req-*.txt"
+prb_hook multi
+check "a question with several picks keeps each question" bash -c "grep -qF '\"parts\":[{\"question\":\"Which smoke files?\",\"options\":[\"a\",\"b\"],\"multi\":true}]' '$st/demo-dev-app-engineer.json' && ! grep -qF '\"options\":[\"a\",\"b\"],\"multi\":true,' '$st/demo-dev-app-engineer.json'"
 cd "$HOME/.cadrei/life"
 cadrei up dev/engineer >/dev/null
 check "another cadrei's team runs apart" running cadrei-life-dev
