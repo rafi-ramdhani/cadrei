@@ -87,7 +87,7 @@ func (m *memberView) fill() {
 	m.Request = nil
 	if r := m.status.Request; r != nil {
 		m.Request = &requestView{Code: r.Code, Kind: r.Kind, Tool: r.Tool, Summary: r.Summary, Options: r.Options, Multi: r.Multi}
-		if r.Kind == session.ForQuestion || r.Kind == session.ForPrompt {
+		if r.Kind == session.ForQuestion || r.Kind == session.ForPrompt || r.Kind == session.ForStart {
 			m.Request.Summary = runtime.RequestText(r.Question, runtime.SummaryLimit)
 		}
 	}
@@ -258,7 +258,7 @@ func viewOf(t session.Tmux, i session.Info, look bool) sessionView {
 
 // viewFrom is a running team's view from its windows, in tmux t. With
 // look, a member still starting has its screen looked at first
-// (lookAtStart).
+// (lookAtStart), and a safeguard stop gets its code (lookAtStop).
 func viewFrom(t session.Tmux, look bool, i session.Info, windows []session.Window, now time.Time) sessionView {
 	v := sessionView{Session: printable(i.Name), Team: printable(i.Team), Project: printable(i.Project), Legacy: i.Legacy(), Members: []memberView{}, info: i}
 	if v.Team == "" {
@@ -272,6 +272,9 @@ func viewFrom(t session.Tmux, look bool, i session.Info, windows []session.Windo
 			lookAtStart(rt, t, rt.BuildDir(i.Home), m.name, i.Name, w.Name)
 		}
 		m.read(i.Home, now)
+		if look && rt != nil && i.Home != "" && lookAtStop(rt.BuildDir(i.Home), m.name, m.status) {
+			m.read(i.Home, now)
+		}
 		m.Name, m.Role = printable(m.Name), printable(m.Role)
 		v.Members = append(v.Members, m)
 	}

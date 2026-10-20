@@ -349,6 +349,38 @@ func TestAHookEndsAStartUpRequest(t *testing.T) {
 	}
 }
 
+// N7: a safeguard stop gets a request with its two choices, kept with its
+// code while the stop lasts, and ended once it doesn't. A later stop is a
+// new one. A member with no state gets none. Any hook but an idle
+// reminder means it's going again.
+func TestASafeguardStopIsARequest(t *testing.T) {
+	at := time.Date(2026, 1, 1, 10, 0, 5, 0, time.UTC)
+	idle := &State{State: Idle}
+	s := SeeStop(idle, at, true)
+	if s == idle || len(s.Open) != 1 || s.Current().Kind != ForSafeguard || !s.Current().At.Equal(at) || s.Current().Source != FromTranscript ||
+		len(s.Current().Options) != 2 || s.State != Idle {
+		t.Fatalf("stopped: %+v %+v", s, s.Current())
+	}
+	if again := SeeStop(s, at, true); again != s {
+		t.Errorf("the same stop changed it: %+v", again)
+	}
+	if later := SeeStop(s, at.Add(time.Minute), true); later == s || !later.Current().At.Equal(at.Add(time.Minute)) || len(later.Open) != 1 {
+		t.Errorf("a later stop: %+v", later.Current())
+	}
+	if over := SeeStop(s, time.Time{}, false); len(over.Open) != 0 {
+		t.Errorf("over: %+v", over)
+	}
+	if SeeStop(nil, at, true) != nil || SeeStop(idle, at, false) != idle {
+		t.Error("nothing to record")
+	}
+	if kept := run(t, s, runtime.StateEvent{Name: runtime.EvIdleReminder}); len(kept.Open) != 1 {
+		t.Errorf("an idle reminder: %+v", kept)
+	}
+	if gone := run(t, s, pre("Bash", "toolu_1", "k")); len(gone.Open) != 0 || gone.State != Working {
+		t.Errorf("going again: %+v", gone)
+	}
+}
+
 // A start-up screen that ends with no answer by its code was answered in
 // its window, whatever ended its request: never cancelled.
 func TestAStartUpScreenEndsInItsWindow(t *testing.T) {

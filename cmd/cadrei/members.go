@@ -60,11 +60,18 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 		transcript = rt.Sessions().TranscriptFile(rec.ID, rec.Dir)
 	}
 	// A safeguard stop wins over every other state. The wait for the
-	// runtime's own retry is over once a turn ended after the stop.
+	// runtime's own retry is over once a turn ended after the stop. Its
+	// request, when cadrei recorded it, says what can be done.
 	if at, stopped := session.Safeguard(rt.Sessions(), build, name, transcript); stopped {
 		retried := st != nil && st.State == session.Idle && st.EndedAt.After(at)
 		if !wait || retried || now.Sub(at) >= safeguardWait {
-			return memberStatus{State: session.SafeguardStopped, Since: at}
+			m := memberStatus{State: session.SafeguardStopped, Since: at}
+			for _, r := range st.Requests() {
+				if r.Kind == session.ForSafeguard && r.At.Equal(at) {
+					m.Request, m.Requests = r, []*session.Request{r}
+				}
+			}
+			return m
 		}
 	}
 	if st == nil || (rec != nil && st.Session != "" && st.Session != rec.ID) {

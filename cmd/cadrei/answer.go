@@ -81,7 +81,8 @@ func waitingIn(views []sessionView) []waitingOn {
 	var out []waitingOn
 	for _, v := range views {
 		for _, m := range v.Members {
-			if m.status.State != session.Waiting {
+			// One stopped by safeguards holds that stop's request only.
+			if m.status.State != session.Waiting && m.status.State != session.SafeguardStopped {
 				continue
 			}
 			dir, build := "", ""
@@ -194,6 +195,8 @@ func answerable(req *session.Request) bool {
 		return !req.Multi && req.Question != "" && len(picks(req.Options)) > 0
 	case session.ForStart:
 		return !req.Multi && req.Question != "" && len(startChoices(req)) > 0
+	case session.ForSafeguard:
+		return slices.Equal(req.Options, session.SafeguardOptions)
 	case session.ForApproval:
 		return checkable(req.Tool) && req.Summary != "" && !cutShort(req) && (req.Tool != "ExitPlanMode" || planText(req.Summary) != "")
 	}
@@ -422,6 +425,9 @@ func (w *waitingOn) note() string {
 		}
 		return who + " waits on a start-up screen: " + w.req.Question + " Options: " + numberedOf(w.req, ns) + "." + trust +
 			" The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
+	case w.req.Kind == session.ForSafeguard && answerable(w.req):
+		return who + " was stopped by " + modelName() + "'s safeguards, so it won't answer. To start it fresh (a new chat that won't remember this one)," +
+			" the user types ! cadrei answer " + w.req.Code + " 2. To pick its model again instead, they " + pickInWindow(w, plain) + "."
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
 }
@@ -466,6 +472,8 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 		return "Cadrei can't answer that start-up screen from here, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForStart:
 		return checkStart(w, code, choice, c)
+	case w.req.Kind == session.ForSafeguard && answerable(w.req):
+		return checkStop(w, code, choice, c)
 	case cutShort(w.req) && checkable(w.req.Tool):
 		return "That's too long for cadrei to check whole, so answer it in its window: " + c(w.attach())
 	case !answerable(w.req):
@@ -522,6 +530,8 @@ func askReason(w *waitingOn, choice string) string {
 	case session.ForStart:
 		label := w.req.Options[startPick(choice)-1]
 		return "Cadrei: answer the start-up screen of " + w.place() + " with \"" + choice + ". " + label + "\"?" + startEffect(w, label) + " It asks: " + w.req.Question
+	case session.ForSafeguard:
+		return stopAsk(w)
 	}
 	verb, object, _ := act(w.req)
 	label, picked := approvalPick(w.req, choice)
@@ -604,6 +614,9 @@ func runAnswer(e *env) int {
 	case !open:
 		return e.failWith(nothingWaiting(code, cmd))
 	}
+	if w.req.Kind == session.ForSafeguard {
+		return e.answerStop(w, build)
+	}
 	pressed := time.Now()
 	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
 		if why := answerSteps(t, w, picks); why != "" {
@@ -682,8 +695,8 @@ var growWait = 1500 * time.Millisecond
 func promptScreen(t session.Tmux, w *waitingOn) (screen string, restore func()) {
 	screen = t.Screen(w.session, w.window)
 	// A start-up screen is read as it is: one cadrei can't read whole is
-	// answered in its window.
-	if !answerable(w.req) || w.req.Kind == session.ForStart || promptShows(screen, w) && !t.Grown(w.session, w.window) {
+	// answered in its window. A safeguard stop shows no prompt.
+	if !answerable(w.req) || w.req.Kind == session.ForStart || w.req.Kind == session.ForSafeguard || promptShows(screen, w) && !t.Grown(w.session, w.window) {
 		return screen, func() {}
 	}
 	width, height := fitSize(w)
@@ -764,16 +777,20 @@ func answered(build string, w *waitingOn, choice string, pressed time.Time) {
 		next := *st
 		next.Open = slices.Clone(st.Open)
 		next.Drop(w.req.Code)
+		if w.req.Kind == session.ForSafeguard {
+			// Started fresh next, its state starts over anyway.
+			return &next
+		}
 		state := session.Working
 		switch {
 		case no:
 			next.Open, next.Calls, state = nil, nil, session.Idle
-		case len(next.Open) > 0:
-			state = session.Waiting
 		case w.req.Kind == session.ForStart:
 			// Still before its first hook: the next look reads what it
 			// shows now.
 			state = session.Starting
+		case len(next.Open) > 0:
+			state = session.Waiting
 		}
 		if next.State != state {
 			next.Since = time.Now()
@@ -886,6 +903,12 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 				}
 			}
 			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ns[0])))
+		case w.req.Kind == session.ForSafeguard && answerable(w.req):
+			e.say("%s", "  "+code+"  "+modelName()+"'s safeguards stopped the last reply of "+w.place()+", so it won't answer:")
+			e.say("%s", "         1. "+w.req.Options[0]+" (only in its window)")
+			e.say("%s", "         2. "+w.req.Options[1]+" (a new chat that won't remember this one)")
+			e.say("%s", "       "+pad("Start it fresh:")+cmd("cadrei answer "+code+" 2"))
+			e.say("%s", "       To pick its model again, "+pickInWindow(&w, cmd))
 		default:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
 			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
@@ -1479,6 +1502,10 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 // text for the guard).
 func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (key, why string) {
 	window := " Answer it in its window: " + c(w.attach())
+	if w.req.Kind == session.ForSafeguard {
+		// A fresh start needs nothing from its screen.
+		return choice, ""
+	}
 	if !promptShows(screen, w) {
 		opts, box, _ := promptOf(screen, w)
 		switch {

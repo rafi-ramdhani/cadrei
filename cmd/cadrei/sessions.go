@@ -683,12 +683,18 @@ func (e *env) safeguardCheck(r *cadreis.Resolved, team, project string, roles []
 		if rec == nil {
 			continue
 		}
-		if _, stopped := session.Safeguard(rt.Sessions(), build, name, rt.Sessions().TranscriptFile(rec.ID, rec.Dir)); !stopped {
+		at, stopped := session.Safeguard(rt.Sessions(), build, name, rt.Sessions().TranscriptFile(rec.ID, rec.Dir))
+		if !stopped {
+			continue
+		}
+		e.note("", markWarn, rt.Model()+"'s safeguards stopped the "+role+"'s last reply, so it won't answer.")
+		e.show("  ", "Open its window and pick the model again: "+cmd("cadrei attach "+where))
+		// With its state hooks, the stop gets a code, which starts it fresh.
+		if r := session.SeeStopOf(build, name, at, true); r != nil {
+			e.show("  ", "Or start it fresh: "+cmd("cadrei answer "+r.Code+" 2"))
 			continue
 		}
 		member := strings.TrimSpace(team + "/" + role + " " + project)
-		e.note("", markWarn, rt.Model()+"'s safeguards stopped the "+role+"'s last reply, so it won't answer.")
-		e.show("  ", "Open its window and pick the model again: "+cmd("cadrei attach "+where))
 		e.show("  ", "Or start it fresh: "+cmd("cadrei stop "+member+" --fresh"))
 		e.show("  ", "then "+cmd("cadrei up "+member))
 	}

@@ -39,12 +39,20 @@ const (
 	// trust, a login), read off the member's screen while it starts: no
 	// hook runs until those screens are behind it.
 	ForStart = "start"
+	// ForSafeguard: the runtime's safeguards stopped its last reply, so it
+	// won't answer until the user picks its model again (in its window) or
+	// starts it fresh (SafeguardOptions). Read from its transcript.
+	ForSafeguard = "safeguard"
 )
+
+// SafeguardOptions are what a safeguard stop's request offers, in order.
+var SafeguardOptions = []string{"Pick its model again", "Start it fresh"}
 
 // Where a request's record came from.
 const (
-	FromHook   = "hook"   // the runtime's hook input
-	FromScreen = "screen" // the member's screen
+	FromHook       = "hook"       // the runtime's hook input
+	FromScreen     = "screen"     // the member's screen
+	FromTranscript = "transcript" // the member's transcript
 )
 
 // Limits on what a state holds: a member rarely has more than one prompt
@@ -88,7 +96,9 @@ type Call struct {
 // lands on a request that changed.
 type Request struct {
 	Code string `json:"code"`
-	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt or ForStart
+	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt, ForStart or ForSafeguard
+	// At is when the safeguard stop it's for happened.
+	At time.Time `json:"at,omitempty"`
 	// Tool is the tool it's for; for a start-up screen, what the screen
 	// asks (one of the runtime's Start kinds).
 	Tool     string   `json:"tool,omitempty"`
@@ -224,8 +234,11 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 	if prev != nil {
 		next = *prev
 		// A hook runs only once the start-up screens are behind it: one
-		// still open was answered in its window, unseen.
-		next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForStart })
+		// still open was answered in its window, unseen. Any hook but an
+		// idle reminder says it's going again after a safeguard stop.
+		next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool {
+			return r.Kind == ForStart || r.Kind == ForSafeguard && ev.Name != runtime.EvIdleReminder
+		})
 		next.Calls = slices.Clone(prev.Calls)
 	}
 	if ev.Session != "" {
@@ -490,7 +503,12 @@ func (s *State) end(id, tool string, gone bool) {
 // Starts reports whether s is the state of a member no hook has written
 // for yet: starting, or waiting on a start-up screen.
 func Starts(s *State) bool {
-	return s != nil && (s.State == Starting || s.State == Waiting && len(s.Open) == 1 && s.Open[0].Kind == ForStart)
+	return s != nil && (s.State == Starting || s.State == Waiting && s.ofKind(ForStart) >= 0)
+}
+
+// ofKind is the index of s's first open request of kind, or -1.
+func (s *State) ofKind(kind string) int {
+	return slices.IndexFunc(s.Open, func(r *Request) bool { return r.Kind == kind })
 }
 
 // SeeStart gives the state after a look at a starting member's screen,
@@ -505,8 +523,8 @@ func SeeStart(prev *State, s *runtime.StartScreen, now time.Time) *State {
 		return prev
 	}
 	var open *Request
-	if prev.State == Waiting {
-		open = prev.Open[0]
+	if i := prev.ofKind(ForStart); i >= 0 {
+		open = prev.Open[i]
 	}
 	switch {
 	case s == nil && open == nil:
@@ -515,14 +533,57 @@ func SeeStart(prev *State, s *runtime.StartScreen, now time.Time) *State {
 		return prev
 	}
 	next := *prev
-	next.Open, next.Calls, next.Since = nil, nil, now
+	next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForStart })
+	next.Since = now
 	if s == nil {
 		next.State, next.WaitingFor = Starting, ""
 		return &next
 	}
-	next.Open = []*Request{{Kind: ForStart, Tool: s.Kind, Question: s.Title, Options: slices.Clone(s.Options), Multi: s.Multi, Source: FromScreen}}
+	r := &Request{Kind: ForStart, Tool: s.Kind, Question: s.Title, Options: slices.Clone(s.Options), Multi: s.Multi, Source: FromScreen}
+	next.Open = append([]*Request{r}, next.Open...)
 	next.State, next.WaitingFor = Waiting, ForStart
 	return &next
+}
+
+// SeeStop gives the state after a look at whether the runtime's safeguards
+// stopped the member's last reply, from prev: stopped, at at. A stop gets
+// a request offering SafeguardOptions; one no longer stopped ends it. It
+// returns prev itself when nothing changes, so a member with no state (no
+// state hooks) gets no code.
+func SeeStop(prev *State, at time.Time, stopped bool) *State {
+	if prev == nil {
+		return nil
+	}
+	i := prev.ofKind(ForSafeguard)
+	switch {
+	case stopped && i >= 0 && prev.Open[i].At.Equal(at), !stopped && i < 0:
+		return prev
+	}
+	next := *prev
+	next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForSafeguard })
+	if stopped {
+		next.add(&Request{Kind: ForSafeguard, At: at, Options: slices.Clone(SafeguardOptions), Source: FromTranscript})
+	}
+	return &next
+}
+
+// SeeStopOf records what SeeStop says in member name's state in build,
+// under its lock, and notes in the prompt log what changed: a stop that
+// ended with no answer by its code was dealt with in its window. It
+// returns the safeguard stop's request, when one is open.
+func SeeStopOf(build, name string, at time.Time, stopped bool) *Request {
+	prev, next, err := ChangeState(build, name, time.Second, func(prev *State) *State { return SeeStop(prev, at, stopped) })
+	if err != nil {
+		return nil
+	}
+	LogPrompts(build, name, prev, next, func(string) string { return EndedInWindow }, time.Now())
+	if next == nil {
+		return nil
+	}
+	if i := next.ofKind(ForSafeguard); i >= 0 {
+		return next.Open[i]
+	}
+	return nil
 }
 
 // Drop ends the open request under code: the user answered it. It reports

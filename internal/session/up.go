@@ -288,8 +288,11 @@ func SeeStartOf(build, name string, s *runtime.StartScreen) *Request {
 		return nil
 	}
 	LogPrompts(build, name, prev, next, func(string) string { return EndedInWindow }, time.Now())
-	if Starts(next) && next.State == Waiting {
-		return next.Open[0]
+	if next == nil {
+		return nil
+	}
+	if i := next.ofKind(ForStart); i >= 0 {
+		return next.Open[i]
 	}
 	return nil
 }
