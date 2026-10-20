@@ -40,13 +40,13 @@ const (
 	// hook runs until those screens are behind it.
 	ForStart = "start"
 	// ForSafeguard: the runtime's safeguards stopped its last reply, so it
-	// won't answer until the user picks its model again (in its window) or
-	// starts it fresh (SafeguardOptions). Read from its transcript.
+	// won't answer until it starts again on another model, on its chat, or
+	// starts fresh (SafeguardOptions). Read from its transcript.
 	ForSafeguard = "safeguard"
 )
 
 // SafeguardOptions are what a safeguard stop's request offers, in order.
-var SafeguardOptions = []string{"Pick its model again", "Start it fresh"}
+var SafeguardOptions = []string{"Start it again on another model", "Start it fresh"}
 
 // Where a request's record came from.
 const (
@@ -754,8 +754,20 @@ type safeguardCheck struct {
 
 // Safeguard says whether the runtime's safeguards stopped member name's
 // last reply in transcript, and when, through its cache in the build
-// folder's state/<name>.safeguard.
+// folder's state/<name>.safeguard. A stop its chat was started again past
+// (its record's PastStop) doesn't count.
 func Safeguard(ops runtime.SessionOps, build, name, transcript string) (time.Time, bool) {
+	at, stopped := safeguardIn(ops, build, name, transcript)
+	if stopped && !at.IsZero() {
+		if r := ReadRecord(RecordPath(build, name)); r != nil && r.PastStop.Equal(at) {
+			return at, false
+		}
+	}
+	return at, stopped
+}
+
+// safeguardIn is Safeguard, past stops and all.
+func safeguardIn(ops runtime.SessionOps, build, name, transcript string) (time.Time, bool) {
 	st, err := os.Stat(transcript)
 	if transcript == "" || err != nil || !st.Mode().IsRegular() {
 		return time.Time{}, false

@@ -118,7 +118,7 @@ func (e *env) printStatus(s cadreiStatus, several bool) {
 			}
 			switch r := m.status.Request; {
 			case m.status.State == session.SafeguardStopped && r != nil:
-				out(rest + dim("Pick the model again in its window, or start it fresh: cadrei answer "+r.Code+" 2."))
+				out(rest + dim("Start it on another model (cadrei answer "+r.Code+" 1 <model>) or fresh (cadrei answer "+r.Code+" 2)."))
 			case m.status.State == session.SafeguardStopped:
 				out(rest + dim(safeguardHint))
 			}

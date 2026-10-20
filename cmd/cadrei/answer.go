@@ -426,8 +426,9 @@ func (w *waitingOn) note() string {
 		return who + " waits on a start-up screen: " + w.req.Question + " Options: " + numberedOf(w.req, ns) + "." + trust +
 			" The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	case w.req.Kind == session.ForSafeguard && answerable(w.req):
-		return who + " was stopped by " + modelName() + "'s safeguards, so it won't answer. To start it fresh (a new chat that won't remember this one)," +
-			" the user types ! cadrei answer " + w.req.Code + " 2. To pick its model again instead, they " + pickInWindow(w, plain) + "."
+		return who + " was stopped by " + modelName() + "'s safeguards, so it won't answer on that model. To start it again on its chat with another model," +
+			" for this start only, the user types ! cadrei answer " + w.req.Code + " 1 <model>. To start it fresh (a new chat that won't remember this one)," +
+			" they type ! cadrei answer " + w.req.Code + " 2."
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
 }
@@ -531,7 +532,7 @@ func askReason(w *waitingOn, choice string) string {
 		label := w.req.Options[startPick(choice)-1]
 		return "Cadrei: answer the start-up screen of " + w.place() + " with \"" + choice + ". " + label + "\"?" + startEffect(w, label) + " It asks: " + w.req.Question
 	case session.ForSafeguard:
-		return stopAsk(w)
+		return stopAsk(w, choice)
 	}
 	verb, object, _ := act(w.req)
 	label, picked := approvalPick(w.req, choice)
@@ -615,7 +616,7 @@ func runAnswer(e *env) int {
 		return e.failWith(nothingWaiting(code, cmd))
 	}
 	if w.req.Kind == session.ForSafeguard {
-		return e.answerStop(w, build)
+		return e.answerStop(w, build, choice)
 	}
 	pressed := time.Now()
 	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
@@ -778,7 +779,7 @@ func answered(build string, w *waitingOn, choice string, pressed time.Time) {
 		next.Open = slices.Clone(st.Open)
 		next.Drop(w.req.Code)
 		if w.req.Kind == session.ForSafeguard {
-			// Started fresh next, its state starts over anyway.
+			// Started again next, its state starts over anyway.
 			return &next
 		}
 		state := session.Working
@@ -904,11 +905,11 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 			}
 			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ns[0])))
 		case w.req.Kind == session.ForSafeguard && answerable(w.req):
-			e.say("%s", "  "+code+"  "+modelName()+"'s safeguards stopped the last reply of "+w.place()+", so it won't answer:")
-			e.say("%s", "         1. "+w.req.Options[0]+" (only in its window)")
+			e.say("%s", "  "+code+"  "+modelName()+"'s safeguards stopped the last reply of "+w.place()+", so it won't answer on that model:")
+			e.say("%s", "         1. "+w.req.Options[0]+" (on its chat, for this start only)")
 			e.say("%s", "         2. "+w.req.Options[1]+" (a new chat that won't remember this one)")
+			e.say("%s", "       "+pad("Another model:")+cmd("cadrei answer "+code+" 1 <model>"))
 			e.say("%s", "       "+pad("Start it fresh:")+cmd("cadrei answer "+code+" 2"))
-			e.say("%s", "       To pick its model again, "+pickInWindow(&w, cmd))
 		default:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
 			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
@@ -1503,7 +1504,7 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (key, why string) {
 	window := " Answer it in its window: " + c(w.attach())
 	if w.req.Kind == session.ForSafeguard {
-		// A fresh start needs nothing from its screen.
+		// Starting it again needs nothing from its screen.
 		return choice, ""
 	}
 	if !promptShows(screen, w) {

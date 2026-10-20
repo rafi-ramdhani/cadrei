@@ -148,7 +148,7 @@
                 "code": "<code>",
                 "kind": "safeguard",
                 "options": [
-                  "Pick its model again",
+                  "Start it again on another model",
                   "Start it fresh"
                 ]
               },

@@ -159,8 +159,8 @@ func TestSafeguardStopsShow(t *testing.T) {
 	}
 	os.Remove(recent)
 	placeTranscript(t, c, "work-dev-engineer", "safeguard-stuck.jsonl", nil)
-	// N7: with a code to start it fresh.
-	hint := regexp.MustCompile("\n    x engineer   stopped by safeguards\n                 Pick the model again in its window, or start it fresh: cadrei answer [a-z2-9]{3} 2.\n")
+	// N7: with a code to start it on another model or fresh.
+	hint := regexp.MustCompile("\n    x engineer   stopped by safeguards\n                 Start it on another model \\(cadrei answer ([a-z2-9]{3}) 1 <model>\\) or fresh \\(cadrei answer ([a-z2-9]{3}) 2\\).\n")
 	for _, payload := range []string{`{"hook_event_name":"Stop"}`, `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`} {
 		feed(t, c, "work-dev-engineer", payload)
 		out := must(t, "ls")
@@ -191,7 +191,7 @@ func TestSafeguardStopsShow(t *testing.T) {
 	// (N7), and still exits 0.
 	must(t, "stop", "dev/engineer")
 	code, out, _ := call("up", "dev/engineer")
-	block := regexp.MustCompile("! Claude's safeguards stopped the engineer's last reply, so it won't answer. Open its window and pick the model again: cadrei attach dev" +
+	block := regexp.MustCompile("! Claude's safeguards stopped the engineer's last reply, so it won't answer. Start it again on another model: cadrei answer ([a-z2-9]{3}) 1 <model>" +
 		" Or start it fresh: cadrei answer ([a-z2-9]{3}) 2$")
 	if m := block.FindStringSubmatch(flat(out)); code != 0 || m == nil || startState(t, c, "work-dev-engineer").Current().Code != m[1] {
 		t.Errorf("up: %d %q", code, out)

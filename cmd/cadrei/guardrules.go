@@ -151,8 +151,13 @@ var promptModes = setOf("default", "acceptEdits", "auto")
 // with nothing after it.
 const picksRule = `[0-9]{1,2}(?:,[0-9]{1,2}){0,5}`
 
+// stopModelRule is 1 and a model, a safeguard stop's answer: a model name
+// as session.GoodModel takes it, but for [ and ], which the shell can
+// expand.
+const stopModelRule = `1[ \t]+[A-Za-z0-9._:/@][A-Za-z0-9._:/@-]{0,199}`
+
 var (
-	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|` + picksRule + `(?:[ \t]+` + picksRule + `){0,3})\s*$`)
+	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|` + stopModelRule + `|` + picksRule + `(?:[ \t]+` + picksRule + `){0,3})\s*$`)
 	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer\s*$`)
 )
 

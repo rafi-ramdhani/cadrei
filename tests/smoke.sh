@@ -481,7 +481,12 @@ mkdir -p "$transcripts" && cp "$ROOT/cmd/cadrei/testdata/transcripts/safeguard-s
 echo '{"hook_event_name":"Stop"}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
 (cd "$C" && cadrei ls >/dev/null)
 code=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r["kind"] == "safeguard"][0]["code"])' "$st/demo-dev-app-engineer.json")
-check "a safeguard stop gets a code" bash -c "cd '$C' && cadrei ls | flat | grep -q 'stopped by safeguards Pick the model again in its window, or start it fresh: cadrei answer $code 2.'"
+check "a safeguard stop gets a code" bash -c "cd '$C' && cadrei ls | flat | grep -q 'stopped by safeguards Start it on another model (cadrei answer $code 1 <model>) or fresh (cadrei answer $code 2).'"
+own model answer "$code" 1 sonnet
+check "its code starts the member again on its chat with another model" bash -c "flat < '$T/own-model' | grep -q 'picks up its chat where the safeguards stopped it' && grep -q '\"id\":\"$(sed -n 1p <<<"$eng")\".*\"model\":\"sonnet\",.*\"model_from\":\"start\"' '$C/.claude/build/sessions/demo-dev-app-engineer.json' && ! (cd '$C' && cadrei ls | grep -q 'stopped by safeguards')"
+sed 's/10:00:05.100Z/10:30:00.000Z/' "$ROOT/cmd/cadrei/testdata/transcripts/safeguard-stuck.jsonl" > "$transcripts/$(sed -n 1p <<<"$eng").jsonl"
+(cd "$C" && cadrei ls >/dev/null)
+code=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r["kind"] == "safeguard"][0]["code"])' "$st/demo-dev-app-engineer.json")
 own fresh answer "$code" 2
 check "its code starts the member fresh" bash -c "flat < '$T/own-fresh' | grep -q 'Started the engineer on app (fresh chat)' && ! grep -q '$(sed -n 1p <<<"$eng")' '$C/.claude/build/sessions/demo-dev-app-engineer.json'"
 rm -r "$transcripts"
