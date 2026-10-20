@@ -34,13 +34,20 @@ func startScreen(t *testing.T, name string) string {
 // for the engineer in dev, started in dir.
 func startOf(t *testing.T, name, dir string) *waitingOn {
 	t.Helper()
+	return startFrom(t, startScreen(t, name), dir)
+}
+
+// startFrom is the record cadrei makes of start-up screen screen, for the
+// engineer in dev, started in dir.
+func startFrom(t *testing.T, screen, dir string) *waitingOn {
+	t.Helper()
 	rt, err := runtime.Get(runtimeName())
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, ok := rt.Sessions().StartScreen(startScreen(t, name))
+	s, ok := rt.Sessions().StartScreen(screen)
 	if !ok {
-		t.Fatalf("%s isn't read as a start-up screen", name)
+		t.Fatalf("%q isn't read as a start-up screen", screen)
 	}
 	return &waitingOn{team: "dev", role: "engineer", dir: dir, req: &session.Request{Code: "s7k", Kind: session.ForStart, Tool: s.Kind,
 		Question: s.Title, Options: s.Options, Multi: s.Multi, Source: session.FromScreen}}
@@ -139,7 +146,11 @@ func TestTheAskForAStartUpScreen(t *testing.T) {
 			" That's saved: every session you run uses that text style from now on. It asks: Choose the text style that looks best with your terminal",
 		"login.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. Claude account with subscription · Pro, Max, Team, or Enterprise"?` +
 			" The login goes on in its window, and may open a browser on its machine. It asks: Select login method",
-		"imports.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. No, disable external imports"? It asks: Allow external CLAUDE.md file imports?`,
+		"imports.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. No, disable external imports"?` +
+			" It asks: Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md",
+		"other.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. Yes"?` +
+			" Cadrei doesn't know this screen, so it can't say what a pick does past what the screen says." +
+			" It asks: Welcome to Claude Code⏎Use the new terminal setup for this session? It changes how Option+Enter works.",
 	} {
 		file, choice, _ := strings.Cut(name, " ")
 		if got := askReason(startOf(t, file, ""), choice); got != want {
@@ -169,6 +180,47 @@ func TestAStartUpScreenMustStillShow(t *testing.T) {
 		if key, why := keyOn(s, w, "1", plain); key != "" || why != "I couldn't find that prompt on the engineer's screen, so I didn't press anything. Answer it in its window: cadrei attach dev" {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
+	}
+}
+
+// The imports screen's yes approves the files it lists, so the note and
+// the ask name them, and the screen must still list those files: a yes
+// for one list never goes to another.
+func TestAnImportsYesNamesItsFiles(t *testing.T) {
+	sandbox(t)
+	w := startOf(t, "imports-home.txt", "")
+	if got := askReason(w, "2"); got != `Cadrei: answer the start-up screen of the engineer in dev with "2. Yes, allow external imports"?`+
+		" That's saved: its instructions can import files from outside its folder from now on."+
+		" It asks: Allow external CLAUDE.md file imports?⏎External imports: /Users/me/.aws/credentials" {
+		t.Errorf("ask: %q", got)
+	}
+	if n := w.note(); !strings.Contains(n, "External imports: /Users/me/.aws/credentials Options: 1. No, disable external imports, 2. Yes, allow external imports.") {
+		t.Errorf("note: %q", n)
+	}
+	if key, why := keyOn(startScreen(t, "imports-home.txt"), w, "2", plain); key != "2" || why != "" {
+		t.Errorf("as recorded: %q %q", key, why)
+	}
+	if key, why := keyOn(startScreen(t, "imports.txt"), w, "2", plain); key != "" || why == "" {
+		t.Errorf("another file: %q %q", key, why)
+	}
+}
+
+// An unknown screen asks everything above its menu: the note, the ask and
+// the screen check take all of it, and say cadrei doesn't know it.
+func TestAnUnknownStartUpScreenIsAskedWhole(t *testing.T) {
+	sandbox(t)
+	screen := " Claude Code can change these settings for you:\n (shell profile, global settings)\n\n Continue?\n\n ❯ Yes\n   No\n"
+	w := startFrom(t, screen, "")
+	if n := w.note(); n != "The engineer in dev (s7k) waits on a start-up screen: Claude Code can change these settings for you: (shell profile, global settings)⏎Continue?"+
+		" Options: 1. Yes, 2. No. Cadrei doesn't know this screen, so it can't say what a pick does past what the screen says. The user picks one by typing ! cadrei answer s7k <n>." {
+		t.Errorf("note: %q", n)
+	}
+	if key, why := keyOn(screen, w, "1", plain); key != "1" || why != "" {
+		t.Errorf("as recorded: %q %q", key, why)
+	}
+	other := strings.Replace(screen, "(shell profile, global settings)", "(your shell profile)", 1)
+	if key, why := keyOn(other, w, "1", plain); key != "" || why == "" {
+		t.Errorf("another question, the same last line: %q %q", key, why)
 	}
 }
 
@@ -280,7 +332,7 @@ func TestAStartUpScreenGetsACode(t *testing.T) {
 	code := st.Current().Code
 	ownTerminal(t)
 	_, list, _ := call("answer")
-	for _, want := range []string{code + "  The engineer in dev waits on a start-up screen:", "1. No, exit",
+	for _, want := range []string{code + "  The engineer in dev waits on a start-up screen:\n         Is this a project you created or one you trust?\n", "1. No, exit",
 		"2. Yes, I trust this folder (only in its window: it's inside ~/.cadrei, where cadrei keeps its own files)", "Answer:         cadrei answer " + code + " 1"} {
 		if !strings.Contains(list, want) {
 			t.Errorf("listing has no %q:\n%s", want, list)
@@ -302,6 +354,28 @@ func TestAStartUpScreenGetsACode(t *testing.T) {
 	log := readFile(t, c+"/.claude/build/state/prompts.log")
 	if !strings.Contains(log, `"code":"`+code+`","kind":"start","tool":"trust","source":"screen","event":"ended","ended":"by_code"`) {
 		t.Errorf("log:\n%s", log)
+	}
+}
+
+// The listing shows what a start-up screen asks a line at a time: the
+// files the imports screen lists, and that cadrei doesn't know an
+// unknown screen.
+func TestAStartUpListingShowsAllItAsks(t *testing.T) {
+	for fixture, want := range map[string]string{
+		"imports-home.txt": "waits on a start-up screen:\n         Allow external CLAUDE.md file imports?\n         External imports: /Users/me/.aws/credentials\n",
+		"other.txt": "waits on a start-up screen:\n         Welcome to Claude Code\n         Use the new terminal setup for this session? It changes how Option+Enter works.\n" +
+			"         (cadrei doesn't know this screen, so it can't say what a pick does past what the screen says)\n",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			home := sandbox(t)
+			withTmux(t, home)
+			must(t, "init", "work")
+			startMember(t, home, fixture, 0, "")
+			ownTerminal(t)
+			if _, list, _ := call("answer"); !strings.Contains(list, want) {
+				t.Errorf("listing has no %q:\n%s", want, list)
+			}
+		})
 	}
 }
 

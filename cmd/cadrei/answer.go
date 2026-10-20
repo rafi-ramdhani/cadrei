@@ -419,11 +419,14 @@ func (w *waitingOn) note() string {
 		if !answerable(w.req) || len(ns) == 0 {
 			return who + " waits on a start-up screen: " + w.req.Question + window
 		}
-		trust := ""
-		if refused != "" {
-			trust = " Cadrei won't trust its folder from here (" + refused + "): only its window can."
+		more := ""
+		switch {
+		case refused != "":
+			more = " Cadrei won't trust its folder from here (" + refused + "): only its window can."
+		case w.req.Tool == runtime.StartOther:
+			more = " " + capital(unknownScreen) + "."
 		}
-		return who + " waits on a start-up screen: " + w.req.Question + " Options: " + numberedOf(w.req, ns) + "." + trust +
+		return who + " waits on a start-up screen: " + w.req.Question + " Options: " + numberedOf(w.req, ns) + "." + more +
 			" The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	case w.req.Kind == session.ForSafeguard && answerable(w.req):
 		return who + " was stopped by " + modelName() + "'s safeguards, so it won't answer on that model. To start it again on its chat with another model," +
@@ -887,7 +890,12 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ok[0])))
 		case w.req.Kind == session.ForStart:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" waits on a start-up screen:")
-			e.say("%s", "         "+w.req.Question)
+			for _, l := range strings.Split(w.req.Question, "⏎") {
+				e.say("%s", "         "+l)
+			}
+			if w.req.Tool == runtime.StartOther {
+				e.say("%s", "         ("+unknownScreen+")")
+			}
 			ns, refused := startOffered(&w)
 			if !answerable(w.req) || len(ns) == 0 {
 				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))

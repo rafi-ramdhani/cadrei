@@ -11,6 +11,7 @@ Claude Code's screens before its prompt that wait on the user to pick an option,
 - `apikey.txt`: an API key found in the environment. The key, which the screen shows cut short, is written as a placeholder.
 - `bypass.txt`: the warning before a session runs with no permission checks.
 - `imports.txt`: instruction files that import files from outside the folder.
+- `imports-home.txt`: the same screen, importing a file of the user's own outside any project (`~/.aws/credentials`), which a yes would load into the member at every start.
 - `other.txt`: a menu cadrei doesn't know, under a question of its own.
 
 Claude Code's own em dashes in these screens are written as hyphens.

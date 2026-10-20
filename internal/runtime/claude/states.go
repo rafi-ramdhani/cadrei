@@ -411,14 +411,16 @@ const (
 	menuReach    = 30
 	headingReach = 40
 	startOptions = 9
-	titleLimit   = 300
+	titleLimit   = 1000
 )
 
 // StartScreen: one of Claude Code's start-up screens (startScreens), or
 // another menu on a screen with no prompt footer under it (StartOther,
-// asked in the few lines right above it), read off the menu nearest the
-// bottom. The several-servers screen takes ticks, so only its window can
-// answer it, as can a menu cadrei can't read whole.
+// asked in everything above it), read off the menu nearest the bottom.
+// The imports screen's title names the files it would import. The
+// several-servers screen takes ticks, so only its window can answer it,
+// as can a menu cadrei can't read whole, and a screen whose question or
+// list of files it can't read whole.
 func (s sessions) StartScreen(screen string) (runtime.StartScreen, bool) {
 	if s.Ready(screen) {
 		return runtime.StartScreen{}, false
@@ -429,21 +431,31 @@ func (s sessions) StartScreen(screen string) (runtime.StartScreen, bool) {
 		return runtime.StartScreen{}, false
 	}
 	st := runtime.StartScreen{Kind: runtime.StartOther, At: at, Multi: !whole || len(opts) > startOptions}
-	known := false
+	known, cut := false, false
 	for i := top - 1; i >= 0 && i >= top-headingReach && !known; i-- {
 		line := strings.TrimRight(strings.TrimLeft(lines[i], " \t│┃|╭╰•·*0123456789.)"), " │┃|")
 		for _, m := range startScreens {
 			if strings.HasPrefix(line, m.mark) {
 				st.Kind, st.Title, known = m.kind, cmp.Or(m.title, strings.TrimSpace(lines[i])), true
 				st.Multi = st.Multi || m.mark == "new MCP servers found in this project"
+				if m.kind == runtime.StartImports {
+					// A yes approves these files: they're part of what it asks.
+					files, whole := importsOf(lines[i+1 : top])
+					st.Title += "\nExternal imports: " + strings.Join(files, ", ")
+					cut = !whole
+				}
 				break
 			}
 		}
 	}
 	if !known {
-		st.Title = heading(lines, top)
+		var whole bool
+		st.Title, whole = question(lines, top)
+		cut = !whole
 	}
-	if st.Title = runtime.RequestText(strings.Trim(st.Title, " │┃|"), titleLimit); st.Title == "" {
+	title := strings.Trim(st.Title, " │┃|")
+	st.Multi = st.Multi || cut || utf8.RuneCountInString(title) > titleLimit
+	if st.Title = runtime.RequestText(title, titleLimit); st.Title == "" {
 		return runtime.StartScreen{}, false
 	}
 	for _, o := range opts[:min(len(opts), startOptions)] {
@@ -539,23 +551,65 @@ func menuOf(lines []string) (top int, opts []string, at int, whole bool) {
 	return top, opts, p - top, whole
 }
 
-// heading is what a menu that isn't a known screen asks: the lines right
-// above it (after a blank line or two), up to a blank line or a rule, at
-// most three, as one line.
-func heading(lines []string, top int) string {
-	i := top - 1
-	for blanks := 0; i >= 0 && strings.TrimSpace(lines[i]) == "" && blanks < 2; i-- {
-		blanks++
+// framed is a screen line without its frame and the spaces around it.
+func framed(line string) string { return strings.TrimSpace(strings.Trim(line, " │┃|")) }
+
+// rule reports whether a line, without its frame, is a rule or a frame's
+// edge.
+func rule(t string) bool { return t != "" && strings.Trim(t, "─━╌╭╮╰╯") == "" }
+
+// question is what a menu that isn't a known screen asks: every line
+// above it, up to a rule or the screen's top, a paragraph a line. whole
+// is false when it runs on past headingReach lines.
+func question(lines []string, top int) (text string, whole bool) {
+	var paras []string
+	var para []string
+	end := func() {
+		if len(para) > 0 {
+			paras = append([]string{strings.Join(para, " ")}, paras...)
+			para = nil
+		}
 	}
-	var got []string
-	for ; i >= 0 && len(got) < 3; i-- {
-		t := strings.TrimSpace(strings.Trim(lines[i], " │┃|"))
-		if t == "" || strings.Trim(t, "─━╌╭╮╰╯") == "" {
+	whole = true
+	for i := top - 1; i >= 0; i-- {
+		t := framed(lines[i])
+		if rule(t) {
 			break
 		}
-		got = append([]string{t}, got...)
+		if t != "" && i < top-headingReach {
+			whole = false
+			break
+		}
+		if t == "" {
+			end()
+			continue
+		}
+		para = append([]string{t}, para...)
 	}
-	return strings.Join(got, " ")
+	end()
+	return strings.Join(paras, "\n"), whole
+}
+
+// importsOf are the files the imports screen lists, from the lines under
+// its heading: the ones under "External imports:", up to a blank line.
+// whole is false when there's no such list, or the screen leaves some of
+// it out (past 8 files, "… +3 imports not shown.", or a path cut short).
+func importsOf(lines []string) (files []string, whole bool) {
+	in := false
+	for _, l := range lines {
+		t := framed(l)
+		switch {
+		case !in:
+			in = t == "External imports:"
+		case t == "":
+			return files, len(files) > 0
+		case strings.HasPrefix(t, "…") || strings.HasSuffix(t, "…") || strings.HasSuffix(t, "not shown."):
+			return files, false
+		default:
+			files = append(files, t)
+		}
+	}
+	return files, in && len(files) > 0
 }
 
 // SafeguardStop looks at the end of a transcript for Claude's safeguards

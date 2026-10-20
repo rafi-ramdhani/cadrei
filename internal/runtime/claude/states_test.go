@@ -235,9 +235,9 @@ func TestStartScreensAreReadOffTheScreen(t *testing.T) {
 			Options: []string{"No (recommended)", "Yes"}},
 		"bypass.txt": {Kind: runtime.StartBypass, Title: "WARNING: Claude Code running in Bypass Permissions mode",
 			Options: []string{"No, exit", "Yes, I accept"}},
-		"imports.txt": {Kind: runtime.StartImports, Title: "Allow external CLAUDE.md file imports?",
+		"imports.txt": {Kind: runtime.StartImports, Title: "Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md",
 			Options: []string{"No, disable external imports", "Yes, allow external imports"}},
-		"other.txt": {Kind: runtime.StartOther, Title: "Use the new terminal setup for this session? It changes how Option+Enter works.",
+		"other.txt": {Kind: runtime.StartOther, Title: "Welcome to Claude Code⏎Use the new terminal setup for this session? It changes how Option+Enter works.",
 			Options: []string{"Yes", "No", "Not now, ask me later"}},
 	} {
 		raw, err := os.ReadFile(filepath.Join(starts, file))
@@ -268,6 +268,36 @@ func TestAStartScreenIsReadWholeOrNot(t *testing.T) {
 		"scrolled": strings.Replace(string(login), "   2. Anthropic", "   9. Anthropic", 1),
 		"arrow":    strings.Replace(string(login), "   3. 3rd-party", "   ↓  3rd-party", 1) + "\n",
 		"too many": strings.Repeat("x\n", 3) + " Select login method:\n\n ❯ 1. a\n   2. b\n   3. c\n   4. d\n   5. e\n   6. f\n   7. g\n   8. h\n   9. i\n   10. j\n",
+	} {
+		if got, ok := (sessions{}).StartScreen(screen); !ok || !got.Multi {
+			t.Errorf("%s: %v %+v", name, ok, got)
+		}
+	}
+}
+
+// What a start-up screen asks is read whole: the files the imports screen
+// would import, and everything above an unknown screen's menu, up to a
+// rule. A list the screen cuts short, no list, or a question past what
+// cadrei reads leaves it to the window.
+func TestAStartScreensQuestionIsReadWhole(t *testing.T) {
+	raw, _ := os.ReadFile(filepath.Join(starts, "imports.txt"))
+	imports := string(raw)
+	two := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   ~/.aws/credentials\n", 1)
+	if got, ok := (sessions{}).StartScreen(two); !ok || got.Multi ||
+		got.Title != "Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md, ~/.aws/credentials" {
+		t.Errorf("two files: %v %+v", ok, got)
+	}
+	settings := "────────\n Claude Code can change these settings for you:\n (shell profile, global settings)\n\n Continue?\n\n ❯ Yes\n   No\n"
+	if got, ok := (sessions{}).StartScreen(settings); !ok || got.Multi || got.Kind != runtime.StartOther ||
+		got.Title != "Claude Code can change these settings for you: (shell profile, global settings)⏎Continue?" {
+		t.Errorf("settings: %v %+v", ok, got)
+	}
+	for name, screen := range map[string]string{
+		"imports not shown": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   … +2 imports not shown.\n   Yes covers those too, plus any this project adds later.\n", 1),
+		"a path cut short":  strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/very/long/pa…\n", 1),
+		"no imports listed": strings.Replace(imports, " External imports:\n   /Users/me/shared/rules.md\n", "", 1),
+		"a long question":   strings.Repeat(" more text\n", headingReach+2) + "\n Continue?\n\n ❯ Yes\n   No\n",
+		"a long line":       " " + strings.Repeat("x", titleLimit+1) + "\n\n ❯ Yes\n   No\n",
 	} {
 		if got, ok := (sessions{}).StartScreen(screen); !ok || !got.Multi {
 			t.Errorf("%s: %v %+v", name, ok, got)

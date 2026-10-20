@@ -113,10 +113,16 @@ func startOffered(w *waitingOn) (ns []int, refused string) {
 	return ns, refused
 }
 
+// unknownScreen says cadrei can't tell what a pick on a start-up screen
+// it doesn't know does.
+const unknownScreen = "cadrei doesn't know this screen, so it can't say what a pick does past what the screen says"
+
 // startEffect says what picking label on w's start-up screen does past
 // the pick, for the guard's ask, or "".
 func startEffect(w *waitingOn, label string) string {
 	switch {
+	case w.req.Tool == runtime.StartOther:
+		return " " + capital(unknownScreen) + "."
 	case trustYes(w.req, label):
 		return " That's saved: " + display(w.dir) + " is trusted from now on, with its own settings and hooks."
 	case w.req.Tool == runtime.StartServer && strings.HasPrefix(label, "Use this and all future"):
