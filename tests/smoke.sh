@@ -53,6 +53,16 @@ if [ -n "\$CADREI_ORCHESTRATOR" ]; then
 fi
 printf '%s\\n' "\$@" > "$T/args-\$CADREI_MEMBER"
 printf '%s\\n' "\$CADREI_HOME" > "$T/home-\$CADREI_MEMBER"
+# A start-up screen, when a check gives the member one: it shows until a
+# key, which it notes (Enter as "enter").
+if [ -e "$T/start-\$CADREI_MEMBER" ]; then
+  cat "$T/start-\$CADREI_MEMBER"
+  stty -icanon -echo min 1
+  k=\$(dd bs=1 count=1 2>/dev/null)
+  printf '%s\\n' "\${k:-enter}" > "$T/startkey-\$CADREI_MEMBER"
+  stty sane
+  printf '\\033[H\\033[2J'
+fi
 # Claude Code's footer when its prompt is ready, so up's check ends early.
 echo '? for shortcuts'
 exec sleep 300
@@ -441,6 +451,40 @@ prb_hook ended
 check "the file goes with its prompt" bash -c "! ls '$st'/demo-dev-app-engineer.req-*.txt"
 prb_hook multi
 check "a question with several picks keeps each question" bash -c "grep -qF '\"parts\":[{\"question\":\"Which smoke files?\",\"options\":[\"a\",\"b\"],\"multi\":true}]' '$st/demo-dev-app-engineer.json' && ! grep -qF '\"options\":[\"a\",\"b\"],\"multi\":true,' '$st/demo-dev-app-engineer.json'"
+# 0.2.3 (PR C): a start-up screen gets a code at up, and an answer by code
+# picks the option the pointer is at with Enter; a safeguard stop gets a
+# code that starts the member fresh.
+# own <name> <args>: cadrei <args> in $C as from the user's own terminal
+# (orphaned, under no agent session, as when this test itself runs in
+# one), its output in $T/own-<name>, its exit status in $T/own-<name>.code.
+own() {
+  local name=$1; shift
+  ( (sleep 0.3; cd "$C" && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID cadrei "$@" > "$T/own-$name" 2>&1; echo $? > "$T/own-$name.code") & )
+  for _ in $(seq 100); do [ -e "$T/own-$name.code" ] && return 0; sleep 0.1; done
+  return 1
+}
+printf '# Member: starter\n' > "$C/members/dev/starter.md"
+printf '%s\n' ' Do you trust the files in this folder?' '' ' ❯ No, exit' '   Yes, I trust this folder' '' ' Enter to confirm · Esc to cancel' > "$T/start-demo-dev-app-starter"
+(cd "$C" && cadrei up dev/starter app) > "$T/prc-up"
+check "a start-up screen gets a code at up" bash -c "flat < '$T/prc-up' | grep -q 'waiting on a start-up screen and won.t get going until you answer it: Do you trust the files in this folder?'"
+code=$(py 'import json,sys; print(json.load(open(sys.argv[1]))["requests"][0]["code"])' "$st/demo-dev-app-starter.json")
+own list answer
+check "cadrei answer lists its choices" bash -c "grep -q '$code  The starter on app waits on a start-up screen:' '$T/own-list' && grep -q '1. No, exit' '$T/own-list'"
+own start answer "$code" 1
+check "its code picks the option the pointer is at, with Enter" bash -c "grep -q 'Answered the start-up screen of the starter on app: 1. No, exit' '$T/own-start' && grep -qx enter '$T/startkey-demo-dev-app-starter'"
+check "the prompt log notes it answered by code" grep -q "\"code\":\"$code\",\"kind\":\"start\",\"tool\":\"trust\",\"source\":\"screen\",\"event\":\"ended\",\"ended\":\"by_code\"" "$st/prompts.log"
+(cd "$C" && cadrei stop dev/starter app >/dev/null)
+rm "$C/members/dev/starter.md"
+eng=$(py 'import json,sys; r=json.load(open(sys.argv[1])); print(r["id"]); print(r["dir"])' "$C/.claude/build/sessions/demo-dev-app-engineer.json")
+transcripts="$HOME/.claude/projects/$(sed -n 2p <<<"$eng" | tr -d '\n' | tr -c 'A-Za-z0-9' '-')"
+mkdir -p "$transcripts" && cp "$ROOT/cmd/cadrei/testdata/transcripts/safeguard-stuck.jsonl" "$transcripts/$(sed -n 1p <<<"$eng").jsonl"
+echo '{"hook_event_name":"Stop"}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
+(cd "$C" && cadrei ls >/dev/null)
+code=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r["kind"] == "safeguard"][0]["code"])' "$st/demo-dev-app-engineer.json")
+check "a safeguard stop gets a code" bash -c "cd '$C' && cadrei ls | flat | grep -q 'stopped by safeguards Pick the model again in its window, or start it fresh: cadrei answer $code 2.'"
+own fresh answer "$code" 2
+check "its code starts the member fresh" bash -c "flat < '$T/own-fresh' | grep -q 'Started the engineer on app (fresh chat)' && ! grep -q '$(sed -n 1p <<<"$eng")' '$C/.claude/build/sessions/demo-dev-app-engineer.json'"
+rm -r "$transcripts"
 cd "$HOME/.cadrei/life"
 cadrei up dev/engineer >/dev/null
 check "another cadrei's team runs apart" running cadrei-life-dev
