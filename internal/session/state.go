@@ -35,6 +35,10 @@ const (
 	// ForPrompt: a prompt cadrei read off the member's screen, when no
 	// hook said what it asks (the catch-all).
 	ForPrompt = "prompt"
+	// ForStart: a screen the runtime shows before its prompt (a folder's
+	// trust, a login), read off the member's screen while it starts: no
+	// hook runs until those screens are behind it.
+	ForStart = "start"
 )
 
 // Where a request's record came from.
@@ -83,8 +87,10 @@ type Call struct {
 // it, with the code cadrei gave it: an answer names the code, so it never
 // lands on a request that changed.
 type Request struct {
-	Code     string   `json:"code"`
-	Kind     string   `json:"kind"` // ForApproval, ForQuestion or ForPrompt
+	Code string `json:"code"`
+	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt or ForStart
+	// Tool is the tool it's for; for a start-up screen, what the screen
+	// asks (one of the runtime's Start kinds).
 	Tool     string   `json:"tool,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
 	Question string   `json:"question,omitempty"` // a question's text, or a screen prompt's box
@@ -217,7 +223,9 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 	next := State{}
 	if prev != nil {
 		next = *prev
-		next.Open = slices.Clone(prev.Open)
+		// A hook runs only once the start-up screens are behind it: one
+		// still open was answered in its window, unseen.
+		next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForStart })
 		next.Calls = slices.Clone(prev.Calls)
 	}
 	if ev.Session != "" {
@@ -477,6 +485,44 @@ func (s *State) end(id, tool string, gone bool) {
 			return
 		}
 	}
+}
+
+// Starts reports whether s is the state of a member no hook has written
+// for yet: starting, or waiting on a start-up screen.
+func Starts(s *State) bool {
+	return s != nil && (s.State == Starting || s.State == Waiting && len(s.Open) == 1 && s.Open[0].Kind == ForStart)
+}
+
+// SeeStart gives the state after a look at a starting member's screen,
+// from prev: s is the start-up screen it shows, or nil for none. A screen
+// that waits on the user gets a request, and the member waits on it; the
+// one already open stays, with its code, while the screen asks the same.
+// Once none shows (it was answered, in its window or by its code), the
+// member is starting again. Only a member no hook has written for is
+// looked at (Starts). It returns prev itself when nothing changes.
+func SeeStart(prev *State, s *runtime.StartScreen, now time.Time) *State {
+	if !Starts(prev) {
+		return prev
+	}
+	var open *Request
+	if prev.State == Waiting {
+		open = prev.Open[0]
+	}
+	switch {
+	case s == nil && open == nil:
+		return prev
+	case s != nil && open != nil && open.Tool == s.Kind && open.Question == s.Title && slices.Equal(open.Options, s.Options) && open.Multi == s.Multi:
+		return prev
+	}
+	next := *prev
+	next.Open, next.Calls, next.Since = nil, nil, now
+	if s == nil {
+		next.State, next.WaitingFor = Starting, ""
+		return &next
+	}
+	next.Open = []*Request{{Kind: ForStart, Tool: s.Kind, Question: s.Title, Options: slices.Clone(s.Options), Multi: s.Multi, Source: FromScreen}}
+	next.State, next.WaitingFor = Waiting, ForStart
+	return &next
 }
 
 // Drop ends the open request under code: the user answered it. It reports

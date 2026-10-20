@@ -227,6 +227,8 @@ func (sessions) Ready(string) bool { return true }
 
 func (sessions) Waiting(string) bool { return false }
 
+func (sessions) StartScreen(string) (runtime.StartScreen, bool) { return runtime.StartScreen{}, false }
+
 func (sessions) Sent(input io.Reader) (runtime.Sent, bool) {
 	var in struct {
 		To       *string

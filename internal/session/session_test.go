@@ -542,6 +542,9 @@ func (o resumableOps) Context(string, string) (runtime.ContextUse, bool) {
 func (o resumableOps) UnansweredPrompt(string, string) bool { return false }
 func (o resumableOps) Ready(string) bool                    { return true }
 func (o resumableOps) Waiting(string) bool                  { return false }
+func (o resumableOps) StartScreen(string) (runtime.StartScreen, bool) {
+	return runtime.StartScreen{}, false
+}
 func (o resumableOps) ShellCall(io.Reader) (runtime.ShellCall, error) {
 	return runtime.ShellCall{}, nil
 }

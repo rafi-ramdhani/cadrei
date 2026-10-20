@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -381,6 +384,178 @@ func (sessions) Waiting(screen string) bool {
 		}
 	}
 	return false
+}
+
+// startScreens are Claude Code's start-up screens that wait on the user to
+// pick an option, by the line each starts with (after the frame) and what
+// each asks, from 2.1.304's own text (not seen live yet), and the trust
+// screen's older heading. The servers screen's line names the server, so
+// it's kept as the screen shows it (title ""); the API key screen shows
+// part of the key, so only its fixed words are.
+var startScreens = []struct{ kind, mark, title string }{
+	{runtime.StartTrust, "Quick safety check: Is this a project you created or one you trust?", "Is this a project you created or one you trust?"},
+	{runtime.StartTrust, "Do you trust the files in this folder?", "Do you trust the files in this folder?"},
+	{runtime.StartLogin, "Select login method:", "Select login method"},
+	{runtime.StartStyle, "Choose the text style that looks best with your terminal", "Choose the text style that looks best with your terminal"},
+	{runtime.StartServer, "New MCP server found in this project:", ""},
+	{runtime.StartServer, "new MCP servers found in this project", ""},
+	{runtime.StartAPIKey, "Detected a custom API key in your environment", "Detected a custom API key in your environment. Do you want to use this API key?"},
+	{runtime.StartBypass, "WARNING: Claude Code running in Bypass Permissions mode", "WARNING: Claude Code running in Bypass Permissions mode"},
+	{runtime.StartImports, "Allow external CLAUDE.md file imports?", "Allow external CLAUDE.md file imports?"},
+}
+
+// Bounds on a start-up screen: how far up from the bottom its menu's
+// pointer may be, how far above the menu its heading, how many options
+// cadrei keeps, and how much of its heading.
+const (
+	menuReach    = 30
+	headingReach = 40
+	startOptions = 9
+	titleLimit   = 300
+)
+
+// StartScreen: one of Claude Code's start-up screens (startScreens), or
+// another menu on a screen with no prompt footer under it (StartOther,
+// asked in the few lines right above it), read off the menu nearest the
+// bottom. The several-servers screen takes ticks, so only its window can
+// answer it, as can a menu cadrei can't read whole.
+func (s sessions) StartScreen(screen string) (runtime.StartScreen, bool) {
+	if s.Ready(screen) {
+		return runtime.StartScreen{}, false
+	}
+	lines := strings.Split(strings.TrimRight(screen, " \n"), "\n")
+	top, opts, at, whole := menuOf(lines)
+	if len(opts) == 0 {
+		return runtime.StartScreen{}, false
+	}
+	st := runtime.StartScreen{Kind: runtime.StartOther, At: at, Multi: !whole || len(opts) > startOptions}
+	known := false
+	for i := top - 1; i >= 0 && i >= top-headingReach && !known; i-- {
+		line := strings.TrimRight(strings.TrimLeft(lines[i], " \t│┃|╭╰•·*0123456789.)"), " │┃|")
+		for _, m := range startScreens {
+			if strings.HasPrefix(line, m.mark) {
+				st.Kind, st.Title, known = m.kind, cmp.Or(m.title, strings.TrimSpace(lines[i])), true
+				st.Multi = st.Multi || m.mark == "new MCP servers found in this project"
+				break
+			}
+		}
+	}
+	if !known {
+		st.Title = heading(lines, top)
+	}
+	if st.Title = runtime.RequestText(strings.Trim(st.Title, " │┃|"), titleLimit); st.Title == "" {
+		return runtime.StartScreen{}, false
+	}
+	for _, o := range opts[:min(len(opts), startOptions)] {
+		st.Options = append(st.Options, runtime.RequestText(o, runtime.OptionLimit))
+	}
+	return st, true
+}
+
+// menuPointer is the line of a menu its pointer is at.
+var menuPointer = regexp.MustCompile(`^[ │┃]*❯ +\S`)
+
+// menuNumber and menuTick are what may come before a menu option's label:
+// its number, and a ✔ that marks the current choice.
+var (
+	menuNumber = regexp.MustCompile(`^([1-9][0-9]?)\. +`)
+	menuTick   = regexp.MustCompile(`^[✔✓] +`)
+)
+
+// menuOf reads the menu nearest a screen's bottom: the line its pointer
+// (❯) is at, and the lines next to it, up to a blank line or one that
+// isn't an option at the same place, each option's label without its
+// number and its ✔. It gives the menu's first line, the labels top down
+// and the one the pointer is at. whole is false when a scroll arrow is
+// on one of its lines or right next to it, or their numbers don't run
+// from 1.
+func menuOf(lines []string) (top int, opts []string, at int, whole bool) {
+	p := -1
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-menuReach; i-- {
+		if menuPointer.MatchString(lines[i]) {
+			p = i
+			break
+		}
+	}
+	if p < 0 {
+		return 0, nil, 0, false
+	}
+	col := strings.Index(lines[p], "❯")
+	prefix := lines[p][:col]
+	// label is the option a line holds, or ok false for none: after the
+	// same frame as the pointer's line, the pointer or a blank in its
+	// place, then a few spaces, its number and its ✔.
+	numbered := menuNumber.MatchString(strings.TrimLeft(lines[p][col+len("❯"):], " "))
+	label := func(line string) (n int, text string, ok bool) {
+		if !strings.HasPrefix(line, prefix) {
+			return 0, "", false
+		}
+		rest, pointer := strings.CutPrefix(line[col:], "❯")
+		if !pointer {
+			if rest, ok = strings.CutPrefix(line[col:], " "); !ok {
+				return 0, "", false
+			}
+		}
+		text = strings.TrimLeft(rest, " ")
+		if indent := len(rest) - len(text); indent < 1 || indent > 4 || text == "" {
+			return 0, "", false
+		}
+		if m := menuNumber.FindStringSubmatch(text); m != nil {
+			n, _ = strconv.Atoi(m[1])
+			text = text[len(m[0]):]
+		} else if numbered {
+			return 0, "", false
+		}
+		text = menuTick.ReplaceAllString(text, "")
+		text = strings.TrimSpace(strings.TrimSuffix(strings.TrimRight(text, " │┃"), " ✔"))
+		return n, text, text != ""
+	}
+	top, end := p, p
+	for top > 0 {
+		if _, _, ok := label(lines[top-1]); !ok {
+			break
+		}
+		top--
+	}
+	for end+1 < len(lines) {
+		if _, _, ok := label(lines[end+1]); !ok {
+			break
+		}
+		end++
+	}
+	whole = true
+	for i := max(0, top-1); i <= min(len(lines)-1, end+1); i++ {
+		if strings.ContainsAny(lines[i], "↑↓") {
+			whole = false
+		}
+	}
+	for i := top; i <= end; i++ {
+		n, text, _ := label(lines[i])
+		if numbered && n != i-top+1 {
+			whole = false
+		}
+		opts = append(opts, text)
+	}
+	return top, opts, p - top, whole
+}
+
+// heading is what a menu that isn't a known screen asks: the lines right
+// above it (after a blank line or two), up to a blank line or a rule, at
+// most three, as one line.
+func heading(lines []string, top int) string {
+	i := top - 1
+	for blanks := 0; i >= 0 && strings.TrimSpace(lines[i]) == "" && blanks < 2; i-- {
+		blanks++
+	}
+	var got []string
+	for ; i >= 0 && len(got) < 3; i-- {
+		t := strings.TrimSpace(strings.Trim(lines[i], " │┃|"))
+		if t == "" || strings.Trim(t, "─━╌╭╮╰╯") == "" {
+			break
+		}
+		got = append([]string{t}, got...)
+	}
+	return strings.Join(got, " ")
 }
 
 // SafeguardStop looks at the end of a transcript for Claude's safeguards

@@ -247,24 +247,30 @@ func skippedEntries(c cadreis.Cadrei) []string {
 	return out
 }
 
-func viewOf(t session.Tmux, i session.Info) sessionView {
+func viewOf(t session.Tmux, i session.Info, look bool) sessionView {
 	recorded := t.WindowMembers(i.Name)
 	var windows []session.Window
 	for _, w := range t.Windows(i.Name) {
 		windows = append(windows, session.Window{Session: i, Name: w, Member: recorded[w]})
 	}
-	return viewFrom(i, windows, time.Now())
+	return viewFrom(t, look, i, windows, time.Now())
 }
 
-// viewFrom is a running team's view from its windows.
-func viewFrom(i session.Info, windows []session.Window, now time.Time) sessionView {
+// viewFrom is a running team's view from its windows, in tmux t. With
+// look, a member still starting has its screen looked at first
+// (lookAtStart).
+func viewFrom(t session.Tmux, look bool, i session.Info, windows []session.Window, now time.Time) sessionView {
 	v := sessionView{Session: printable(i.Name), Team: printable(i.Team), Project: printable(i.Project), Legacy: i.Legacy(), Members: []memberView{}, info: i}
 	if v.Team == "" {
 		// A 0.1.x session recorded no team: show its key.
 		v.Team = printable(session.Bare(i.Name))
 	}
+	rt, _ := runtime.Get(runtimeName())
 	for _, w := range windows {
 		m := memberView{Name: memberName(i, w), Role: w.Name, name: memberName(i, w), window: w.Name}
+		if look && rt != nil && i.Home != "" {
+			lookAtStart(rt, t, rt.BuildDir(i.Home), m.name, i.Name, w.Name)
+		}
 		m.read(i.Home, now)
 		m.Name, m.Role = printable(m.Name), printable(m.Role)
 		v.Members = append(v.Members, m)
@@ -338,7 +344,8 @@ func statusOf(c cadreis.Cadrei, def string, t session.Tmux, context bool) cadrei
 	teamDefault := crewChoice(c.Path, false)
 	s.Cadrei.Model, s.Cadrei.Effort = teamDefault.Model.Value, teamDefault.Effort.Value
 	for _, i := range scope.Running() {
-		s.Running = append(s.Running, viewOf(t, i))
+		// The stream (no context) never reads a member's screen.
+		s.Running = append(s.Running, viewOf(t, i, context))
 	}
 	if context {
 		addContext(s.Running)
@@ -406,7 +413,7 @@ func runningOf(c cadreis.Cadrei, def string, t session.Tmux) []sessionView {
 	now := time.Now()
 	var out []sessionView
 	for _, i := range teams {
-		out = append(out, viewFrom(i, byTeam[i.Name], now))
+		out = append(out, viewFrom(t, true, i, byTeam[i.Name], now))
 	}
 	return out
 }
@@ -574,12 +581,12 @@ func allJSON(t session.Tmux, context bool) (allStatus, map[string]bool) {
 	for _, i := range session.All(t, nil) {
 		switch {
 		case i.Legacy():
-			st.Legacy = append(st.Legacy, viewOf(t, i))
+			st.Legacy = append(st.Legacy, viewOf(t, i, false))
 		case i.Home == "":
 			unmarked[i.Name] = true
-			st.Unknown = append(st.Unknown, viewOf(t, i))
+			st.Unknown = append(st.Unknown, viewOf(t, i, false))
 		case !known[i.Home]:
-			st.Unknown = append(st.Unknown, viewOf(t, i))
+			st.Unknown = append(st.Unknown, viewOf(t, i, false))
 		}
 	}
 	return st, unmarked

@@ -178,9 +178,9 @@ func planText(summary string) string {
 
 // answerable reports whether cadrei can answer req from here: a question
 // with one pick, a prompt for a tool cadrei can check with what it would
-// run or touch recorded in full, or a prompt read off the screen whole,
-// with an option cadrei may press. Any other is answered in the member's
-// window.
+// run or touch recorded in full, or a prompt or start-up screen read off
+// the screen whole, with an option cadrei may pick. Any other is answered
+// in the member's window.
 func answerable(req *session.Request) bool {
 	switch req.Kind {
 	case session.ForQuestion:
@@ -192,6 +192,8 @@ func answerable(req *session.Request) bool {
 		return !req.Multi && req.Question != "" && len(req.Options) > 0
 	case session.ForPrompt:
 		return !req.Multi && req.Question != "" && len(picks(req.Options)) > 0
+	case session.ForStart:
+		return !req.Multi && req.Question != "" && len(startChoices(req)) > 0
 	case session.ForApproval:
 		return checkable(req.Tool) && req.Summary != "" && !cutShort(req) && (req.Tool != "ExitPlanMode" || planText(req.Summary) != "")
 	}
@@ -334,6 +336,8 @@ func offered(req *session.Request) []int {
 	switch req.Kind {
 	case session.ForPrompt:
 		return picks(req.Options)
+	case session.ForStart:
+		return startChoices(req)
 	case session.ForApproval:
 		return choices(req)
 	}
@@ -407,6 +411,17 @@ func (w *waitingOn) note() string {
 		return who + " asks: " + w.req.Question + window
 	case w.req.Kind == session.ForPrompt && answerable(w.req):
 		return who + " shows a prompt: " + w.req.Question + " Options: " + numbered(w.req) + ". The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
+	case w.req.Kind == session.ForStart:
+		ns, refused := startOffered(w)
+		if !answerable(w.req) || len(ns) == 0 {
+			return who + " waits on a start-up screen: " + w.req.Question + window
+		}
+		trust := ""
+		if refused != "" {
+			trust = " Cadrei won't trust its folder from here (" + refused + "): only its window can."
+		}
+		return who + " waits on a start-up screen: " + w.req.Question + " Options: " + numberedOf(w.req, ns) + "." + trust +
+			" The user picks one by typing ! cadrei answer " + w.req.Code + " <n>."
 	}
 	return who + " waits on something only its window can answer: " + w.attach() + "."
 }
@@ -447,6 +462,10 @@ func checkChoice(w *waitingOn, code, choice string, c func(string) string) strin
 		return "That question has more options or questions than cadrei keeps, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForPrompt && !answerable(w.req):
 		return "Cadrei couldn't read that prompt whole off the screen, so answer it in its window: " + c(w.attach())
+	case w.req.Kind == session.ForStart && !answerable(w.req):
+		return "Cadrei can't answer that start-up screen from here, so answer it in its window: " + c(w.attach())
+	case w.req.Kind == session.ForStart:
+		return checkStart(w, code, choice, c)
 	case cutShort(w.req) && checkable(w.req.Tool):
 		return "That's too long for cadrei to check whole, so answer it in its window: " + c(w.attach())
 	case !answerable(w.req):
@@ -500,6 +519,9 @@ func askReason(w *waitingOn, choice string) string {
 	case session.ForPrompt:
 		n, _ := strconv.Atoi(choice)
 		return "Cadrei: answer " + w.place() + " with \"" + choice + ". " + w.req.Options[n-1] + "\"? Its screen shows: " + w.req.Question
+	case session.ForStart:
+		label := w.req.Options[startPick(choice)-1]
+		return "Cadrei: answer the start-up screen of " + w.place() + " with \"" + choice + ". " + label + "\"?" + startEffect(w, label) + " It asks: " + w.req.Question
 	}
 	verb, object, _ := act(w.req)
 	label, picked := approvalPick(w.req, choice)
@@ -589,6 +611,12 @@ func runAnswer(e *env) int {
 			e.warn("", why)
 			return 1
 		}
+	} else if w.req.Kind == session.ForStart {
+		if why := startSteps(t, w, startPick(choice)); why != "" {
+			answering(build, w, false)
+			e.warn("", why)
+			return 1
+		}
 	} else if err := t.SendKeys(w.session, w.window, false, key); err != nil {
 		answering(build, w, false)
 		return e.fail("%s", err)
@@ -622,6 +650,12 @@ func runAnswer(e *env) int {
 	case many(w.req):
 		picks, _ := partPicks(w.req, choice)
 		e.note("", markDone, "Answered "+w.place()+": "+picked(w.req, picks))
+	case w.req.Kind == session.ForStart:
+		label := w.req.Options[startPick(choice)-1]
+		e.note("", markDone, "Answered the start-up screen of "+w.place()+": "+choice+". "+label)
+		if w.req.Tool == runtime.StartLogin {
+			e.show("  ", "The login goes on in its window, and may open a browser on its machine. Finish it there: "+cmd(w.attach()))
+		}
 	case w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt:
 		n, _ := strconv.Atoi(choice)
 		e.note("", markDone, "Answered "+w.place()+": "+choice+". "+w.req.Options[n-1])
@@ -647,7 +681,9 @@ var growWait = 1500 * time.Millisecond
 // check left grown (it was killed first) is put back too.
 func promptScreen(t session.Tmux, w *waitingOn) (screen string, restore func()) {
 	screen = t.Screen(w.session, w.window)
-	if !answerable(w.req) || promptShows(screen, w) && !t.Grown(w.session, w.window) {
+	// A start-up screen is read as it is: one cadrei can't read whole is
+	// answered in its window.
+	if !answerable(w.req) || w.req.Kind == session.ForStart || promptShows(screen, w) && !t.Grown(w.session, w.window) {
 		return screen, func() {}
 	}
 	width, height := fitSize(w)
@@ -734,6 +770,10 @@ func answered(build string, w *waitingOn, choice string, pressed time.Time) {
 			next.Open, next.Calls, state = nil, nil, session.Idle
 		case len(next.Open) > 0:
 			state = session.Waiting
+		case w.req.Kind == session.ForStart:
+			// Still before its first hook: the next look reads what it
+			// shows now.
+			state = session.Starting
 		}
 		if next.State != state {
 			next.Since = time.Now()
@@ -827,6 +867,25 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 				e.say("%s", fmt.Sprintf("         %d. %s", n, w.req.Options[n-1]))
 			}
 			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ok[0])))
+		case w.req.Kind == session.ForStart:
+			e.say("%s", "  "+code+"  "+capital(w.place())+" waits on a start-up screen:")
+			e.say("%s", "         "+w.req.Question)
+			ns, refused := startOffered(&w)
+			if !answerable(w.req) || len(ns) == 0 {
+				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
+				continue
+			}
+			for i, o := range w.req.Options {
+				switch n := i + 1; {
+				case slices.Contains(ns, n):
+					e.say("%s", fmt.Sprintf("         %d. %s", n, o))
+				case refused != "" && trustYes(w.req, o):
+					e.say("%s", fmt.Sprintf("         %d. %s (only in its window: %s)", n, o, refused))
+				default:
+					e.say("%s", fmt.Sprintf("         %d. %s (only in its window)", n, o))
+				}
+			}
+			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ns[0])))
 		default:
 			e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
 			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
@@ -1096,6 +1155,10 @@ func squeeze(text string) string {
 // else, between the dashed rules; a file by its path from the member's
 // folder (or in full), on the line under the box's title.
 func promptShows(screen string, w *waitingOn) bool {
+	if w.req.Kind == session.ForStart {
+		_, ok := startShows(screen, w.req)
+		return ok && answerable(w.req)
+	}
 	if many(w.req) {
 		// Before its first key, its first question.
 		return answerable(w.req) && partShows(screen, w.req.Parts[0])
@@ -1427,7 +1490,7 @@ func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (k
 		return "", "I couldn't find that prompt on the " + w.role + "'s screen, so I didn't press anything." + window
 	}
 	opts, _, _ := promptOf(screen, w)
-	if w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt {
+	if w.req.Kind == session.ForQuestion || w.req.Kind == session.ForPrompt || w.req.Kind == session.ForStart {
 		return choice, ""
 	}
 	if _, ok := approvalPick(w.req, choice); ok {

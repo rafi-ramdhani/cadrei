@@ -1,0 +1,8 @@
+ Detected a custom API key in your environment
+
+ ANTHROPIC_API_KEY: KEY_CUT_SHORT_PLACEHOLDER
+
+ Do you want to use this API key?
+
+ ❯ No (recommended)
+   Yes

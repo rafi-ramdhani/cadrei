@@ -167,6 +167,8 @@ func (m memberStatus) text(now time.Time) string {
 			s = "waiting on you · it shows a prompt: cadrei answer"
 		case r != nil && r.Kind == session.ForPrompt:
 			s = "waiting on you · it shows a prompt in its window"
+		case r != nil && r.Kind == session.ForStart:
+			s = "waiting on you · a start-up screen: cadrei answer"
 		case m.WaitingFor == session.ForQuestion:
 			s = "waiting on you · it asked you something in its window"
 		default:
@@ -255,8 +257,11 @@ func (m memberStatus) briefState(now time.Time) string {
 	case session.Working:
 		return "working " + forTime(now.Sub(m.Since))
 	case session.Waiting:
-		if m.WaitingFor == session.ForQuestion {
+		switch m.WaitingFor {
+		case session.ForQuestion:
 			return "waiting on you (a question) " + forTime(now.Sub(m.Since))
+		case session.ForStart:
+			return "waiting on you (a start-up screen) " + forTime(now.Sub(m.Since))
 		}
 		return "waiting on you " + forTime(now.Sub(m.Since))
 	case session.Idle:

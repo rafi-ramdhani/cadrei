@@ -334,6 +334,31 @@ type Part struct {
 	Multi    bool     // it takes one or more picks
 }
 
+// StartScreen is a screen a runtime shows before its prompt that waits on
+// the user to pick one of its options: a folder's trust, a login method.
+// Every text is one printable line (RequestText).
+type StartScreen struct {
+	Kind    string   // what it asks: one of the Start kinds
+	Title   string   // what it asks, in the runtime's words
+	Options []string // its options' labels, top down
+	At      int      // the option its pointer is at, from 0
+	// Multi: only its window can answer it (it takes several picks, or not
+	// all its options show).
+	Multi bool
+}
+
+// Start screen kinds.
+const (
+	StartTrust   = "trust"      // trust the folder it runs in
+	StartLogin   = "login"      // pick how to log in
+	StartStyle   = "text-style" // pick a text style
+	StartServer  = "mcp-server" // use an MCP server a project file names
+	StartAPIKey  = "api-key"    // use an API key found in the environment
+	StartBypass  = "bypass"     // accept running with no permission checks
+	StartImports = "imports"    // allow instruction files from outside the folder
+	StartOther   = "other"      // one the runtime doesn't know
+)
+
 // Limits on a request's text.
 const (
 	SummaryLimit = 300
@@ -433,6 +458,10 @@ type SessionOps interface {
 	// screen): it got going. Only screens it knows count, so a command that
 	// printed a line and is about to end isn't taken for one.
 	Waiting(screen string) bool
+	// StartScreen reads a screen the runtime shows before its prompt that
+	// waits on the user to pick an option: what it asks, its options and
+	// where its pointer is. ok is false when the screen shows none.
+	StartScreen(screen string) (s StartScreen, ok bool)
 	// ShellCall reads what the guard hook receives before a tool runs:
 	// the command line when the tool runs one in a shell, and the
 	// session's permission mode. An error says the input couldn't be read,

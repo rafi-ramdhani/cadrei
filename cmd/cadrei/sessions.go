@@ -248,9 +248,14 @@ func (e *env) reportUp(u session.Up) func(session.Result) {
 				e.show("  ", why)
 			}
 		}
-		if res.Waiting {
+		where := strings.TrimSpace(u.Team + " " + u.Project)
+		switch {
+		case res.Start != nil:
+			// A start-up screen cadrei read: it has a code.
+			e.show("  ", "It's waiting on a start-up screen and won't get going until you answer it: "+printable(res.Start.Question))
+			e.show("  ", "See its choices with "+cmd("cadrei answer")+", or answer it in its window: "+cmd("cadrei attach "+where))
+		case res.Waiting:
 			// Logged out, say: up started it, but it sits there.
-			where := strings.TrimSpace(u.Team + " " + u.Project)
 			e.show("  ", "It's waiting on a login or setup screen and won't get going until you answer it: "+cmd("cadrei attach "+where))
 		}
 	}
