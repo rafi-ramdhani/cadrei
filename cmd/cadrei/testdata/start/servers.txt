@@ -1,0 +1,9 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ 2 new MCP servers found in this project                                                                      │
+│                                                                                                              │
+│ Select any you wish to enable.                                                                               │
+│                                                                                                              │
+│ ❯ ◻ docs-search                                                                                              │
+│   ◻ issue-tracker                                                                                            │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+   Space to select · Enter to confirm · Esc to reject all

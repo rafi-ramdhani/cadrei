@@ -144,6 +144,14 @@
               "role": "stopped",
               "state": "stopped_by_safeguards",
               "since": "<time>",
+              "request": {
+                "code": "<code>",
+                "kind": "safeguard",
+                "options": [
+                  "Start it again on another model",
+                  "Start it fresh"
+                ]
+              },
               "model": "sonnet",
               "effort": "medium",
               "model_from": "crew",

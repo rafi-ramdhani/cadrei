@@ -67,8 +67,13 @@ func LogPrompts(build, member string, prev, next *State, how func(code string) s
 	for _, r := range prev.Requests() {
 		if r.Code != "" && !is[r.Code] {
 			ended := how(r.Code)
-			if r.ByCode(now) {
+			switch {
+			case r.ByCode(now):
 				ended = EndedByCode
+			case r.Kind == ForStart:
+				// A start-up screen isn't cancelled: only an answer ends it,
+				// and one not by its code was in its window.
+				ended = EndedInWindow
 			}
 			lines = append(lines, PromptEntry{T: now, Member: member, Code: r.Code, Kind: r.Kind, Tool: r.Tool, Source: r.Source, Event: PromptEnded, Ended: ended})
 		}

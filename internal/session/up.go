@@ -57,6 +57,9 @@ type Result struct {
 	Note    string // the conversation note, when it started fresh
 	Dir     string // the folder it runs in, when it started
 	Waiting bool   // it started on a screen that waits on the user, as a login does
+	// Start is the request cadrei recorded for that screen, with its code,
+	// when it could read it.
+	Start   *Request
 	Running bool   // it was running already
 	Legacy  string // the 0.1.x session it runs in, when it does
 	Err     error  // why it didn't start
@@ -154,7 +157,10 @@ func (u Up) print(out io.Writer, res Result) {
 	default:
 		fmt.Fprintf(out, "  %s started in %s\n", name, res.Dir)
 	}
-	if res.Waiting {
+	switch {
+	case res.Start != nil:
+		fmt.Fprintf(out, "  %s waits on a start-up screen (%s): %s\n", name, res.Start.Code, res.Start.Question)
+	case res.Waiting:
 		fmt.Fprintf(out, "  %s waits on a login or setup screen; answer it in its window\n", name)
 	}
 }
@@ -259,10 +265,36 @@ func (u Up) starting(role string) (Result, error) {
 	}
 	// A window only fails to start when it ends. One on a login or setup
 	// screen (a runtime that isn't logged in, say) started, but won't get
-	// going until the user answers it.
-	ops := rt.Sessions()
-	waiting := ops != nil && ops.Waiting(u.T.Screen(session, role))
-	return Result{Started: true, Resumed: conv.Resume != "", Note: conv.Note, Dir: started, Waiting: waiting, Choice: choice, Was: was}, nil
+	// going until the user answers it. One cadrei can read gets a code.
+	res := Result{Started: true, Resumed: conv.Resume != "", Note: conv.Note, Dir: started, Choice: choice, Was: was}
+	if ops := rt.Sessions(); ops != nil {
+		screen := u.T.Screen(session, role)
+		res.Waiting = ops.Waiting(screen)
+		if s, ok := ops.StartScreen(screen); ok && u.StateHooks && state != "" {
+			res.Waiting = true
+			res.Start = SeeStartOf(rt.BuildDir(u.Path), name, &s)
+		}
+	}
+	return res, nil
+}
+
+// SeeStartOf records start-up screen s (nil for none) in member name's
+// state in build, under its lock, as SeeStart says, and notes in the
+// prompt log what changed. It returns the start-up screen's request,
+// when one is open.
+func SeeStartOf(build, name string, s *runtime.StartScreen) *Request {
+	prev, next, err := ChangeState(build, name, time.Second, func(prev *State) *State { return SeeStart(prev, s, time.Now()) })
+	if err != nil {
+		return nil
+	}
+	LogPrompts(build, name, prev, next, func(string) string { return EndedInWindow }, time.Now())
+	if next == nil {
+		return nil
+	}
+	if i := next.ofKind(ForStart); i >= 0 {
+		return next.Open[i]
+	}
+	return nil
 }
 
 // ChoiceOf is the model and effort role starts with: this start's, over

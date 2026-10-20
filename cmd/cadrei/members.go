@@ -60,11 +60,18 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 		transcript = rt.Sessions().TranscriptFile(rec.ID, rec.Dir)
 	}
 	// A safeguard stop wins over every other state. The wait for the
-	// runtime's own retry is over once a turn ended after the stop.
+	// runtime's own retry is over once a turn ended after the stop. Its
+	// request, when cadrei recorded it, says what can be done.
 	if at, stopped := session.Safeguard(rt.Sessions(), build, name, transcript); stopped {
 		retried := st != nil && st.State == session.Idle && st.EndedAt.After(at)
 		if !wait || retried || now.Sub(at) >= safeguardWait {
-			return memberStatus{State: session.SafeguardStopped, Since: at}
+			m := memberStatus{State: session.SafeguardStopped, Since: at}
+			for _, r := range st.Requests() {
+				if r.Kind == session.ForSafeguard && r.At.Equal(at) {
+					m.Request, m.Requests = r, []*session.Request{r}
+				}
+			}
+			return m
 		}
 	}
 	if st == nil || (rec != nil && st.Session != "" && st.Session != rec.ID) {
@@ -167,6 +174,8 @@ func (m memberStatus) text(now time.Time) string {
 			s = "waiting on you · it shows a prompt: cadrei answer"
 		case r != nil && r.Kind == session.ForPrompt:
 			s = "waiting on you · it shows a prompt in its window"
+		case r != nil && r.Kind == session.ForStart:
+			s = "waiting on you · a start-up screen: cadrei answer"
 		case m.WaitingFor == session.ForQuestion:
 			s = "waiting on you · it asked you something in its window"
 		default:
@@ -255,8 +264,11 @@ func (m memberStatus) briefState(now time.Time) string {
 	case session.Working:
 		return "working " + forTime(now.Sub(m.Since))
 	case session.Waiting:
-		if m.WaitingFor == session.ForQuestion {
+		switch m.WaitingFor {
+		case session.ForQuestion:
 			return "waiting on you (a question) " + forTime(now.Sub(m.Since))
+		case session.ForStart:
+			return "waiting on you (a start-up screen) " + forTime(now.Sub(m.Since))
 		}
 		return "waiting on you " + forTime(now.Sub(m.Since))
 	case session.Idle:
