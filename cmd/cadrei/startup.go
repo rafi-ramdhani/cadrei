@@ -123,10 +123,16 @@ func startEffect(w *waitingOn, label string) string {
 		return " That's saved: it won't ask about this project's MCP servers again."
 	case w.req.Tool == runtime.StartServer && strings.HasPrefix(label, "Use "):
 		return " That's saved: the project uses that server from now on."
+	case w.req.Tool == runtime.StartServer && strings.HasPrefix(label, "Continue without"):
+		return " That's saved: the project leaves that server off from now on."
 	case w.req.Tool == runtime.StartImports && strings.HasPrefix(label, "Yes"):
 		return " That's saved: its instructions can import files from outside its folder from now on."
 	case w.req.Tool == runtime.StartAPIKey && label == "Yes":
-		return " It then runs on that API key, and its use is billed to the key."
+		return " It then runs on that API key, and its use is billed to the key. That's saved: your own sessions with that key use it from now on too, without asking."
+	case w.req.Tool == runtime.StartAPIKey && strings.HasPrefix(label, "No"):
+		return " That's saved: it won't use that key from now on, nor will your own sessions, and they won't ask about it again."
+	case w.req.Tool == runtime.StartStyle:
+		return " That's saved: every session you run uses that text style from now on."
 	case w.req.Tool == runtime.StartLogin:
 		return " The login goes on in its window, and may open a browser on its machine."
 	}

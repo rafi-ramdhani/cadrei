@@ -127,8 +127,16 @@ func TestTheAskForAStartUpScreen(t *testing.T) {
 	for name, want := range map[string]string{
 		"server.txt 2": `Cadrei: answer the start-up screen of the engineer in dev with "2. Use this and all future MCP servers in this project"?` +
 			" That's saved: it won't ask about this project's MCP servers again. It asks: New MCP server found in this project: docs-search",
+		"server.txt 3": `Cadrei: answer the start-up screen of the engineer in dev with "3. Continue without using this MCP server"?` +
+			" That's saved: the project leaves that server off from now on. It asks: New MCP server found in this project: docs-search",
 		"apikey.txt 2": `Cadrei: answer the start-up screen of the engineer in dev with "2. Yes"? It then runs on that API key, and its use is billed to the key.` +
+			" That's saved: your own sessions with that key use it from now on too, without asking." +
 			" It asks: Detected a custom API key in your environment. Do you want to use this API key?",
+		"apikey.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. No (recommended)"?` +
+			" That's saved: it won't use that key from now on, nor will your own sessions, and they won't ask about it again." +
+			" It asks: Detected a custom API key in your environment. Do you want to use this API key?",
+		"style.txt 3": `Cadrei: answer the start-up screen of the engineer in dev with "3. Light mode"?` +
+			" That's saved: every session you run uses that text style from now on. It asks: Choose the text style that looks best with your terminal",
 		"login.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. Claude account with subscription · Pro, Max, Team, or Enterprise"?` +
 			" The login goes on in its window, and may open a browser on its machine. It asks: Select login method",
 		"imports.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. No, disable external imports"? It asks: Allow external CLAUDE.md file imports?`,
