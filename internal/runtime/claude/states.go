@@ -441,7 +441,7 @@ func (s sessions) StartScreen(screen string) (runtime.StartScreen, bool) {
 				if m.kind == runtime.StartImports {
 					// A yes approves these files: they're part of what it asks.
 					files, whole := importsOf(lines[i+1 : top])
-					st.Title += "\nExternal imports: " + strings.Join(files, ", ")
+					st.Title += "\nExternal imports:\n" + strings.Join(files, "\n")
 					cut = !whole
 				}
 				break

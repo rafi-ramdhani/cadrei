@@ -235,7 +235,7 @@ func TestStartScreensAreReadOffTheScreen(t *testing.T) {
 			Options: []string{"No (recommended)", "Yes"}},
 		"bypass.txt": {Kind: runtime.StartBypass, Title: "WARNING: Claude Code running in Bypass Permissions mode",
 			Options: []string{"No, exit", "Yes, I accept"}},
-		"imports.txt": {Kind: runtime.StartImports, Title: "Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md",
+		"imports.txt": {Kind: runtime.StartImports, Title: "Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/shared/rules.md",
 			Options: []string{"No, disable external imports", "Yes, allow external imports"}},
 		"other.txt": {Kind: runtime.StartOther, Title: "Welcome to Claude Code⏎Use the new terminal setup for this session? It changes how Option+Enter works.",
 			Options: []string{"Yes", "No", "Not now, ask me later"}},
@@ -284,11 +284,11 @@ func TestAStartScreensQuestionIsReadWhole(t *testing.T) {
 	imports := string(raw)
 	two := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   ~/.aws/credentials\n", 1)
 	if got, ok := (sessions{}).StartScreen(two); !ok || got.Multi ||
-		got.Title != "Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md, ~/.aws/credentials" {
+		got.Title != "Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/shared/rules.md⏎~/.aws/credentials" {
 		t.Errorf("two files: %v %+v", ok, got)
 	}
 	relative := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   ../shared/rules.md\n   ./docs/more.md\n", 1)
-	if got, ok := (sessions{}).StartScreen(relative); !ok || got.Multi || !strings.HasSuffix(got.Title, "External imports: ../shared/rules.md, ./docs/more.md") {
+	if got, ok := (sessions{}).StartScreen(relative); !ok || got.Multi || !strings.HasSuffix(got.Title, "External imports:⏎../shared/rules.md⏎./docs/more.md") {
 		t.Errorf("relative paths: %v %+v", ok, got)
 	}
 	settings := "────────\n Claude Code can change these settings for you:\n (shell profile, global settings)\n\n Continue?\n\n ❯ Yes\n   No\n"

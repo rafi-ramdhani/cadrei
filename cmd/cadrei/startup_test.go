@@ -147,7 +147,7 @@ func TestTheAskForAStartUpScreen(t *testing.T) {
 		"login.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. Claude account with subscription · Pro, Max, Team, or Enterprise"?` +
 			" The login goes on in its window, and may open a browser on its machine. It asks: Select login method",
 		"imports.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. No, disable external imports"?` +
-			" It asks: Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md",
+			" It asks: Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/shared/rules.md",
 		"other.txt 1": `Cadrei: answer the start-up screen of the engineer in dev with "1. Yes"?` +
 			" Cadrei doesn't know this screen, so it can't say what a pick does past what the screen says." +
 			" It asks: Welcome to Claude Code⏎Use the new terminal setup for this session? It changes how Option+Enter works.",
@@ -191,11 +191,17 @@ func TestAnImportsYesNamesItsFiles(t *testing.T) {
 	w := startOf(t, "imports-home.txt", "")
 	if got := askReason(w, "2"); got != `Cadrei: answer the start-up screen of the engineer in dev with "2. Yes, allow external imports"?`+
 		" That's saved: its instructions can import files from outside its folder from now on."+
-		" It asks: Allow external CLAUDE.md file imports?⏎External imports: /Users/me/.aws/credentials" {
+		" It asks: Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/.aws/credentials" {
 		t.Errorf("ask: %q", got)
 	}
-	if n := w.note(); !strings.Contains(n, "External imports: /Users/me/.aws/credentials Options: 1. No, disable external imports, 2. Yes, allow external imports.") {
+	if n := w.note(); !strings.Contains(n, "External imports:⏎/Users/me/.aws/credentials Options: 1. No, disable external imports, 2. Yes, allow external imports.") {
 		t.Errorf("note: %q", n)
+	}
+	// Two files recorded never match one file named after both.
+	two := strings.Replace(startScreen(t, "imports.txt"), "   /Users/me/shared/rules.md\n", "   /Users/me/a\n   /Users/me/b\n", 1)
+	one := strings.Replace(startScreen(t, "imports.txt"), "   /Users/me/shared/rules.md\n", "   /Users/me/a, /Users/me/b\n", 1)
+	if key, why := keyOn(one, startFrom(t, two, ""), "2", plain); key != "" || why == "" {
+		t.Errorf("one file named after two: %q %q", key, why)
 	}
 	if key, why := keyOn(startScreen(t, "imports-home.txt"), w, "2", plain); key != "2" || why != "" {
 		t.Errorf("as recorded: %q %q", key, why)
@@ -362,7 +368,7 @@ func TestAStartUpScreenGetsACode(t *testing.T) {
 // unknown screen.
 func TestAStartUpListingShowsAllItAsks(t *testing.T) {
 	for fixture, want := range map[string]string{
-		"imports-home.txt": "waits on a start-up screen:\n         Allow external CLAUDE.md file imports?\n         External imports: /Users/me/.aws/credentials\n",
+		"imports-home.txt": "waits on a start-up screen:\n         Allow external CLAUDE.md file imports?\n         External imports:\n         /Users/me/.aws/credentials\n",
 		"other.txt": "waits on a start-up screen:\n         Welcome to Claude Code\n         Use the new terminal setup for this session? It changes how Option+Enter works.\n" +
 			"         (cadrei doesn't know this screen, so it can't say what a pick does past what the screen says)\n",
 	} {
