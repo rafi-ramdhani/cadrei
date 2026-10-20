@@ -287,6 +287,10 @@ func TestAStartScreensQuestionIsReadWhole(t *testing.T) {
 		got.Title != "Allow external CLAUDE.md file imports?⏎External imports: /Users/me/shared/rules.md, ~/.aws/credentials" {
 		t.Errorf("two files: %v %+v", ok, got)
 	}
+	relative := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   ../shared/rules.md\n   ./docs/more.md\n", 1)
+	if got, ok := (sessions{}).StartScreen(relative); !ok || got.Multi || !strings.HasSuffix(got.Title, "External imports: ../shared/rules.md, ./docs/more.md") {
+		t.Errorf("relative paths: %v %+v", ok, got)
+	}
 	settings := "────────\n Claude Code can change these settings for you:\n (shell profile, global settings)\n\n Continue?\n\n ❯ Yes\n   No\n"
 	if got, ok := (sessions{}).StartScreen(settings); !ok || got.Multi || got.Kind != runtime.StartOther ||
 		got.Title != "Claude Code can change these settings for you: (shell profile, global settings)⏎Continue?" {
@@ -295,6 +299,10 @@ func TestAStartScreensQuestionIsReadWhole(t *testing.T) {
 	for name, screen := range map[string]string{
 		"imports not shown": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   … +2 imports not shown.\n   Yes covers those too, plus any this project adds later.\n", 1),
 		"a path cut short":  strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/very/long/pa…\n", 1),
+		"a path cut inside": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/sh…/rules.md\n", 1),
+		"a line not a path": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   ...and 3 more\n", 1),
+		"a path wrapped": strings.Replace(imports, "   /Users/me/shared/rules.md\n",
+			"   /Users/me/"+strings.Repeat("deep/", 43)+"\n   rules.md\n", 1),
 		"no imports listed": strings.Replace(imports, " External imports:\n   /Users/me/shared/rules.md\n", "", 1),
 		"a long question":   strings.Repeat(" more text\n", headingReach+2) + "\n Continue?\n\n ❯ Yes\n   No\n",
 		"a long line":       " " + strings.Repeat("x", titleLimit+1) + "\n\n ❯ Yes\n   No\n",

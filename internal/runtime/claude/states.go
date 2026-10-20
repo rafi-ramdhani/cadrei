@@ -592,8 +592,9 @@ func question(lines []string, top int) (text string, whole bool) {
 
 // importsOf are the files the imports screen lists, from the lines under
 // its heading: the ones under "External imports:", up to a blank line.
-// whole is false when there's no such list, or the screen leaves some of
-// it out (past 8 files, "… +3 imports not shown.", or a path cut short).
+// whole is false when there's no such list, the screen leaves some of it
+// out (past 8 files, "… +3 imports not shown.", or a path cut short), or
+// a line of it isn't a path (a note, or a long path wrapped).
 func importsOf(lines []string) (files []string, whole bool) {
 	in := false
 	for _, l := range lines {
@@ -603,13 +604,23 @@ func importsOf(lines []string) (files []string, whole bool) {
 			in = t == "External imports:"
 		case t == "":
 			return files, len(files) > 0
-		case strings.HasPrefix(t, "…") || strings.HasSuffix(t, "…") || strings.HasSuffix(t, "not shown."):
+		case strings.Contains(t, "…") || !isPath(t):
 			return files, false
 		default:
 			files = append(files, t)
 		}
 	}
 	return files, in && len(files) > 0
+}
+
+// isPath reports whether a line starts the way a file's path does.
+func isPath(t string) bool {
+	for _, p := range []string{"/", "~", "./", "../"} {
+		if strings.HasPrefix(t, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // SafeguardStop looks at the end of a transcript for Claude's safeguards
