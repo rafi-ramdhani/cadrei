@@ -87,8 +87,8 @@ func (m *memberView) fill() {
 	m.Request = nil
 	if r := m.status.Request; r != nil {
 		m.Request = &requestView{Code: r.Code, Kind: r.Kind, Tool: r.Tool, Summary: r.Summary, Options: r.Options, Multi: r.Multi}
-		if r.Kind == session.ForQuestion {
-			m.Request.Summary = r.Question
+		if r.Kind == session.ForQuestion || r.Kind == session.ForPrompt {
+			m.Request.Summary = runtime.RequestText(r.Question, runtime.SummaryLimit)
 		}
 	}
 	m.Context = nil

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -303,6 +304,25 @@ func (t Tmux) PaneDead(session, window string) bool {
 // Screen is what a window's pane shows now.
 func (t Tmux) Screen(session, window string) string {
 	out, _ := t.run("capture-pane", "-p", "-t", target(session)+"="+window)
+	return out
+}
+
+// paneRule is a tmux pane id, as $TMUX_PANE gives it.
+var paneRule = regexp.MustCompile(`^%[0-9]{1,9}$`)
+
+// OwnScreen is what this process's own tmux pane shows now, from $TMUX
+// (its server's socket) and $TMUX_PANE, or "" outside tmux. A member's
+// hooks run in its pane's process tree, so this is the member's screen.
+func OwnScreen() string {
+	socket, _, _ := strings.Cut(os.Getenv("TMUX"), ",")
+	pane := os.Getenv("TMUX_PANE")
+	if socket == "" || !filepath.IsAbs(socket) || !paneRule.MatchString(pane) {
+		return ""
+	}
+	out, err := At(socket).run("capture-pane", "-p", "-t", pane)
+	if err != nil {
+		return ""
+	}
 	return out
 }
 

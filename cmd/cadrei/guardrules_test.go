@@ -34,10 +34,10 @@ func answerCrew(t *testing.T) (c, eng, writer string) {
 	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Upload resume.pdf to the signing site?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`)
 	code := func(name string) string {
 		st := session.ReadState(c + "/.claude/build/state/" + name + ".json")
-		if st == nil || st.Request == nil {
+		if st == nil || st.Current() == nil {
 			t.Fatalf("no request for %s", name)
 		}
-		return st.Request.Code
+		return st.Current().Code
 	}
 	// Each member's window shows what it waits on, as Claude Code draws
 	// it. TestTheGuardLooksAtTheScreenFirst reads real windows.
@@ -344,7 +344,7 @@ func TestTheGuardDeniesWhatItCantAnswer(t *testing.T) {
 	feed(t, c, "work-docs-writer", `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which?","options":[{"label":"a"},{"label":"b"}],"multiSelect":true}]}}`)
 	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"mcp__files__upload","tool_input":{"path":"/w/a.pdf"}}`)
 	code := func(name string) string {
-		return session.ReadState(c + "/.claude/build/state/" + name + ".json").Request.Code
+		return session.ReadState(c + "/.claude/build/state/" + name + ".json").Current().Code
 	}
 	for command, why := range map[string]string{
 		"cadrei answer " + code("work-docs-writer") + " 1":           "This question needs more than one pick, so answer it in its window: cadrei attach docs",
@@ -368,7 +368,7 @@ func TestTheGuardDeniesWhatItCantAnswer(t *testing.T) {
 func TestTheAskShowsOnlyTheRecord(t *testing.T) {
 	c, eng, _ := answerCrew(t)
 	feed(t, c, "work-dev-my-app-engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf x\u001b[2J\u200b\nok"}}`)
-	code := session.ReadState(c + "/.claude/build/state/work-dev-my-app-engineer.json").Request.Code
+	code := session.ReadState(c + "/.claude/build/state/work-dev-my-app-engineer.json").Current().Code
 	if code == eng {
 		t.Fatal("a new request kept its code")
 	}

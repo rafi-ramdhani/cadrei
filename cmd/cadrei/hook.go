@@ -4,6 +4,9 @@ package main
 
 import (
 	"bytes"
+	"cmp"
+	"crypto/rand"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
@@ -114,7 +117,7 @@ func runHookSession(e *env) int {
 	}
 	input, _ := io.ReadAll(io.LimitReader(e.stdin, 1<<20))
 	// A start is a state too: idle, in its new conversation.
-	writeState(rt, home, name, input)
+	writeState(rt, home, name, input, time.Now())
 	record := session.RecordPath(rt.BuildDir(paths.Real(home)), name)
 	id := rt.Sessions().FromHook(bytes.NewReader(input))
 	if record == "" || id == "" {
@@ -226,12 +229,14 @@ func runHook(e *env) int {
 // runHookState is the hidden cadrei hook state, the hook a member's
 // settings copy runs on each event that changes what it is doing: it
 // writes the member's state file for cadrei ls. It runs on every tool
-// call, so it reads one small file, takes no locks and uses no network.
-// It prints nothing (the output of some hooks goes into the member's
-// context) and always exits 0 (exit 1 shows a hook error in the member's
-// window, and exit 2 would block the tool).
+// call, so it reads one small file, holds the member's lock only around
+// that read and write, notes two lines in the member's trace, and uses no
+// network. It prints nothing (the output of some hooks goes into the
+// member's context) and always exits 0 (exit 1 shows a hook error in the
+// member's window, and exit 2 would block the tool).
 func runHookState(e *env) int {
 	defer func() { recover() }()
+	start := time.Now()
 	name, home := os.Getenv("CADREI_MEMBER"), os.Getenv("CADREI_HOME")
 	if name == "" || home == "" {
 		return 0
@@ -245,26 +250,108 @@ func runHookState(e *env) int {
 		return 0
 	}
 	input, _ := io.ReadAll(io.LimitReader(e.stdin, 1<<20))
-	writeState(rt, home, name, input)
+	writeState(rt, home, name, input, start)
 	return 0
 }
 
+// stateLockWait is how long a state hook waits for the member's lock: well
+// under the runtime's hook timeout, so a run that can't get it still ends
+// and says so in the trace.
+var stateLockWait = 2 * time.Second
+
 // writeState applies a hook's event to a member's state file, in the
-// cadrei's build folder when cadrei made it.
-func writeState(rt runtime.Runtime, home, name string, input []byte) {
+// cadrei's build folder when cadrei made it, under the member's lock: hooks
+// of tool calls that run at once fire at once, and an unlocked read and
+// write of one would undo another's. start is when the hook began, for the
+// trace.
+func writeState(rt runtime.Runtime, home, name string, input []byte, start time.Time) {
 	ev := rt.Sessions().StateEvent(bytes.NewReader(input))
 	build := rt.BuildDir(paths.Real(home))
 	path := session.StatePath(build, name)
-	if ev.Name == "" || path == "" {
+	if (ev.Name == "" && ev.Hook == "") || path == "" {
 		return
 	}
 	if st, err := os.Stat(build); err != nil || !st.IsDir() {
 		return
 	}
-	// Most tool events change nothing (working stays working): no write.
-	prev := session.ReadState(path)
-	if next := session.Apply(prev, ev, time.Now()); prev == nil || next == nil || !session.Same(next, prev) {
-		session.GiveCode(path, next)
-		session.WriteState(path, next)
+	trace := session.TracePath(build, name)
+	line := session.TraceLine{Run: traceRun(), Hook: cmp.Or(ev.Hook, ev.Name), Tool: runtime.TraceWord(ev.Tool), ID: runtime.TraceWord(ev.ToolID), Notice: ev.Notice}
+	note := func(phase string, prev, next *session.State, err error) {
+		line.T, line.Phase = time.Now(), phase
+		if phase == session.TraceEnd {
+			line.MS = time.Since(start).Milliseconds()
+			line.Before, line.After = session.TraceState(prev), session.TraceState(next)
+			for _, r := range next.Requests() {
+				line.Codes = append(line.Codes, r.Code)
+			}
+			if err != nil {
+				line.Err = err.Error()
+			}
+		}
+		session.AppendTrace(trace, line)
 	}
+	note(session.TraceStart, nil, nil, nil)
+	prev, next, err := session.ChangeState(build, name, stateLockWait, func(prev *session.State) *session.State {
+		session.RotateTrace(trace)
+		if ev.Name == "" {
+			return prev
+		}
+		// The catch-all: the runtime says a prompt is up, and no hook
+		// recorded one, so cadrei reads it off the member's own screen.
+		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) == 0 {
+			ev.Request = screenRequest(session.OwnScreen())
+		}
+		// An idle reminder over an open request: a no or Esc in the
+		// member's window ends a prompt with no hook to say so, and the
+		// screen tells whether one still shows.
+		if ev.Name == runtime.EvIdleReminder && len(prev.Requests()) > 0 {
+			ev.NoPrompt = noPrompt(session.OwnScreen())
+		}
+		return session.Apply(prev, ev, time.Now())
+	})
+	if err == nil {
+		session.LogPrompts(build, name, prev, next, session.Ending(ev.Name), time.Now())
+	}
+	note(session.TraceEnd, prev, next, err)
+}
+
+// screenLimit is how much of a screen prompt's box a request keeps: more
+// than a hook's summary, since an answer checks the box whole.
+const screenLimit = 2000
+
+// screenRequest is the prompt at the bottom of a member's screen as a
+// request: its box's text and its options' labels, or nil when no prompt
+// shows. One cadrei can't read whole (its top off the screen, its box
+// past screenLimit, or more options than it keeps), one that takes more
+// than one key, or one with no option cadrei may press (picks) is
+// recorded for the member's window to answer.
+func screenRequest(screen string) *runtime.Request {
+	opts, box, whole := screenPrompt(screen)
+	if len(opts) == 0 {
+		return nil
+	}
+	var lines []string
+	for _, l := range box {
+		lines = append(lines, strings.TrimRight(l, " "))
+	}
+	text := strings.Trim(strings.Join(lines, "\n"), "\n ")
+	r := &runtime.Request{Question: runtime.RequestText(text, screenLimit)}
+	for i, o := range opts {
+		if i == runtime.MaxOptions {
+			r.Multi = true
+			break
+		}
+		r.Options = append(r.Options, runtime.RequestText(o.label, runtime.OptionLimit))
+	}
+	if !whole || text == "" || strings.HasSuffix(r.Question, "…") || takesMore(box, opts) || len(picks(r.Options)) == 0 {
+		r.Multi = true
+	}
+	return r
+}
+
+// traceRun is a new id for one hook run in a member's trace.
+func traceRun() string {
+	var b [6]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }

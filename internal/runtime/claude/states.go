@@ -2,6 +2,8 @@ package claude
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
@@ -16,27 +20,45 @@ import (
 
 // stateEvents are the hook events a member's settings copy runs
 // cadrei hook state for, and what each means for its state.
-var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "StopFailure", "Notification", "SessionEnd"}
+var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop", "StopFailure", "Notification", "SessionEnd"}
+
+// callWord is a tool's name or a call's id as the hook got it, for
+// matching one call's hooks to each other: any printable text up to
+// callWordLimit bytes, or "". The trace keeps only what's one plain word
+// of it (runtime.TraceWord).
+func callWord(s string) string {
+	if len(s) > callWordLimit || !utf8.ValidString(s) || strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return ""
+	}
+	return s
+}
+
+const callWordLimit = 256
 
 // StateHook is the command those hooks run.
 func StateHook(binary string) string { return hookCommand(binary, "state") }
 
-// StateEvent reads a hook's JSON input. Waiting comes from
-// PermissionRequest, not Notification: a question and an approval give the
-// same notification, 6 seconds later, and only the request names the tool.
+// StateEvent reads a hook's JSON input. Waiting comes from the hooks that
+// say what is asked: a question's PreToolUse, which comes before its
+// dialog, and PermissionRequest, which names no tool call (2.1.301), so it
+// carries a digest of the tool's input to be matched to its call's start.
+// Notification's permission_prompt comes 6 seconds after any prompt, and
+// names nothing, so it only says to look at the screen (the catch-all).
 func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	var in struct {
 		Event      string          `json:"hook_event_name"`
 		Session    string          `json:"session_id"`
 		Transcript string          `json:"transcript_path"`
 		Tool       string          `json:"tool_name"`
+		ToolID     string          `json:"tool_use_id"`
 		Input      json.RawMessage `json:"tool_input"`
 		Type       string          `json:"notification_type"`
 	}
 	if json.NewDecoder(io.LimitReader(input, 1<<20)).Decode(&in) != nil {
 		return runtime.StateEvent{}
 	}
-	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript}
+	ev := runtime.StateEvent{Session: in.Session, Transcript: in.Transcript, Hook: runtime.TraceWord(in.Event),
+		Tool: callWord(in.Tool), ToolID: callWord(in.ToolID), Notice: runtime.TraceWord(in.Type)}
 	if !uuidRule.MatchString(ev.Session) {
 		ev.Session = ""
 	}
@@ -46,10 +68,15 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	switch in.Event {
 	case "UserPromptSubmit":
 		ev.Name = runtime.EvPrompt
-	case "PreToolUse", "PostToolUse":
-		ev.Name = runtime.EvToolUse
+	case "PreToolUse":
+		ev.Name, ev.InputKey = runtime.EvToolUse, inputKey(in.Input)
+		if in.Tool == "AskUserQuestion" {
+			ev.Question, ev.Request = true, request(in.Tool, in.Input)
+		}
+	case "PostToolUse", "PostToolUseFailure":
+		ev.Name = runtime.EvToolDone
 	case "PermissionRequest":
-		ev.Name = runtime.EvPermission
+		ev.Name, ev.InputKey = runtime.EvPermission, inputKey(in.Input)
 		ev.Question = in.Tool == "AskUserQuestion"
 		ev.Request = request(in.Tool, in.Input)
 	case "Stop":
@@ -59,13 +86,31 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	case "SessionStart":
 		ev.Name = runtime.EvStart
 	case "Notification":
-		if in.Type == "idle_prompt" {
+		switch in.Type {
+		case "idle_prompt":
 			ev.Name = runtime.EvIdleReminder
+		case "permission_prompt":
+			ev.Name = runtime.EvPromptShown
 		}
 	case "SessionEnd":
 		ev.Name = runtime.EvEnd
 	}
 	return ev
+}
+
+// inputKey is a digest of a tool's input, the same for the same input
+// however its JSON is spaced or ordered, or "" for none.
+func inputKey(input json.RawMessage) string {
+	var v any
+	if len(input) == 0 || json.Unmarshal(input, &v) != nil || v == nil {
+		return ""
+	}
+	canon, err := json.Marshal(v)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(canon)
+	return hex.EncodeToString(sum[:16])
 }
 
 // request reads what a permission request asks, from Claude Code's own
