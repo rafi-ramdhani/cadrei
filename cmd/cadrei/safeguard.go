@@ -119,13 +119,21 @@ func (e *env) answerStop(w *waitingOn, build, choice string) int {
 	}
 	// Its chat still ends in the stop until its next reply: marked past
 	// first, so up's own check doesn't show it again.
+	record := session.RecordPath(build, w.name)
+	was := session.ReadRecord(record)
 	session.PassStop(build, w.name, w.req.At)
 	e.args = append(up, "--model", model)
 	if code := runUp(e); code != 0 {
 		session.PassStop(build, w.name, time.Time{})
 		return code
 	}
-	e.say("%s", "It picks up its chat where the safeguards stopped it, and waits for its next message.")
+	// Up starts a new chat when its chat won't reopen: that one has a new
+	// record.
+	if now := session.ReadRecord(record); was == nil || now == nil || now.ID != was.ID {
+		e.say("%s", "Its chat wouldn't reopen, so it's on a new chat with "+model+" (that one won't remember the old one), and waits for its next message.")
+	} else {
+		e.say("%s", "It picks up its chat where the safeguards stopped it, and waits for its next message.")
+	}
 	e.say("%s", "If they stop it again, it gets a new code. Start it fresh with that code and 2: "+cmd("cadrei answer <code> 2")+".")
 	return 0
 }

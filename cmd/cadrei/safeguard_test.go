@@ -260,3 +260,28 @@ func TestAFailedRestartKeepsTheStop(t *testing.T) {
 		t.Errorf("up: %q", out)
 	}
 }
+
+// When its chat won't reopen, up starts a new one with the model, and the
+// answer says so instead of saying it picks its chat up.
+func TestARestartThatCantResumeSaysItsANewChat(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	code := stopMember(t, home, c)
+	recPath := c + "/.claude/build/sessions/work-dev-engineer.json"
+	before := session.ReadRecord(recPath)
+	// The stub ends at once on --resume: up's fallback starts a new chat.
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+"[ -n \"$TMUX\" ] || exit 0\ncase \"$*\" in *--resume*) exit 1 ;; esac\necho \"$*\" >> "+home+"/args\n"+stubReady+"exec sleep 300\n")
+	n, out, errOut := call("answer", code, "1", "sonnet")
+	if n != 0 || !strings.Contains(flat(out), "Its chat wouldn't reopen, so it's on a new chat with sonnet (that one won't remember the old one), and waits for its next message.") ||
+		strings.Contains(out, "picks up its chat") {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if args := lastArgs(t, home); strings.Contains(args, "--resume") || !strings.Contains(args, "--model sonnet") {
+		t.Errorf("args: %q", args)
+	}
+	if after := session.ReadRecord(recPath); after == nil || before == nil || after.ID == before.ID || !after.PastStop.IsZero() {
+		t.Errorf("record: %+v %+v", before, after)
+	}
+}
