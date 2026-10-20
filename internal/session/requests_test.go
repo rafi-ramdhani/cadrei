@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -196,6 +197,15 @@ func TestACallsEndEndsOnlyItsOwnPrompt(t *testing.T) {
 	if s = run(t, s, done("Bash", "toolu_1")); s.State != Working || s.Current() != nil {
 		t.Errorf("its own call's end: %+v", s)
 	}
+	// Low item A (PR B): its own call's end comes first, while the other
+	// runs. The screen shows no prompt, so it ends, rather than go on
+	// under the running call's code.
+	s = run(t, &State{State: Working}, pre("Bash", "toolu_1", "k-1"), pre("Bash", "toolu_2", "k-2"), approval("Bash", "k-other", "make"))
+	end := done("Bash", "toolu_1")
+	end.NoPrompt = true
+	if s = run(t, s, end); s.State != Working || s.Current() != nil || len(s.Calls) != 1 {
+		t.Errorf("with no prompt on the screen: %+v", s)
+	}
 }
 
 // A state keeps at most MaxRequests requests and maxCalls calls: the
@@ -213,6 +223,68 @@ func TestAStateIsBounded(t *testing.T) {
 	GiveCode(path, s)
 	if err := WriteState(path, s); err != nil || len(ReadState(path).Requests()) != MaxRequests {
 		t.Errorf("a full state doesn't read back: %v", err)
+	}
+}
+
+// W3 (PR B): a request the hook had to cut short keeps its whole text in
+// a file of its own, written with the state that offers its code, and
+// gone once the request ends. A file that doesn't go with the request
+// (its start isn't the summary) isn't read as its text.
+func TestARequestsWholeTextHasItsOwnFile(t *testing.T) {
+	build := t.TempDir()
+	whole := strings.Repeat("echo one && ", 40) + "echo done"
+	long := approval("Bash", "k1", runtime.RequestText(whole, runtime.SummaryLimit))
+	long.Request.Full = whole
+	change := func(evs ...runtime.StateEvent) *State {
+		t.Helper()
+		_, next, err := ChangeState(build, "w-dev-engineer", time.Second, func(s *State) *State { return run(t, s, evs...) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	s := change(pre("Bash", "toolu_1", "k1"), long, pre("Bash", "toolu_2", "k2"), approval("Bash", "k2", "make"))
+	cut, short := s.Requests()[0], s.Requests()[1]
+	if got := ReadFull(build, "w-dev-engineer", cut); got != whole {
+		t.Errorf("the whole text: %q", got)
+	}
+	if raw, _ := os.ReadFile(StatePath(build, "w-dev-engineer")); strings.Contains(string(raw), "echo done") {
+		t.Errorf("the state file holds it: %s", raw)
+	}
+	if _, err := os.Stat(FullPath(build, "w-dev-engineer", short.Code)); err == nil || ReadFull(build, "w-dev-engineer", short) != "" {
+		t.Errorf("a short request has a file")
+	}
+	os.WriteFile(FullPath(build, "w-dev-engineer", cut.Code), []byte("rm -rf / && "+whole), 0o600)
+	if got := ReadFull(build, "w-dev-engineer", cut); got != "" {
+		t.Errorf("another text: %q", got)
+	}
+	change(done("Bash", "toolu_1"))
+	if _, err := os.Stat(FullPath(build, "w-dev-engineer", cut.Code)); !os.IsNotExist(err) {
+		t.Errorf("the file outlived its request: %v", err)
+	}
+
+	// A start or a stop writes the state file outside ChangeState: the
+	// files of the requests it held go with them, and no other member's.
+	for _, s := range []*State{{State: Starting, Since: time.Now()}, nil} {
+		rs := change(pre("Bash", "toolu_3", "k1"), long).Requests()
+		cut = rs[len(rs)-1]
+		if ReadFull(build, "w-dev-engineer", cut) != whole {
+			t.Fatalf("no whole text for %+v", cut)
+		}
+		other := FullPath(build, "w-dev-engineer2", cut.Code)
+		os.WriteFile(other, []byte(whole), 0o600)
+		if err := ResetState(StatePath(build, "w-dev-engineer"), s); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(FullPath(build, "w-dev-engineer", cut.Code)); !os.IsNotExist(err) {
+			t.Errorf("reset to %+v: the file outlived its request: %v", s, err)
+		}
+		if _, err := os.Stat(other); err != nil {
+			t.Errorf("reset to %+v: another member's file went: %v", s, err)
+		}
+		if got := ReadState(StatePath(build, "w-dev-engineer")); (got == nil) != (s == nil) {
+			t.Errorf("reset to %+v: %+v", s, got)
+		}
 	}
 }
 

@@ -90,6 +90,9 @@ type Request struct {
 	Question string   `json:"question,omitempty"` // a question's text, or a screen prompt's box
 	Options  []string `json:"options,omitempty"`
 	Multi    bool     `json:"multi,omitempty"` // only its window can answer it
+	// Parts are each of a question's questions, when it holds several or
+	// takes more than one pick (Question and Options are the first's).
+	Parts []Part `json:"parts,omitempty"`
 	// Call is the id of the tool call it belongs to, when cadrei knows it:
 	// that call's end ends the request.
 	Call string `json:"call,omitempty"`
@@ -100,6 +103,18 @@ type Request struct {
 	// Answering is when an answer by its code began: its key is pressed
 	// right after, so the tool's end may come before the answer drops it.
 	Answering time.Time `json:"answering,omitempty"`
+	// full is Summary whole, when the hook had to cut it: ChangeState
+	// keeps it in its own file (FullPath), out of the state file every
+	// hook reads.
+	full string
+}
+
+// Part is one question of a request that holds several, or takes more
+// than one pick.
+type Part struct {
+	Question string   `json:"question"`
+	Options  []string `json:"options"`
+	Multi    bool     `json:"multi,omitempty"` // it takes one or more picks
 }
 
 // answeringFor is how long an answer by code's mark counts: the answer
@@ -244,7 +259,7 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		}
 		settle()
 	case runtime.EvToolDone:
-		next.end(ev.ToolID, ev.Tool)
+		next.end(ev.ToolID, ev.Tool, ev.NoPrompt)
 		settle()
 	case runtime.EvPermission:
 		kind := ForApproval
@@ -322,8 +337,12 @@ func unchanged(prev *State) *State {
 
 // record is a new request from what the runtime (or the screen) said.
 func record(kind string, r *runtime.Request, call, source string) *Request {
-	return &Request{Kind: kind, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
-		Options: slices.Clone(r.Options), Multi: r.Multi, Call: call, Source: source}
+	req := &Request{Kind: kind, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
+		Options: slices.Clone(r.Options), Multi: r.Multi, Call: call, Source: source, full: r.Full}
+	for _, p := range r.Parts {
+		req.Parts = append(req.Parts, Part{Question: p.Question, Options: slices.Clone(p.Options), Multi: p.Multi})
+	}
+	return req
 }
 
 // add opens a request, dropping the oldest past MaxRequests.
@@ -418,11 +437,12 @@ func (s *State) loneCall() string {
 
 // end ends call id: its note, and its request. A request that may be one
 // of several calls' is none of the call that ended (a call waiting on a
-// prompt doesn't end), and once one is left, it's that one's. A call
-// whose start cadrei never saw, with no request of its own, ends the
-// oldest request of the same tool that names no call: its permission
-// request came without the call's start too.
-func (s *State) end(id, tool string) {
+// prompt doesn't end), and once one is left, it's that one's; but with
+// gone (the member's screen shows no prompt), its prompt ended too, so
+// it ends. A call whose start cadrei never saw, with no request of its
+// own, ends the oldest request of the same tool that names no call: its
+// permission request came without the call's start too.
+func (s *State) end(id, tool string, gone bool) {
 	if id == "" {
 		return
 	}
@@ -433,6 +453,10 @@ func (s *State) end(id, tool string) {
 		return
 	}
 	for i, r := range s.Open {
+		if slices.Contains(r.Maybe, id) && gone {
+			s.Open = slices.Delete(s.Open, i, i+1)
+			return
+		}
 		if slices.Contains(r.Maybe, id) {
 			// A copy: the request is prev's too.
 			c := *r
@@ -504,11 +528,69 @@ func ChangeState(build, name string, wait time.Duration, change func(prev *State
 	next = change(prev)
 	if (prev == nil) != (next == nil) || (next != nil && !Same(next, prev)) {
 		GiveCode(path, next)
+		// A request's whole text goes in its own file before the state
+		// that offers its code, so no answer sees the code without it.
+		for _, r := range next.Requests() {
+			if p := FullPath(build, name, r.Code); r.full != "" && p != "" {
+				fsx.WriteFileNoSync(p, []byte(r.full), 0o600)
+			}
+			r.full = ""
+		}
 		if err := WriteState(path, next); err != nil {
 			return prev, prev, err
 		}
+		open := map[string]bool{}
+		for _, r := range next.Requests() {
+			open[r.Code] = true
+		}
+		for _, r := range prev.Requests() {
+			if !open[r.Code] {
+				os.Remove(FullPath(build, name, r.Code))
+			}
+		}
 	}
 	return prev, next, nil
+}
+
+// FullPath is the file that holds the whole text of member name's request
+// under code, when the hook had to cut its summary, or "".
+func FullPath(build, name, code string) string {
+	p := StatePath(build, name)
+	if p == "" || !CodeRule.MatchString(code) {
+		return ""
+	}
+	return strings.TrimSuffix(p, ".json") + ".req-" + code + ".txt"
+}
+
+// ReadFull is the whole text of member name's request r, from its file,
+// or "" when it has none, or one that isn't r's: its start, cut as the
+// hook cuts a summary, must be r's summary.
+func ReadFull(build, name string, r *Request) string {
+	if r == nil || !strings.HasSuffix(r.Summary, "…") {
+		return ""
+	}
+	raw, err := fsx.ReadOwn(FullPath(build, name, r.Code), 64<<10)
+	if err != nil || runtime.RequestText(string(raw), runtime.SummaryLimit) != r.Summary {
+		return ""
+	}
+	return string(raw)
+}
+
+// ResetState writes a member's state file whole outside ChangeState, as a
+// start does (nil removes it, as a stop does), and removes the whole texts
+// of its requests with it: none of them is open anymore.
+func ResetState(path string, s *State) error {
+	if path != "" {
+		dir, base := filepath.Split(strings.TrimSuffix(path, ".json"))
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			code, ok := strings.CutPrefix(e.Name(), base+".req-")
+			if code, txt := strings.CutSuffix(code, ".txt"); ok && txt && CodeRule.MatchString(code) {
+				os.Remove(filepath.Join(dir, e.Name()))
+			}
+		}
+	}
+	return WriteState(path, s)
 }
 
 // ReadState reads a state file cadrei wrote, or nil.

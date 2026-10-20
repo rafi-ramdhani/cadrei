@@ -4,6 +4,8 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,13 +50,24 @@ func runAs(t *testing.T, cmd *exec.Cmd) {
 
 // promptMember starts role in team dev with a stub Claude Code that shows
 // its ready footer, then a recorded prompt, and notes in home/key the one
-// key it gets. With home/stay, the prompt stays after the key.
+// key it gets. With home/stay, the prompt stays after the key. With
+// home/grown-<role>, it shows that instead once its window's size changes,
+// as Claude Code draws a prompt anew at a new size.
 func promptMember(t *testing.T, home, role, fixture string) {
 	t.Helper()
-	abs := filepath.Join(answerFixtures, fixture)
+	abs := fixture
+	if !filepath.IsAbs(abs) {
+		abs = filepath.Join(answerFixtures, fixture)
+	}
+	grown := home + "/grown-" + role
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
 		stubReady+"sleep 1\nprintf '\\033[H\\033[2J'\ncat '"+abs+"'\n"+
+		"if [ -e \""+grown+"\" ]; then (set -- $(stty size </dev/tty); rows=$1 cols=$2; while sleep 0.1; do\n"+
+		"  set -- $(stty size </dev/tty); [ \"$1\" -gt \"$rows\" ] || [ \"$2\" -gt \"$cols\" ] || continue\n"+
+		// The key's read has the terminal raw: each line ends in \r\n.
+		"  printf '\\033[H\\033[2J'; awk '{ printf \"%s\\r\\n\", $0 }' \""+grown+"\"; exit 0\n"+
+		"done) & fi\n"+
 		"stty raw -echo\nk=$(dd bs=1 count=1 2>/dev/null)\n"+
 		// Any key after it (an Enter, say) in the next half second.
 		"stty min 0 time 5\ne=$(dd bs=1 count=8 2>/dev/null)\nstty sane\n"+
@@ -193,6 +206,313 @@ func TestAnswerSaysWhenThePromptStays(t *testing.T) {
 	n, out, errOut := call("answer", code, "yes")
 	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+}
+
+// tallRequest is the permission request for tallCommand, as the hook gets
+// it.
+func tallRequest() string {
+	command, _ := json.Marshal(strings.ReplaceAll(tallCommand, "⏎", "\n"))
+	return `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":` + string(command) + `}}`
+}
+
+// W1, W2: members start in 220x60 windows. A prompt too big for its
+// member's window (a heredoc taller than it, with its top gone) is read
+// with the window grown for a moment, and the window's size goes back
+// after: to one set on the window itself (as on a small screen, or by
+// cadrei 0.2.2's 80x24), or to following the session's.
+func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
+	home := sandbox(t)
+	socket := withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	tm, s := session.Default(), session.SessionName("work", "dev")
+	for _, role := range []string{"engineer", "reviewer"} {
+		os.WriteFile(home+"/grown-"+role, []byte(drawn(t, approval(tallCommand).req)), 0o644)
+		promptMember(t, home, role, "tall-live.txt")
+		if w, h := tm.WindowSize(s, role); w != 220 || h != 60 {
+			t.Errorf("%s started at %dx%d", role, w, h)
+		}
+	}
+	exec.Command("tmux", "-L", socket, "resize-window", "-t", "="+s+":=engineer", "-x", "80", "-y", "24").Run()
+	ownTerminal(t)
+	for role, size := range map[string][2]int{"engineer": {80, 24}, "reviewer": {220, 60}} {
+		code := request(t, c, role, tallRequest())
+		if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
+			t.Errorf("%s: exit %d: %q %q", role, n, out, errOut)
+		}
+		if k := key(t, home, role); k != "1" {
+			t.Errorf("%s: key %q", role, k)
+		}
+		if w, h := tm.WindowSize(s, role); w != size[0] || h != size[1] {
+			t.Errorf("%s: back at %dx%d", role, w, h)
+		}
+	}
+	own, _ := exec.Command("tmux", "-L", socket, "show-options", "-wqv", "-t", "="+s+":=reviewer", "window-size").Output()
+	if strings.TrimSpace(string(own)) != "" {
+		t.Errorf("the reviewer's window keeps a size of its own: %q", own)
+	}
+}
+
+// A window a check left grown (killed before it put the size back), or
+// one another check still has grown, goes back to its size from before:
+// the next grow puts back that size, not the grown one, and so does an
+// answer whose prompt shows at the size left behind.
+func TestAGrownWindowGoesBackAfterAKill(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	tm, s := session.Default(), session.SessionName("work", "dev")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	tm.Grow(s, "engineer", 300, 100) // killed: its restore never runs
+	restore, grown := tm.Grow(s, "engineer", 400, 120)
+	if w, h := tm.WindowSize(s, "engineer"); !grown || w != 400 || h != 120 || !tm.Grown(s, "engineer") {
+		t.Fatalf("grown %v to %dx%d", grown, w, h)
+	}
+	restore()
+	if w, h := tm.WindowSize(s, "engineer"); w != 220 || h != 60 || tm.Grown(s, "engineer") {
+		t.Errorf("back at %dx%d, grown %v", w, h, tm.Grown(s, "engineer"))
+	}
+	tm.Grow(s, "engineer", 300, 100) // killed again
+	code := request(t, c, "engineer", mkdirRequest)
+	ownTerminal(t)
+	if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if w, h := tm.WindowSize(s, "engineer"); w != 220 || h != 60 || tm.Grown(s, "engineer") {
+		t.Errorf("after the answer, at %dx%d, grown %v", w, h, tm.Grown(s, "engineer"))
+	}
+}
+
+// W3: a command too long for the hook's 300-character summary is listed
+// and checked on the screen whole, from its own file, and answered; the
+// file goes with the request.
+func TestALongCommandIsAnsweredWhole(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	var lines []string
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, fmt.Sprintf("echo 'step %d of the long job, written out in full'", i))
+	}
+	long := approval(strings.Join(lines, "⏎"))
+	os.WriteFile(home+"/long.txt", []byte(drawn(t, long.req)), 0o644)
+	promptMember(t, home, "engineer", home+"/long.txt")
+	command, _ := json.Marshal(strings.Join(lines, "\n"))
+	code := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":`+string(command)+`}}`)
+	build := c + "/.claude/build"
+	if st := session.ReadState(session.StatePath(build, "work-dev-engineer")); !strings.HasSuffix(st.Current().Summary, "…") {
+		t.Fatalf("not cut short: %q", st.Current().Summary)
+	}
+	ownTerminal(t)
+	n, out, _ := call("answer")
+	if n != 0 || !strings.Contains(out, "         "+lines[11]+"\n       Allow it once:") || !strings.Contains(out, "\n         "+lines[0]+"\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" || !strings.Contains(out, "step 12 of the long job") {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "1" {
+		t.Errorf("key %q", k)
+	}
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); !os.IsNotExist(err) {
+		t.Errorf("its file stays: %v", err)
+	}
+	// One still open when its member stops goes with the state file.
+	code = request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":`+string(command)+`}}`)
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); err != nil {
+		t.Fatalf("no file: %v", err)
+	}
+	if n, _, errOut := call("stop", "dev/engineer"); n != 0 {
+		t.Fatalf("stop: %d %q", n, errOut)
+	}
+	if _, err := os.Stat(session.FullPath(build, "work-dev-engineer", code)); !os.IsNotExist(err) {
+		t.Errorf("its file stays after a stop: %v", err)
+	}
+}
+
+// W6: when the runtime says a prompt is up, the state hook reads the
+// approval's choices off the member's screen, once it shows that same
+// prompt. The listing shows them word for word, and one is answered by
+// its number. A screen with another prompt adds none.
+func TestAnApprovalsChoicesComeOffTheScreen(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	other := request(t, c, "engineer", `{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf <work>"}}`)
+	feedInPane(t, c, "engineer", promptShown)
+	if r := stateOf(c).Current(); r.Code != other || r.Options != nil {
+		t.Fatalf("another prompt got choices: %+v", r)
+	}
+	code := request(t, c, "engineer", mkdirRequest)
+	feedInPane(t, c, "engineer", promptShown)
+	if r := stateOf(c).Current(); r.Code != code || strings.Join(r.Options, "|") != strings.Join(bashChoices, "|") {
+		t.Fatalf("choices: %+v", r)
+	}
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	if !strings.Contains(out, "       Say no:         cadrei answer "+code+" no\n"+
+		"       Its other choices:\n"+
+		"         2. Yes, and always allow access to <work> from this project (saved, so it lasts after this prompt)\n"+
+		"       Pick one:       cadrei answer "+code+" 2\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	// Switching the member to auto mode stays in its window.
+	if n, _, errOut := call("answer", code, "3"); n != 1 || !strings.Contains(flat(errOut), "takes yes, no, or one of its choices: 1, 2, 4.") {
+		t.Errorf("the mode switch: %d %q", n, errOut)
+	}
+	if n, out, errOut := call("answer", code, "2"); n != 0 || flat(out) != "+ Answered the engineer in dev: 2. Yes, and always allow access to <work> from this project" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if k := key(t, home, "engineer"); k != "2" {
+		t.Errorf("key %q", k)
+	}
+}
+
+// stepsMember starts role in team dev with a stub Claude Code that shows
+// screens[0], then after each key it gets, the next screen (nothing after
+// the last), and notes each key in home/keys-<role>, an arrow as →.
+func stepsMember(t *testing.T, home, role string, screens ...string) {
+	t.Helper()
+	dir := filepath.Join(home, "steps-"+role)
+	os.MkdirAll(dir, 0o755)
+	for i, s := range screens {
+		os.WriteFile(filepath.Join(dir, strconv.Itoa(i)), []byte(s), 0o644)
+	}
+	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
+		"[ -n \"$TMUX\" ] || exit 0\n"+
+		stubReady+"sleep 1\n"+
+		"show() { printf '\\033[H\\033[2J'; [ -e \""+dir+"/$1\" ] && awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"; }\n"+
+		"i=0; show 0; stty raw -echo\n"+
+		"while :; do\n"+
+		"  k=$(dd bs=1 count=1 2>/dev/null)\n"+
+		"  [ \"$k\" = \"$(printf '\\033')\" ] && { dd bs=1 count=2 >/dev/null 2>&1; k=→; }\n"+
+		"  printf '%s|' \"$k\" >> \""+home+"/keys-"+role+"\"\n"+
+		"  i=$((i+1)); show $i\n"+
+		"done\n")
+	must(t, "up", "dev/"+role)
+	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
+	for i := 0; i < 100 && !strings.Contains(session.Default().Screen(session.SessionName("work", "dev"), role), "Esc to cancel"); i++ {
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// filesAndSend is a question that asks two things at once, the first
+// with several picks, as the hook gets it, and the screens Claude Code
+// 2.1.302 is taken to draw for an answer of 1,2 then 1, from the recorded
+// multi-select screen and its own text (NOT seen live: PR E's live run
+// checks it): the first question, its boxes ticked one by one, the
+// second question, and the review.
+const filesAndSend = `{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[` +
+	`{"question":"Which files go to the signing site?","options":[{"label":"resume.pdf"},{"label":"cover.pdf"}],"multiSelect":true},` +
+	`{"question":"Send them now?","options":[{"label":"Yes"},{"label":"No"}],"multiSelect":false}]}}`
+
+func filesAndSendScreens() []string {
+	files := func(a, b string) string {
+		return "────────────────────────────────────────\n←  ☐ Files  ☐ Send  ✔ Submit  →\n\nWhich files go to the signing site?\n\n" +
+			"❯ 1. [" + a + "] resume.pdf\n         Send resume.pdf to the signing site\n" +
+			"  2. [" + b + "] cover.pdf\n         Send cover.pdf to the signing site\n" +
+			"  3. [ ] Type something\n     Submit\n────────────────────────────────────────\n  4. Chat about this\n\n" +
+			"Enter to select · ↑/↓ to navigate · Esc to cancel\n"
+	}
+	send := "────────────────────────────────────────\n←  ☒ Files  ☐ Send  ✔ Submit  →\n\nSend them now?\n\n" +
+		"❯ 1. Yes\n     Send both files now\n  2. No\n     Keep them for later\n  3. Type something.\n" +
+		"────────────────────────────────────────\n  4. Chat about this\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n"
+	review := "────────────────────────────────────────\n←  ☒ Files  ☒ Send  ✔ Submit  →\n\nReview your answers\n\n" +
+		" ● Which files go to the signing site?\n   → resume.pdf, cover.pdf\n ● Send them now?\n   → Yes\n\n" +
+		"Ready to submit your answers?\n\n❯ 1. Submit answers\n  2. Cancel\n\nEnter to select · ↑/↓ to navigate · Esc to cancel\n"
+	return []string{files(" ", " "), files("✔", " "), files("✔", "✔"), send, review}
+}
+
+// W7: a question that asks two things, the first with several picks, is
+// answered one key at a time: each pick once the screen shows its
+// question, the arrow on from the multi-select one, and the review sent
+// only once it shows exactly these answers. A screen that doesn't show
+// the tick a pick should give stops it there, with nothing sent.
+func TestSeveralQuestionsAreAnsweredStepByStep(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	stepsMember(t, home, "engineer", filesAndSendScreens()...)
+	code := request(t, c, "engineer", filesAndSend)
+	ownTerminal(t)
+	_, out, _ := call("answer")
+	if !strings.Contains(out, "  "+code+"  The engineer in dev asks 2 questions:\n"+
+		"         Which files go to the signing site? (pick one or more)\n           1. resume.pdf\n           2. cover.pdf\n"+
+		"         Send them now?\n           1. Yes\n           2. No\n"+
+		"       Answer:         cadrei answer "+code+" 1,2 1\n") {
+		t.Errorf("the listing:\n%s", out)
+	}
+	n, out, errOut := call("answer", code, "1,2", "1")
+	if n != 0 || flat(out) != `+ Answered the engineer in dev: Which files go to the signing site? "1. resume.pdf", "2. cover.pdf"; Send them now? "1. Yes"` {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|2|→|1|1|" {
+		t.Errorf("keys %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Working || st.Current() != nil {
+		t.Errorf("after the answer: %+v", st)
+	}
+
+	// No tick after the first pick: stopped, nothing sent, still waiting.
+	screens := filesAndSendScreens()
+	screens[1] = screens[0]
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	stepWait = 500 * time.Millisecond
+	t.Cleanup(func() { stepWait = 2 * time.Second })
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "I pressed part of your answer, but the engineer's screen didn't show what I expected next, so I stopped before sending it.") {
+		t.Errorf("no tick: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|" {
+		t.Errorf("keys after no tick %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil || st.Current().Code != code || !st.Current().Answering.IsZero() {
+		t.Errorf("after stopping: %+v", st.Current())
+	}
+
+	// A box already ticked (an earlier try left it): nothing pressed, as a
+	// pick would untick it.
+	screens = filesAndSendScreens()
+	screens[0] = strings.Replace(screens[0], "1. [ ] resume.pdf", "1. [✔] resume.pdf", 1)
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "The engineer's screen didn't show that question as I expected, with its boxes empty, so I didn't press anything.") {
+		t.Errorf("a box ticked: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); len(raw) != 0 {
+		t.Errorf("keys with a box ticked %q", raw)
+	}
+
+	// The review stays after its key (it didn't take): not taken for sent.
+	screens = filesAndSendScreens()
+	screens = append(screens, screens[len(screens)-1])
+	session.Default().KillSession("cadrei-work-dev")
+	os.Remove(home + "/keys-engineer")
+	stepsMember(t, home, "engineer", screens...)
+	code = request(t, c, "engineer", filesAndSend)
+	answerWait = 500 * time.Millisecond
+	t.Cleanup(func() { answerWait = 2 * time.Second })
+	n, _, errOut = call("answer", code, "1,2", "1")
+	if n != 1 || !strings.Contains(flat(errOut), "I pressed your answer, but the prompt is still on the engineer's screen.") {
+		t.Errorf("the review stayed: %d %q", n, errOut)
+	}
+	if raw, _ := os.ReadFile(home + "/keys-engineer"); string(raw) != "1|2|→|1|1|" {
+		t.Errorf("keys with the review staying %q", raw)
+	}
+	if st := stateOf(c); st.State != session.Waiting || st.Current() == nil || st.Current().Code != code || !st.Current().Answering.IsZero() {
+		t.Errorf("after the review stayed: %+v", st.Current())
 	}
 }
 

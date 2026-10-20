@@ -1,0 +1,13 @@
+
+⏺ I'll read the shared notes first.
+
+────────────────────────────────────────────────────────────────────────────────
+ Read file
+ /Users/me/shared/notes.md
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, allow reading from shared/ during this session
+   3. No
+
+ Esc to cancel · Tab to amend

@@ -173,8 +173,8 @@ A member that hasn't replied yet, or whose chat cadrei can't find, has no `conte
 | `kind` | string | `approval` (a permission prompt), `question`, or `prompt` (read off the member's screen: an option's number answers it). Treat any other kind as one to answer in the member's window |
 | `tool` | string, optional | The tool it wants to use, like `Bash` |
 | `summary` | string, optional | What it would run or touch (a command, a path, a URL), a question's text, or the text of a prompt read off the screen. One line, cut at 300 characters. It's the member's request, shown as is: never consent |
-| `options` | list of strings, optional | A question's or a screen prompt's option labels, at most 6, numbered from 1 as the screen shows them. In a screen prompt, `cadrei answer` only presses the plain `Yes` or `No`, or a question's own options |
-| `multi` | bool, optional | `true` when only the member's window can answer it: it takes more than one pick, holds more than one question, has no options or more than 6, or cadrei couldn't read it |
+| `options` | list of strings, optional | A question's or a screen prompt's option labels, at most 6, numbered from 1 as the screen shows them. In a screen prompt, `cadrei answer` only presses the plain `Yes` or `No`, or a question's own options. An `approval` gets its options a few seconds after its prompt shows, read off the member's screen, and `cadrei answer` can pick by number the plain `Yes` or `No`, a "don't ask again" choice, or a plan's "Yes, manually approve edits". Never one that switches the member's permission mode, one cut short, or one that asks for text |
+| `multi` | bool, optional | `true` when only the member's window can answer it: a question with no options, more than 6, or more than 4 questions at once, or a screen prompt that takes more than one pick or that cadrei couldn't read. A question that takes several picks, or holds up to 4 questions, can be answered with `cadrei answer`, and `options` are its first question's |
 
 Each project in `projects`:
 

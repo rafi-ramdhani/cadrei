@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -301,10 +302,20 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) == 0 {
 			ev.Request = screenRequest(session.OwnScreen())
 		}
+		// One a hook recorded: its choices, which no hook gives.
+		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) > 0 {
+			return withChoices(build, name, prev, session.OwnScreen())
+		}
 		// An idle reminder over an open request: a no or Esc in the
 		// member's window ends a prompt with no hook to say so, and the
 		// screen tells whether one still shows.
 		if ev.Name == runtime.EvIdleReminder && len(prev.Requests()) > 0 {
+			ev.NoPrompt = noPrompt(session.OwnScreen())
+		}
+		// The end of a call a request may be one of several calls': with no
+		// prompt on the screen, the request's prompt is gone too, so it isn't
+		// handed on to a call still running.
+		if ev.Name == runtime.EvToolDone && slices.ContainsFunc(prev.Requests(), func(r *session.Request) bool { return slices.Contains(r.Maybe, ev.ToolID) }) {
 			ev.NoPrompt = noPrompt(session.OwnScreen())
 		}
 		return session.Apply(prev, ev, time.Now())
@@ -347,6 +358,54 @@ func screenRequest(screen string) *runtime.Request {
 		r.Multi = true
 	}
 	return r
+}
+
+// choiceLimit is how much of an approval's option a request keeps: the
+// user picks one word for word, and some run past a hundred characters.
+const choiceLimit = 200
+
+// withChoices is st with the options of the approval its member's screen
+// shows, read off the screen, since no hook gives them: the one open
+// approval with none yet whose prompt the screen shows, as cadrei answer
+// checks it. It's st itself when there's none, or more than one, or more
+// options than a request keeps.
+func withChoices(build, name string, st *session.State, screen string) *session.State {
+	dir := ""
+	if rec := session.ReadRecord(session.RecordPath(build, name)); rec != nil {
+		dir = rec.Dir
+	}
+	found := -1
+	var opts []promptOption
+	for i, r := range st.Requests() {
+		if r.Kind != session.ForApproval || len(r.Options) > 0 {
+			continue
+		}
+		w := &waitingOn{req: r, dir: dir}
+		if full := session.ReadFull(build, name, r); full != "" {
+			whole := *r
+			whole.Summary = full
+			w.req = &whole
+		}
+		if !promptShows(screen, w) {
+			continue
+		}
+		if found >= 0 {
+			return st
+		}
+		found = i
+		opts, _, _ = promptOf(screen, w)
+	}
+	if found < 0 || len(opts) > runtime.MaxOptions {
+		return st
+	}
+	next := *st
+	next.Open = slices.Clone(st.Open)
+	r := *st.Open[found]
+	for _, o := range opts {
+		r.Options = append(r.Options, runtime.RequestText(o.label, choiceLimit))
+	}
+	next.Open[found] = &r
+	return &next
 }
 
 // traceRun is a new id for one hook run in a member's trace.

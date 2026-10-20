@@ -222,9 +222,9 @@ func (u Up) starting(role string) (Result, error) {
 			if id == "" {
 				id = conv.Resume
 			}
-			WriteState(state, &State{State: Starting, Since: time.Now(), Session: id})
+			ResetState(state, &State{State: Starting, Since: time.Now(), Session: id})
 		case state != "":
-			WriteState(state, nil)
+			ResetState(state, nil)
 		}
 	}
 	starting(conv)
@@ -238,7 +238,7 @@ func (u Up) starting(role string) (Result, error) {
 	}
 	if err != nil {
 		if state != "" {
-			WriteState(state, nil)
+			ResetState(state, nil)
 		}
 		return Result{}, err
 	}

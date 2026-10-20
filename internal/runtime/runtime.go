@@ -296,7 +296,8 @@ type StateEvent struct {
 	ToolID string
 	Notice string
 	// NoPrompt: the member's own screen, read when an idle reminder comes
-	// while a request is open, shows no prompt.
+	// while a request is open, or a call ends that one may belong to,
+	// shows no prompt.
 	NoPrompt bool
 	// InputKey is a digest of what the tool got, so a permission request,
 	// which names no call, is matched to the call it belongs to.
@@ -310,21 +311,36 @@ type StateEvent struct {
 // Request is what a member asks the user: a tool it wants to run, or a
 // question. Every text is one printable line (RequestText).
 type Request struct {
-	Tool     string   // the tool, as the runtime names it
-	Summary  string   // what it would run or touch: a command, a path, a URL
+	Tool    string // the tool, as the runtime names it
+	Summary string // what it would run or touch: a command, a path, a URL
+	// Full is Summary whole, when Summary had to be cut short (at most
+	// FullLimit, cut again past that), so an answer can check it all.
+	Full     string
 	Question string   // a question's text, for a question
 	Options  []string // a question's option labels, at most MaxOptions
-	// Multi: a question that takes more than one pick, holds more than one
-	// question or has more options than recorded, so only its window can
-	// answer it.
+	// Multi: a question that has no options, more options than recorded,
+	// or more questions than recorded, so only its window can answer it.
 	Multi bool
+	// Parts are each of its questions, when it holds more than one, or
+	// takes more than one pick (Question and Options are the first's).
+	Parts []Part
+}
+
+// Part is one question of a request that holds several, or takes more
+// than one pick.
+type Part struct {
+	Question string
+	Options  []string // at most MaxOptions
+	Multi    bool     // it takes one or more picks
 }
 
 // Limits on a request's text.
 const (
 	SummaryLimit = 300
+	FullLimit    = 8000
 	OptionLimit  = 80
 	MaxOptions   = 6
+	MaxParts     = 4
 )
 
 // traceRule is what a hook's own names and ids may be in a member's

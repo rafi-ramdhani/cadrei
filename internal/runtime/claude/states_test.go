@@ -126,10 +126,18 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 		{"mcp__files__upload", `{"path": "/w/resume.pdf"}`, runtime.Request{Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/resume.pdf"}`}},
 		{"AskUserQuestion", `{"questions": [{"question": "Upload the test file to the signing site?", "header": "Upload", "options": [{"label": "Yes", "description": "Upload the test file to the signing site."}, {"label": "No", "description": "Do not upload the test file."}], "multiSelect": false}]}`,
 			runtime.Request{Tool: "AskUserQuestion", Question: "Upload the test file to the signing site?", Options: []string{"Yes", "No"}}},
+		// W7 (PR B): a multi-select question, or several questions, keep
+		// each question as a part, answered from the orchestrator.
 		{"AskUserQuestion", `{"questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}], "multiSelect": true}]}`,
-			runtime.Request{Tool: "AskUserQuestion", Question: "Which?", Options: []string{"A", "B"}, Multi: true}},
+			runtime.Request{Tool: "AskUserQuestion", Question: "Which?", Options: []string{"A", "B"}, Parts: []runtime.Part{{Question: "Which?", Options: []string{"A", "B"}, Multi: true}}}},
 		{"AskUserQuestion", `{"questions": [{"question": "One?", "options": [{"label": "A"}]}, {"question": "Two?", "options": [{"label": "B"}]}]}`,
-			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Multi: true}},
+			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Parts: []runtime.Part{{Question: "One?", Options: []string{"A"}}, {Question: "Two?", Options: []string{"B"}}}}},
+		// More questions than it keeps, or a question with no options, is
+		// left to the window.
+		{"AskUserQuestion", `{"questions": [{"question": "1?", "options": [{"label": "A"}]}, {"question": "2?", "options": [{"label": "A"}]}, {"question": "3?", "options": [{"label": "A"}]}, {"question": "4?", "options": [{"label": "A"}]}, {"question": "5?", "options": [{"label": "A"}]}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "1?", Options: []string{"A"}, Multi: true, Parts: []runtime.Part{{Question: "1?", Options: []string{"A"}}, {Question: "2?", Options: []string{"A"}}, {Question: "3?", Options: []string{"A"}}, {Question: "4?", Options: []string{"A"}}}}},
+		{"AskUserQuestion", `{"questions": [{"question": "One?", "options": [{"label": "A"}]}, {"question": "Two?", "options": []}]}`,
+			runtime.Request{Tool: "AskUserQuestion", Question: "One?", Options: []string{"A"}, Multi: true, Parts: []runtime.Part{{Question: "One?", Options: []string{"A"}}, {Question: "Two?"}}}},
 		{"AskUserQuestion", `{"questions": [{"question": "Pick", "options": [{"label": "1"}, {"label": "2"}, {"label": "3"}, {"label": "4"}, {"label": "5"}, {"label": "6"}, {"label": "7"}]}]}`,
 			runtime.Request{Tool: "AskUserQuestion", Question: "Pick", Options: []string{"1", "2", "3", "4", "5", "6"}, Multi: true}},
 	} {
@@ -137,9 +145,17 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 			t.Errorf("%s %s: %+v", tc.tool, tc.input, got)
 		}
 	}
-	long := ev("Bash", `{"command":"`+strings.Repeat("a", 400)+`"}`).Summary
-	if n := len([]rune(long)); n != runtime.SummaryLimit+1 || !strings.HasSuffix(long, "…") {
-		t.Errorf("a long command: %d %q", n, long[len(long)-10:])
+	cut := ev("Bash", `{"command":"`+strings.Repeat("a", 400)+`\nb"}`)
+	if long := cut.Summary; len([]rune(long)) != runtime.SummaryLimit+1 || !strings.HasSuffix(long, "…") {
+		t.Errorf("a long command: %d %q", len([]rune(long)), long[len(long)-10:])
+	}
+	// W3 (PR B): one cut short keeps its whole text too, cut only past
+	// FullLimit; one that isn't cut has none.
+	if cut.Full != strings.Repeat("a", 400)+"⏎b" {
+		t.Errorf("the whole command: %q", cut.Full)
+	}
+	if huge := ev("Bash", `{"command":"`+strings.Repeat("a", runtime.FullLimit+5)+`"}`).Full; len([]rune(huge)) != runtime.FullLimit+1 || !strings.HasSuffix(huge, "…") {
+		t.Errorf("a huge command: %d", len([]rune(huge)))
 	}
 	label := ev("AskUserQuestion", `{"questions": [{"question": "Q", "options": [{"label": "`+strings.Repeat("b", 100)+`"}, {"label": "No"}]}]}`).Options[0]
 	if n := len([]rune(label)); n != runtime.OptionLimit+1 {

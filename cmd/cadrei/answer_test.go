@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -55,6 +56,214 @@ func rawFixture(t *testing.T, name string) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// wrappedDescription is question-live.txt with the first option's
+// description wrapped at 80 columns (item 9, as seen live).
+func wrappedDescription(t *testing.T) string {
+	return strings.Replace(screenFixture(t, "question-live.txt"), "     Upload resume.pdf to the signing site\n",
+		"     Upload resume.pdf to the signing site, which keeps a copy of it for thirty\n     days\n", 1)
+}
+
+// longLabel is a label too long for an 80-column window.
+const longLabel = "Yes, upload resume.pdf to the signing site now and keep a copy for the records"
+
+// wrappedLabel is question-live.txt with longLabel for the first option,
+// wrapped at 80 columns above its description.
+func wrappedLabel(t *testing.T) string {
+	return strings.Replace(screenFixture(t, "question-live.txt"), "❯ 1. Yes\n",
+		"❯ 1. Yes, upload resume.pdf to the signing site now and keep a copy for the\n     records\n", 1)
+}
+
+// tool is a permission request for tool, with what it would touch.
+func tool(name, summary string) *waitingOn {
+	w := approval(summary)
+	w.req.Tool = name
+	return w
+}
+
+// withOptions is w with its prompt's options, as the state hook reads
+// them off the screen.
+func withOptions(w *waitingOn, options ...string) *waitingOn {
+	w.req.Options = options
+	return w
+}
+
+// planApproval is the plan approval in plan-live.txt, as the state hook
+// would record it (its input isn't seen live), with its options read off
+// the screen.
+func planApproval() *waitingOn {
+	return withOptions(tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline).\n2. Append the line \"Plan test\" at the end of README.md, then confirm with a final read."}`),
+		// Its hint goes on at its label's column, so it's read as the rest
+		// of the label.
+		"Yes, and use auto mode", "Yes, manually approve edits", "Tell Claude what to change shift+tab to approve with this feedback")
+}
+
+// bashChoices are bash-prompt-live.txt's options, as read off the screen.
+var bashChoices = []string{"Yes", "Yes, and always allow access to <work> from this project", "Yes, and switch to auto mode · auto mode handles these prompts for you", "No"}
+
+// W6: an approval's other choices, read off the screen, are answered by
+// number when the screen shows the same ones, and the guard's ask says
+// plainly how a lasting one lasts. One that changes the member's mode is
+// never offered (the user's call). A plan approval, which has no plain
+// Yes, takes its choice that keeps the member asking, and no; not yes,
+// nor its choice that asks for text.
+func TestAnApprovalsOtherChoices(t *testing.T) {
+	bash := screenFixture(t, "bash-prompt-live.txt")
+	w := withOptions(approval("mkdir e2e-yes"), bashChoices...)
+	for choice, key := range map[string]string{"yes": "1", "no": "4", "2": "2", "4": "4", "1": "1"} {
+		if got, why := keyFor(bash, w, choice); got != key || why != "" {
+			t.Errorf("%s: %q %q", choice, got, why)
+		}
+	}
+	if why := checkChoice(w, "7f3", "3", plain); why != "7f3 takes yes, no, or one of its choices: 1, 2, 4. Use cadrei answer 7f3 no, for example." {
+		t.Errorf("the mode switch: %q", why)
+	}
+	if !saysNo(w, "4") || saysNo(w, "2") {
+		t.Error("only the option labeled No says no")
+	}
+	other := strings.Replace(bash, "   2. Yes, and always allow access to\n      <work> from this project\n", "   2. Yes, and always allow access to\n      / from this project\n", 1)
+	if key, why := keyFor(other, w, "2"); key != "" || !strings.Contains(why, "I couldn't find that prompt") {
+		t.Errorf("other options: %q %q", key, why)
+	}
+	for choice, want := range map[string]string{
+		"2": `Cadrei: answer the engineer in dev with "2. Yes, and always allow access to <work> from this project"? That choice is saved and lasts: the engineer in dev won't ask again for what it names, after this prompt too. It wants to run: mkdir e2e-yes`,
+		"1": "Cadrei: allow once? The engineer in dev wants to run: mkdir e2e-yes",
+		"4": "Cadrei: tell the engineer in dev no? It wants to run: mkdir e2e-yes",
+	} {
+		if got := askReason(w, choice); got != want {
+			t.Errorf("ask %s: %q", choice, got)
+		}
+	}
+	if note := w.note(); !strings.HasSuffix(note, " Its other choices, word for word: 2. Yes, and always allow access to <work> from this project (saved, so it lasts after this prompt). The user picks one with cadrei answer 7f3 <n>.") {
+		t.Errorf("note: %q", note)
+	}
+
+	// Never a mode switch, however it's put, nor a label cut short; a
+	// choice for the rest of the session says so.
+	for label, how := range map[string]string{
+		"Yes, and don't ask again for example.com":                                   lastsSaved,
+		"Yes, allow reading from shared/ during this session":                        lastsSession,
+		"Yes, and switch to auto mode · auto mode handles these prompts for you":     "",
+		"Yes, and switch to accept edits (auto-approve file edits and common file":   "",
+		"Yes, allow all edits during this session (shift+tab)":                       "",
+		"Yes, and bypass permissions":                                                "",
+		"Yes, and don't ask again for git commands in /Users/me/app and its folder…": "",
+		"No, and tell Claude what to do differently":                                 "",
+	} {
+		if got := lasting(label); got != how {
+			t.Errorf("%q lasts %q", label, got)
+		}
+	}
+	read := withOptions(tool("Read", "/Users/me/shared/notes.md"), "Yes", "Yes, allow reading from shared/ during this session", "No")
+	if got := askReason(read, "2"); !strings.Contains(got, `"2. Yes, allow reading from shared/ during this session"? That choice lasts for the rest of the member's session: the engineer in dev won't ask again for what it names.`) {
+		t.Errorf("ask for the session: %q", got)
+	}
+
+	plan := screenFixture(t, "plan-live.txt")
+	p := planApproval()
+	for choice, key := range map[string]string{"2": "2", "no": "Escape"} {
+		if got, why := keyFor(plan, p, choice); got != key || why != "" {
+			t.Errorf("plan %s: %q %q", choice, got, why)
+		}
+	}
+	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n> (2. Yes, manually approve edits), or answer it in its window: cadrei attach dev` {
+		t.Errorf("plan yes: %q", why)
+	}
+	for _, choice := range []string{"1", "3"} {
+		if why := checkChoice(p, "7f3", choice, plain); why != "7f3 takes yes, no, or one of its choices: 2. Use cadrei answer 7f3 no, for example." {
+			t.Errorf("plan %s: %q", choice, why)
+		}
+	}
+	if got := askReason(p, "2"); !strings.HasPrefix(got, `Cadrei: answer the engineer in dev with "2. Yes, manually approve edits"? It wants to carry out this plan: 1. Read README.md`) {
+		t.Errorf("plan ask: %q", got)
+	}
+	// A plan that offers to bypass permissions doesn't get it picked.
+	bypass := withOptions(tool("ExitPlanMode", p.req.Summary), "Yes, and bypass permissions", "Yes, manually approve edits", "No")
+	if got := choices(bypass.req); !slices.Equal(got, []int{2, 3}) {
+		t.Errorf("bypass: %v", got)
+	}
+	if verb, object, _ := act(p.req); verb != "carry out this plan" || !strings.HasSuffix(object, "then confirm with a final read.") {
+		t.Errorf("plan act: %q %q", verb, object)
+	}
+	if note := p.note(); !strings.Contains(note, "It has no plain Yes: answer with cadrei answer 7f3 <n> for one of its choices, or no.") {
+		t.Errorf("plan note: %q", note)
+	}
+	// Before its choices are read off the screen, a plan approval has only
+	// no; yes says there's no plain Yes.
+	p.req.Options = nil
+	if _, why := keyFor(plan, p, "yes"); !strings.Contains(why, `no plain "Yes", only choices that would allow it for good`) {
+		t.Errorf("plan yes, no choices: %q", why)
+	}
+}
+
+// The orchestrator's note keeps a long command as the hook cuts it, not
+// its whole text, which only the listing shows.
+func TestTheNoteKeepsALongCommandShort(t *testing.T) {
+	whole := strings.Repeat("echo one && ", 600) + "echo done"
+	w := approval(whole)
+	note := w.note()
+	if strings.Contains(note, "echo done") || !strings.Contains(note, "… (cadrei answer shows it whole). Answer with cadrei answer 7f3 yes, or no.") || len(note) > 600 {
+		t.Errorf("note: %q", note)
+	}
+	if note := approval("make").note(); strings.Contains(note, "shows it whole") {
+		t.Errorf("a short one: %q", note)
+	}
+}
+
+// W7: the review is sent only when it shows exactly the picks, for each
+// question in order: not one with a pick missing, one more, another
+// answer, the questions the other way round, or no option to send it.
+// A pick is read as one field per question.
+func TestTheReviewMustShowExactlyTheAnswers(t *testing.T) {
+	req := &session.Request{Code: "k2m", Kind: session.ForQuestion, Parts: []session.Part{
+		{Question: "Which files go to the signing site?", Options: []string{"resume.pdf", "cover.pdf"}, Multi: true},
+		{Question: "Send them now?", Options: []string{"Yes", "No"}}}}
+	review := filesAndSendScreens()[4]
+	if key, ok := reviewShows(review, req, [][]int{{1, 2}, {1}}); key != "1" || !ok {
+		t.Errorf("the review: %q %v", key, ok)
+	}
+	for name, picks := range map[string][][]int{"one pick less": {{1}, {1}}, "the other answer": {{1, 2}, {2}}} {
+		if _, ok := reviewShows(review, req, picks); ok {
+			t.Errorf("%s: sent", name)
+		}
+	}
+	// Only the dialog's own lines count: text printed above it (an old
+	// review, the member's own words) neither makes a wrong one match nor
+	// keeps a right one from it.
+	earlier := "⏺ Which files go to the signing site?\n   → resume.pdf, cover.pdf\n  Send them now?\n   → Yes\n  Ready to submit your answers?\n\n"
+	if _, ok := reviewShows(earlier+strings.Replace(review, "→ resume.pdf, cover.pdf", "→ resume.pdf", 1), req, [][]int{{1, 2}, {1}}); ok {
+		t.Error("an earlier review above made a wrong one match")
+	}
+	if key, ok := reviewShows("⏺ I need to know: Which files go to the signing site? And: Send them now?\n\n"+review, req, [][]int{{1, 2}, {1}}); key != "1" || !ok {
+		t.Errorf("the questions' own text above it: %q %v", key, ok)
+	}
+	for name, screen := range map[string]string{
+		"a pick more":                   strings.Replace(review, "→ Yes", "→ Yes, No", 1),
+		"the other order":               strings.Replace(strings.Replace(review, "Which files go to the signing site?", "Q1", 1), "Send them now?", "Which files go to the signing site?", 1),
+		"no way to send":                strings.Replace(review, "1. Submit answers", "1. Go back", 1),
+		"no review":                     strings.Replace(review, "Ready to submit your answers?", "", 1),
+		"no title":                      strings.Replace(review, "Review your answers", "", 1),
+		"no top over the title":         strings.Replace(strings.Replace(review, "────────────────────────────────────────\n", "", 1), "←  ☒ Files  ☒ Send  ✔ Submit  →\n", "", 1),
+		"something before the first":    strings.Replace(review, "Review your answers\n\n", "Review your answers\n\n ● Which file?\n   → notes.txt\n", 1),
+		"a rule inside the dialog":      strings.Replace(review, " ● Send them now?", "────────────────────────────────────────\n ● Send them now?", 1),
+		"the second question not shown": strings.Replace(review, " ● Send them now?\n   → Yes\n", "", 1),
+	} {
+		if _, ok := reviewShows(screen, req, [][]int{{1, 2}, {1}}); ok {
+			t.Errorf("%s: sent", name)
+		}
+	}
+	for choice, ok := range map[string]bool{"1,2 1": true, "2 2": true, "1": false, "1 1,2": false, "3 1": false, "1,1 1": false, "1 1 1": false, "01 1": false} {
+		if _, got := partPicks(req, choice); got != ok {
+			t.Errorf("%q: %v", choice, got)
+		}
+	}
+}
+
+// inApp is w with its member started in /Users/me/app.
+func inApp(w *waitingOn) *waitingOn {
+	w.dir = "/Users/me/app"
+	return w
 }
 
 // approval and question are records as the state hook writes them.
@@ -109,6 +318,28 @@ func TestTheKeyForEachAnswer(t *testing.T) {
 		{ask, question("Upload the test file to the signing site?", "Yes", "No"), "2", "2"},
 		// A long label recorded cut short still matches.
 		{strings.Replace(ask, "❯ 1. Yes", "❯ 1. Yes, upload it now to the signing site", 1), question("Upload the test file to the signing site?", "Yes, upload it…", "No"), "1", "1"},
+		// Item 9: at 80 columns a description wraps onto a second line at
+		// its own column, and so does a long label, before its description.
+		{wrappedDescription(t), question("Upload resume.pdf to the signing site?", "Yes", "No"), "1", "1"},
+		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", "1"},
+		{wrappedLabel(t), question("Upload resume.pdf to the signing site?", "Yes, upload resume.pdf to the signing site now…", "No"), "2", "2"},
+		// W5, recorded live: a page fetch (no "Esc to cancel" line, the URL
+		// with a slash after its host, no plain No, so no is Escape) and an
+		// MCP tool (its arguments as name: JSON).
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com"), "yes", "1"},
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com"), "no", "Escape"},
+		{screenFixture(t, "fetch-live.txt"), tool("WebFetch", "https://example.com/"), "yes", "1"},
+		{screenFixture(t, "mcp-live.txt"), tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"}`), "yes", "1"},
+		{screenFixture(t, "mcp-live.txt"), tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"}`), "no", "3"},
+		// W5, NOT seen live (the -unconfirmed screens are built from Claude
+		// Code 2.1.302's own text and the recorded Edit prompt; PR E's live
+		// run checks them): a web search, a file to read, a notebook, an
+		// edit in several places.
+		{screenFixture(t, "search-unconfirmed.txt"), tool("WebSearch", "tmux default-size detached session"), "yes", "1"},
+		{screenFixture(t, "read-unconfirmed.txt"), tool("Read", "/Users/me/shared/notes.md"), "yes", "1"},
+		{screenFixture(t, "read-unconfirmed.txt"), tool("Read", "/Users/me/shared/notes.md"), "no", "3"},
+		{screenFixture(t, "notebook-unconfirmed.txt"), inApp(tool("NotebookEdit", "/Users/me/app/analysis.ipynb")), "yes", "1"},
+		{screenFixture(t, "edit-live.txt"), inApp(tool("MultiEdit", "/Users/me/app/README.md")), "yes", "1"},
 	} {
 		key, why := keyFor(tc.screen, tc.w, tc.choice)
 		if key != tc.key || why != "" {
@@ -132,10 +363,15 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 		choice string
 		why    string
 	}{
-		"another command":      {bash, approval("rm -rf e2e-yes"), "yes", lost},
-		"a question instead":   {ask, approval("mkdir e2e-yes"), "yes", lost},
-		"another question":     {ask, question("Delete the test file?", "Yes", "No"), "1", lostWriter},
-		"other options":        {ask, question("Upload the test file to the signing site?", "No", "Yes"), "1", lostWriter},
+		"another command":    {bash, approval("rm -rf e2e-yes"), "yes", lost},
+		"a question instead": {ask, approval("mkdir e2e-yes"), "yes", lost},
+		"another question":   {ask, question("Delete the test file?", "Yes", "No"), "1", lostWriter},
+		"other options":      {ask, question("Upload the test file to the signing site?", "No", "Yes"), "1", lostWriter},
+		// Item 9: a wrapped label must go on exactly as recorded, and whole.
+		"a label going on otherwise": {strings.Replace(wrappedLabel(t), "     records\n", "     archive\n", 1),
+			question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", lostWriter},
+		"a label without its end": {strings.Replace(wrappedLabel(t), "     records\n", "", 1),
+			question("Upload resume.pdf to the signing site?", longLabel, "No"), "1", lostWriter},
 		"no prompt":            {"⏺ Done.\n\n❯ \n? for shortcuts\n", approval("mkdir e2e-yes"), "yes", lost},
 		"options gone":         {strings.Replace(bash, " Esc to cancel · Tab to amend\n", "", 1), approval("mkdir e2e-yes"), "yes", lost},
 		"a gap in the numbers": {strings.Replace(bash, "   2. Yes, and always", "   5. Yes, and always", 1), approval("mkdir e2e-yes"), "yes", lost},
@@ -196,22 +432,50 @@ func TestNoKeyForAScreenThatDoesntMatch(t *testing.T) {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
 	}
-	// Review of 0.2.2 (M3): prompts recorded live that cadrei can't check
-	// get no key, whatever the record: a page fetch (no "Esc to cancel",
-	// the URL its own way), an MCP tool (its input not as recorded), a plan
-	// approval (no plain Yes).
-	for name, tc := range map[string]*session.Request{
-		"fetch-live.txt": {Code: "jsw", Kind: session.ForApproval, Tool: "WebFetch", Summary: "https://example.com"},
-		"mcp-live.txt":   {Code: "rxn", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"resume.pdf"}`},
-		"plan-live.txt":  {Code: "226", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"1. Read README.md"}`},
+	// W5: a page fetch, an MCP tool, a web search and a file to read
+	// show exactly what the record says, or get no key: another URL, one
+	// the record goes on past, a fetch without its footer where a Bash
+	// prompt's is needed; other arguments, more of them, another server;
+	// another query, one with a list of sites; another file.
+	fetch, mcp := screenFixture(t, "fetch-live.txt"), screenFixture(t, "mcp-live.txt")
+	search, read := screenFixture(t, "search-unconfirmed.txt"), screenFixture(t, "read-unconfirmed.txt")
+	upload := `mcp__files__upload {"path":"resume.pdf"}`
+	for name, tc := range map[string]struct {
+		screen string
+		w      *waitingOn
+	}{
+		"another URL":        {fetch, tool("WebFetch", "https://example.org")},
+		"a longer URL":       {fetch, tool("WebFetch", "https://example.com/admin")},
+		"a URL with a query": {strings.Replace(fetch, "url: https://example.com/", "url: https://example.com/?a=1", 1), tool("WebFetch", "https://example.com")},
+		"a fetch as Bash":    {fetch, approval("https://example.com")},
+		"other arguments":    {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"cover.pdf"}`)},
+		"more arguments":     {strings.Replace(mcp, ` path: "resume.pdf"`, ` path: "resume.pdf"`+"\n"+` to: "anyone"`, 1), tool("mcp__files__upload", upload)},
+		"fewer arguments":    {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf","to":"anyone"}`)},
+		"another server":     {mcp, tool("mcp__drive__upload", `mcp__drive__upload {"path":"resume.pdf"}`)},
+		"input that's cut":   {mcp, tool("mcp__files__upload", `mcp__files__upload {"path":"resume.pdf"`)},
+		"another query":      {search, tool("WebSearch", "tmux default-size")},
+		"only some sites":    {strings.Replace(search, "detached session\n", "detached session, only allowing domains: example.com\n", 1), tool("WebSearch", "tmux default-size detached session")},
+		"another file":       {read, tool("Read", "/Users/me/shared/other.md")},
+		"a read as an edit":  {read, tool("Edit", "/Users/me/shared/notes.md")},
 	} {
-		w := &waitingOn{team: "dev", role: "engineer", req: tc}
-		if key, why := keyFor(screenFixture(t, name), w, "yes"); key != "" || why == "" {
+		if key, why := keyFor(tc.screen, tc.w, "yes"); key != "" || why == "" {
 			t.Errorf("%s: %q %q", name, key, why)
 		}
-		if why := checkChoice(w, tc.Code, "yes", plain); why != "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev" {
-			t.Errorf("%s: %q", name, why)
+	}
+	// W6: a plan approval shows a plan other than the recorded one, or
+	// only part of it; and its record names no plan (the hook's input for
+	// it isn't seen live), so cadrei can't check it.
+	planScreen := screenFixture(t, "plan-live.txt")
+	for name, w := range map[string]*waitingOn{
+		"another plan":     tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline).\n2. Delete README.md."}`),
+		"part of the plan": tool("ExitPlanMode", `{"plan":"1. Read README.md to check how it currently ends (trailing newline)."}`),
+	} {
+		if key, why := keyFor(planScreen, w, "no"); key != "" || why == "" {
+			t.Errorf("%s: %q %q", name, key, why)
 		}
+	}
+	if why := checkChoice(tool("ExitPlanMode", `{"planFile":"x.md"}`), "7f3", "no", plain); why != "Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev" {
+		t.Errorf("no plan: %q", why)
 	}
 	// The full path shown matches, with the member's folder not known.
 	full := inApp("/Users/me/app/notes.txt")
@@ -250,14 +514,18 @@ func TestAChoiceThatCantAnswer(t *testing.T) {
 		{ask, "4", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{ask, "0", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
 		{ask, "01", "k2m has options 1 to 2. Use cadrei answer k2m 1, for example."},
-		{multi, "1", "This question needs more than one pick, so answer it in its window: cadrei attach docs"},
+		{multi, "1", "That question has more options or questions than cadrei keeps, so answer it in its window: cadrei attach docs"},
 		// Review of 0.2.2 (M3): a prompt cadrei can't check on the screen.
-		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "mcp__files__upload", Summary: `mcp__files__upload {"path":"/w/a.pdf"}`}}, "yes",
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Glob", Summary: `Glob {"pattern":"**/*.pdf"}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
 		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "Bash"}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
-		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{"plan":"x"}`}}, "yes",
+		{&waitingOn{team: "dev", role: "engineer", req: &session.Request{Code: "7f3", Kind: session.ForApproval, Tool: "ExitPlanMode", Summary: `{}`}}, "yes",
 			"Cadrei can't check this kind of prompt on the screen, so answer it in its window: cadrei attach dev"},
+		// W6: with its choices read off the screen, an approval takes one
+		// of them by number, but not one that asks for text.
+		{withOptions(approval("x"), "Yes", "Yes, and don't ask again for x commands", "No"), "4", "7f3 takes yes, no, or one of its choices: 1, 2, 3. Use cadrei answer 7f3 no, for example."},
+		{withOptions(approval("x"), "Yes", "No, and tell Claude what to do differently (esc)"), "2", "7f3 takes yes, no, or one of its choices: 1. Use cadrei answer 7f3 no, for example."},
 		// Re-review of 0.2.2 (L12): a command recorded cut short.
 		{approval("rm -rf build && " + strings.Repeat("x", 290) + "…"), "yes", "That's too long for cadrei to check whole, so answer it in its window: cadrei attach dev"},
 	} {
