@@ -267,6 +267,9 @@ var (
 	removalRule = cadreiRule{setOf("uninstall", "restore")}
 	answerRule  = cadreiRule{setOf("answer")}
 	compactRule = cadreiRule{setOf("compact")}
+	// hookRule: cadrei hook, which Claude Code runs itself, never through
+	// a member's shell. Run there, it could forge a member's record.
+	hookRule = cadreiRule{setOf("hook")}
 )
 
 func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {

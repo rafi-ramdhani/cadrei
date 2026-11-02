@@ -126,7 +126,7 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 		want        runtime.Request
 	}{
 		{"Bash", `{"command":"gh pr merge 42 --squash","description":"Merge it"}`, runtime.Request{Tool: "Bash", Summary: "gh pr merge 42 --squash"}},
-		{"Bash", `{"command":"echo a\nrm -rf x\u200b\u001b[2J"}`, runtime.Request{Tool: "Bash", Summary: "echo a⏎rm -rf x??[2J"}},
+		{"Bash", `{"command":"echo a\nrm -rf x\u200b\u001b[2J"}`, runtime.Request{Tool: "Bash", Summary: "echo a⏎rm -rf x??[2J", Altered: true}},
 		{"Edit", `{"file_path":"/w/a.go","old_string":"x","new_string":"y"}`, runtime.Request{Tool: "Edit", Summary: "/w/a.go"}},
 		{"Write", `{"file_path":"/w/b.md","content":"hi"}`, runtime.Request{Tool: "Write", Summary: "/w/b.md"}},
 		{"WebFetch", `{"url":"https://example.com/x","prompt":"read"}`, runtime.Request{Tool: "WebFetch", Summary: "https://example.com/x"}},

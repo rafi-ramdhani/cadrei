@@ -26,8 +26,8 @@ import (
 //
 // In both, it refuses typing into tmux windows (any tmux command outside a
 // read-only list) and osascript keystrokes. In a member (CADREI_MEMBER is
-// set), it refuses cadrei's uninstall and restore, cadrei answer and
-// cadrei compact, in any form it can see. In the orchestrator, it asks the
+// set), it refuses cadrei's uninstall and restore, cadrei answer, cadrei
+// compact and cadrei hook, in any form it can see. In the orchestrator, it asks the
 // user before cadrei answer <code> <choice> in its strict form, in the
 // permission modes known to prompt, and refuses every other form of it.
 //
@@ -116,6 +116,7 @@ const (
 	ruleAnswer  = "answer"
 	ruleCompact = "compact"
 	ruleMemory  = "memory"
+	ruleHook    = "hook"
 )
 
 var allowable = setOf(ruleCompact, ruleMemory)
@@ -133,6 +134,8 @@ func memberRule(command string) (rule, why string) {
 		return ruleRemoval, removalRefused
 	case guardLine(answerRule, command, 0):
 		return ruleAnswer, memberAnswerRefused
+	case guardLine(hookRule, command, 0):
+		return ruleHook, hookRefused
 	case guardLine(compactRule, command, 0):
 		return ruleCompact, compactRefused
 	case guardLine(memoryRule{}, command, 0):
@@ -163,10 +166,13 @@ func memberRefused(e *env, rt runtime.Runtime, call runtime.ShellCall, rule, why
 	if st, err := os.Stat(build); err != nil || !st.IsDir() {
 		return guardRefuses(e, why)
 	}
-	key := session.CommandKey(call.Command)
-	if allowable[rule] {
+	// The allowance is for this command in this folder. It's used up in
+	// the state file before the command goes by: a write that failed
+	// would leave it there for another run.
+	key := session.CommandKey(call.Dir, call.Command)
+	if allowable[rule] && call.Dir != "" {
 		taken := false
-		session.ChangeState(build, name, guardLockWait, func(prev *session.State) *session.State {
+		_, _, err := session.ChangeState(build, name, guardLockWait, func(prev *session.State) *session.State {
 			if prev == nil {
 				return nil
 			}
@@ -176,12 +182,12 @@ func memberRefused(e *env, rt runtime.Runtime, call runtime.ShellCall, rule, why
 			}
 			return prev
 		})
-		if taken {
+		if err == nil && taken {
 			return 0
 		}
 	}
 	now := time.Now()
-	r := session.Refusal(call.Command, why, call.Dir, rule, key)
+	r := session.Refusal(call.Command, why, call.Dir, rule)
 	prev, next, err := session.ChangeState(build, name, guardLockWait, func(prev *session.State) *session.State { return session.Refuse(prev, r, now) })
 	if err != nil {
 		return guardRefuses(e, why)
@@ -234,6 +240,7 @@ const (
 	memberAnswerRefused = "Only the user can answer for a member. Ask the user to do it from the orchestrator."
 	removalRefused      = "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator."
 	compactRefused      = "Team members can't run cadrei compact. Ask the user to do it from the orchestrator."
+	hookRefused         = "Team members can't run cadrei hook: cadrei's hooks run on their own."
 	strictRefused       = "Run cadrei answer <code> <choice> on its own, with nothing around it, so cadrei can ask you."
 	typingRefused       = "Cadrei sessions can't type into tmux windows. To compact a member, run cadrei compact <team>/<role> [project]."
 	keystrokeRefused    = "Cadrei sessions can't press keys in other apps."

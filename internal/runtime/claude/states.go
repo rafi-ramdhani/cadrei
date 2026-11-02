@@ -197,7 +197,7 @@ func request(tool string, input json.RawMessage) *runtime.Request {
 			summary = tool + " " + summary
 		}
 	}
-	r.Summary = runtime.RequestText(summary, runtime.SummaryLimit)
+	r.Summary, r.Altered = runtime.RequestText(summary, runtime.SummaryLimit), runtime.Altered(summary)
 	if strings.HasSuffix(r.Summary, "…") {
 		r.Full = runtime.RequestText(summary, runtime.FullLimit)
 	}

@@ -79,12 +79,12 @@ func TestAHeldRecordOutlivesTheTurn(t *testing.T) {
 // AllowedFor.
 func TestARefusalIsAllowedOnce(t *testing.T) {
 	t0 := time.Date(2026, 11, 2, 16, 0, 0, 0, time.UTC)
-	if s := Refuse(nil, Refusal("cadrei compact dev/pm", "No.", "/src", "compact", CommandKey("cadrei compact dev/pm")), t0); s.State != Unknown || len(s.HeldOnes()) != 1 {
+	if s := Refuse(nil, Refusal("cadrei compact dev/pm", "No.", "/src", "compact"), t0); s.State != Unknown || len(s.HeldOnes()) != 1 {
 		t.Fatalf("with no state: %+v", s)
 	}
 	idle := &State{State: Idle, Since: t0}
-	key := CommandKey("cadrei compact dev/pm")
-	s := Refuse(idle, Refusal("cadrei compact dev/pm", "No.", "/src", "compact", key), t0.Add(time.Minute))
+	key := CommandKey("/src", "cadrei compact dev/pm")
+	s := Refuse(idle, Refusal("cadrei compact dev/pm", "No.", "/src", "compact"), t0.Add(time.Minute))
 	if s.State != Idle || !s.Since.Equal(t0) || len(s.Open) != 1 || idle.Open != nil {
 		t.Fatalf("refused: %+v (prev %+v)", s, idle)
 	}
@@ -95,13 +95,18 @@ func TestARefusalIsAllowedOnce(t *testing.T) {
 	GiveCode(t.TempDir()+"/m.json", s)
 	code := r.Code
 	// The same command refused again: the same record. Another: its own.
-	s = Refuse(s, Refusal("cadrei compact dev/pm", "No.", "/src", "compact", key), t0.Add(2*time.Minute))
+	s = Refuse(s, Refusal("cadrei compact dev/pm", "No.", "/src", "compact"), t0.Add(2*time.Minute))
 	if len(s.Open) != 1 || s.Open[0].Code != code || !s.Open[0].At.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("again: %+v", s.Open)
 	}
-	s = Refuse(s, Refusal("cadrei compact dev/qa", "No.", "/src", "compact", CommandKey("cadrei compact dev/qa")), t0.Add(2*time.Minute))
+	s = Refuse(s, Refusal("cadrei compact dev/qa", "No.", "/src", "compact"), t0.Add(2*time.Minute))
 	if len(s.Open) != 2 {
 		t.Fatalf("another: %+v", s.Open)
+	}
+	// The same command in another folder is another record, under its
+	// own key (review M3).
+	if o := Refusal("cadrei compact dev/pm", "No.", "/other", "compact"); o.Key == key {
+		t.Fatal("another folder, the same key")
 	}
 	if s.TakeAllowance(key, t0.Add(3*time.Minute)) {
 		t.Fatal("an allowance before any yes")
@@ -112,8 +117,11 @@ func TestARefusalIsAllowedOnce(t *testing.T) {
 	if len(s.Open) != 1 || len(s.Allowed) != 1 || s.Allowed[0].Key != key || !s.Allowed[0].Until.Equal(t0.Add(3*time.Minute+AllowedFor)) {
 		t.Fatalf("allowed: %+v", s)
 	}
-	if s.TakeAllowance(CommandKey("cadrei compact dev/pm "), t0.Add(4*time.Minute)) {
+	if s.TakeAllowance(CommandKey("/src", "cadrei compact dev/pm "), t0.Add(4*time.Minute)) {
 		t.Fatal("another command took the allowance")
+	}
+	if s.TakeAllowance(CommandKey("/other", "cadrei compact dev/pm"), t0.Add(4*time.Minute)) {
+		t.Fatal("another folder took the allowance")
 	}
 	if !s.TakeAllowance(key, t0.Add(4*time.Minute)) || s.TakeAllowance(key, t0.Add(4*time.Minute)) {
 		t.Fatal("the allowance isn't once")
@@ -136,7 +144,7 @@ func TestRefusalsNeverPushOutAPrompt(t *testing.T) {
 	s := Apply(nil, runtime.StateEvent{Name: runtime.EvPermission, Tool: "Bash", Request: &runtime.Request{Tool: "Bash", Summary: "gh pr merge 54"}}, t0)
 	for i := 0; i < MaxRequests+3; i++ {
 		cmd := "cadrei compact dev/r" + strings.Repeat("x", i)
-		s = Refuse(s, Refusal(cmd, "No.", "", "compact", CommandKey(cmd)), t0.Add(time.Duration(i)*time.Second))
+		s = Refuse(s, Refusal(cmd, "No.", "", "compact"), t0.Add(time.Duration(i)*time.Second))
 	}
 	if len(s.Live()) != 1 || s.Current().Summary != "gh pr merge 54" || len(s.HeldOnes()) != MaxRequests || s.State != Waiting {
 		t.Fatalf("live %+v, %d held", s.Live(), len(s.HeldOnes()))
@@ -150,9 +158,16 @@ func TestRefusalsNeverPushOutAPrompt(t *testing.T) {
 // in its own file, as an approval's is.
 func TestARefusalKeepsALongCommandWhole(t *testing.T) {
 	long := "echo " + strings.Repeat("x", runtime.SummaryLimit)
-	r := Refusal(long, "No.", "relative/dir", "memory", CommandKey(long))
-	if !strings.HasSuffix(r.Summary, "…") || r.full != long || r.Dir != "" {
+	r := Refusal(long, "No.", "relative/dir", "memory")
+	if !strings.HasSuffix(r.Summary, "…") || r.full != long || r.Dir != "" || r.Altered {
 		t.Fatalf("%+v", r)
+	}
+	// A tab or a control character shows otherwise, so the record says
+	// its text isn't the command itself (review L3). A line break doesn't.
+	for cmd, altered := range map[string]bool{"rm -f out\x01.o": true, "printf 'a\tb'": true, "echo a\necho b": false, "echo ✓": false} {
+		if r := Refusal(cmd, "No.", "/src", "memory"); r.Altered != altered {
+			t.Errorf("%q: altered %v", cmd, r.Altered)
+		}
 	}
 }
 

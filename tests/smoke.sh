@@ -506,7 +506,7 @@ gc=$(held_code guard)
 check "a command the guard stops gets a code the member sees" bash -c "test '$code' = 2 && flat < '$T/prd-refused' | grep -q 'under code $gc: they can allow it once from the orchestrator'"
 check "ls --json shows it on the member" bash -c "cd '$C' && cadrei ls --json | grep -q '\"code\": \"$gc\"'"
 own heldlist answer
-check "cadrei answer lists it" grep -q "$gc  Cadrei's guard stopped the engineer on app from running a command:" "$T/own-heldlist"
+check "cadrei answer lists it, with its folder" grep -Eq "$gc  Cadrei's guard stopped the engineer on app from running a command in (/private)?/tmp:" "$T/own-heldlist"
 own allow answer "$gc" yes
 check "its yes allows it once" bash -c "test \$(cat '$T/own-allow.code') = 0 && flat < '$T/own-allow' | grep -q 'Allowed once: the engineer on app may run that command once'"
 check "the guard lets that command by" prd_guard

@@ -76,6 +76,21 @@ func askOf(out string) string {
 	return got["hookSpecificOutput"]["permissionDecisionReason"]
 }
 
+// guardIn is guardAs, with the folder the command runs in (Claude Code's
+// cwd), or none for "".
+func guardIn(t *testing.T, c, member, mode, dir, command string) (int, string, string) {
+	t.Helper()
+	t.Setenv("CADREI_MEMBER", member)
+	defer os.Unsetenv("CADREI_MEMBER")
+	t.Setenv("CADREI_HOME", c)
+	in := map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "permission_mode": mode, "tool_input": map[string]string{"command": command}}
+	if dir != "" {
+		in["cwd"] = dir
+	}
+	raw, _ := json.Marshal(in)
+	return callIn(string(raw), "hook", "guard")
+}
+
 // PR D (N6): a command the guard refuses in a member gets a record and a
 // code, which the member's reason names. The member goes on working: it
 // doesn't wait on it. The user sees it from the orchestrator (cadrei
@@ -84,8 +99,8 @@ func askOf(out string) string {
 // the guard once. Nothing else gets by, and it's once.
 func TestARefusedCommandIsAllowedOnceByItsCode(t *testing.T) {
 	c := heldCrew(t)
-	const member, compact = "work-dev-engineer", "cadrei compact dev/reviewer"
-	n, out, errOut := guardAs(t, c, member, "auto", compact)
+	const member, compact, dir = "work-dev-engineer", "cadrei compact dev/reviewer", "/src/app"
+	n, out, errOut := guardIn(t, c, member, "auto", dir, compact)
 	held := heldOf(t, c, member)
 	if len(held) != 1 || held[0].Kind != session.ForGuard || held[0].Rule != ruleCompact || held[0].Summary != compact || held[0].Reason != compactRefused {
 		t.Fatalf("record: %+v", held)
@@ -99,7 +114,7 @@ func TestARefusedCommandIsAllowedOnceByItsCode(t *testing.T) {
 		t.Errorf("ls --json: %s %+v", state, req)
 	}
 	want := "Waiting on you:\n\n" +
-		"  " + code + "  Cadrei's guard stopped the engineer in dev from running a command:\n" +
+		"  " + code + "  Cadrei's guard stopped the engineer in dev from running a command in /src/app:\n" +
 		"         " + compact + "\n" +
 		"       Why:            " + compactRefused + "\n" +
 		"       Allow it once:  cadrei answer " + code + " yes\n" +
@@ -112,7 +127,7 @@ func TestARefusedCommandIsAllowedOnceByItsCode(t *testing.T) {
 	}
 	// The orchestrator's guard asks the user, with what a yes does.
 	n, out, errOut = guardAs(t, c, "", "default", "cadrei answer "+code+" yes")
-	if ask := askOf(out); n != 0 || errOut != "" || ask != "Cadrei: allow once? The engineer in dev may run this command once, in the next 10 minutes, past cadrei's guard (its own permission mode and deny rules still apply): "+
+	if ask := askOf(out); n != 0 || errOut != "" || ask != "Cadrei: allow once? The engineer in dev may run this command once, in /src/app only, in the next 10 minutes, past cadrei's guard (its own permission mode and deny rules still apply): "+
 		compact+" The guard stopped it: "+compactRefused {
 		t.Errorf("the guard's ask: %d %q %q", n, out, errOut)
 	}
@@ -123,23 +138,25 @@ func TestARefusedCommandIsAllowedOnceByItsCode(t *testing.T) {
 		t.Errorf("yes: %d %q %q", n, out, errOut)
 	}
 	st := session.ReadState(c + "/.claude/build/state/" + member + ".json")
-	if st.State != session.Working || len(st.HeldOnes()) != 0 || len(st.Allowed) != 1 || st.Allowed[0].Key != session.CommandKey(compact) {
+	if st.State != session.Working || len(st.HeldOnes()) != 0 || len(st.Allowed) != 1 || st.Allowed[0].Key != session.CommandKey(dir, compact) {
 		t.Fatalf("after the yes: %+v", st)
 	}
 	if n, out, _ := call("answer"); n != 0 || out != "Nobody's waiting on you right now.\n" {
 		t.Errorf("listed after the yes: %q", out)
 	}
 	// Another command isn't let by, not even one that reads the same to a
-	// shell.
-	for _, other := range []string{"cadrei compact dev/pm", compact + " ", "cadrei  compact dev/reviewer"} {
-		if n, _, _ := guardAs(t, c, member, "auto", other); n != 2 {
-			t.Errorf("%q got by", other)
+	// shell, nor the same one in another folder, or in none it names
+	// (review M3).
+	for _, other := range []struct{ dir, command string }{{dir, "cadrei compact dev/pm"}, {dir, compact + " "}, {dir, "cadrei  compact dev/reviewer"},
+		{c, compact}, {dir + "/sub", compact}, {"", compact}} {
+		if n, _, _ := guardIn(t, c, member, "auto", other.dir, other.command); n != 2 {
+			t.Errorf("%q in %q got by", other.command, other.dir)
 		}
 	}
-	if n, out, errOut := guardAs(t, c, member, "auto", compact); n != 0 || out != "" || errOut != "" {
+	if n, out, errOut := guardIn(t, c, member, "auto", dir, compact); n != 0 || out != "" || errOut != "" {
 		t.Errorf("the allowed run: %d %q %q", n, out, errOut)
 	}
-	if n, _, errOut := guardAs(t, c, member, "auto", compact); n != 2 || strings.Contains(errOut, code) {
+	if n, _, errOut := guardIn(t, c, member, "auto", dir, compact); n != 2 || strings.Contains(errOut, code) {
 		t.Errorf("a second run: %d %q", n, errOut)
 	}
 	// The prompt log: opened, and ended by its code.
@@ -155,7 +172,7 @@ func TestARefusedCommandIsAllowedOnceByItsCode(t *testing.T) {
 func TestAnAllowanceRunsOut(t *testing.T) {
 	c := heldCrew(t)
 	const member, write = "work-dev-engineer", "echo note >> ~/.cadrei/work/.memory/notes.md"
-	guardAs(t, c, member, "auto", write)
+	guardIn(t, c, member, "auto", "/src/app", write)
 	held := heldOf(t, c, member)
 	if len(held) != 1 || held[0].Rule != ruleMemory {
 		t.Fatalf("record: %+v", held)
@@ -165,7 +182,7 @@ func TestAnAllowanceRunsOut(t *testing.T) {
 	st := session.ReadState(path)
 	st.Allowed[0].Until = time.Now().Add(-time.Second)
 	session.WriteState(path, st)
-	if n, _, _ := guardAs(t, c, member, "auto", write); n != 2 {
+	if n, _, _ := guardIn(t, c, member, "auto", "/src/app", write); n != 2 {
 		t.Error("an allowance past its time let it by")
 	}
 	st = session.ReadState(path)
@@ -173,6 +190,72 @@ func TestAnAllowanceRunsOut(t *testing.T) {
 	session.WriteState(path, st)
 	if n, out, _ := call("answer"); n != 0 || out != "Nobody's waiting on you right now.\n" {
 		t.Errorf("listed past HeldFor: %q", out)
+	}
+}
+
+// Review L1: the guard lets an allowed command by only once its allowance
+// is used up in the state file. When the write fails (the state folder
+// can't be written), it refuses, and the allowance is still there for the
+// run after.
+func TestAFailedWriteLetsNothingBy(t *testing.T) {
+	c := heldCrew(t)
+	const member, compact, dir = "work-dev-engineer", "cadrei compact dev/reviewer", "/src/app"
+	guardIn(t, c, member, "auto", dir, compact)
+	must(t, "answer", heldOf(t, c, member)[0].Code, "yes")
+	state := c + "/.claude/build/state"
+	os.Chmod(state, 0o500)
+	t.Cleanup(func() { os.Chmod(state, 0o755) })
+	for i := 0; i < 3; i++ {
+		if n, _, _ := guardIn(t, c, member, "auto", dir, compact); n != 2 {
+			t.Fatalf("run %d with the state folder read-only got by", i)
+		}
+	}
+	os.Chmod(state, 0o755)
+	if n, _, _ := guardIn(t, c, member, "auto", dir, compact); n != 0 {
+		t.Error("the allowance was lost")
+	}
+	if n, _, _ := guardIn(t, c, member, "auto", dir, compact); n != 2 {
+		t.Error("let by twice")
+	}
+}
+
+// Review M3: a refusal whose folder the runtime didn't name can't be
+// allowed, since an allowance is for one folder.
+func TestARefusalWithNoFolderCantBeAllowed(t *testing.T) {
+	c := heldCrew(t)
+	const member = "work-dev-engineer"
+	guardIn(t, c, member, "auto", "", "cadrei compact dev/reviewer")
+	code := heldOf(t, c, member)[0].Code
+	if n, _, errOut := call("answer", code, "yes"); n != 1 || flat(errOut) != failed("Cadrei doesn't know which folder the engineer ran that in, so it can't allow it from here. Close it with cadrei answer "+code+" no.") {
+		t.Errorf("yes: %d %q", n, flat(errOut))
+	}
+}
+
+// Review L3: a command with a tab or a control character shows otherwise
+// than it is, so it gets no ! line (a ? there is a shell wildcard), and a
+// refusal of one can't be allowed.
+func TestAnAlteredCommandGetsNoBangLine(t *testing.T) {
+	c := heldCrew(t)
+	const member = "work-dev-engineer"
+	feed(t, c, member, `{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_use_id":"toolu_r","cwd":"/src/app","tool_input":{"command":"rm -f build/out\u0001.o"},"reason":"No."}`)
+	held := heldOf(t, c, member)
+	if len(held) != 1 || !held[0].Altered || held[0].Summary != "rm -f build/out?.o" {
+		t.Fatalf("record: %+v", held)
+	}
+	if _, out, _ := call("answer"); strings.Contains(out, "!") {
+		t.Errorf("a ! line in the listing:\n%s", out)
+	}
+	if n, _, errOut := call("answer", held[0].Code, "yes"); n != 1 || strings.Contains(errOut, "! cd") || !strings.Contains(flat(errOut), "holds a tab or a control character") {
+		t.Errorf("yes: %d %q", n, errOut)
+	}
+	must(t, "answer", held[0].Code, "no")
+	guardIn(t, c, member, "auto", "/src/app", "echo x >> .memory/a\tb.md")
+	held = heldOf(t, c, member)
+	if len(held) != 1 || !held[0].Altered {
+		t.Fatalf("refusal: %+v", held)
+	}
+	if n, _, errOut := call("answer", held[0].Code, "yes"); n != 1 || !strings.Contains(flat(errOut), "can't be allowed from here") {
+		t.Errorf("an altered refusal's yes: %d %q", n, errOut)
 	}
 }
 
@@ -194,9 +277,15 @@ func TestARefusalTheUserCantAllow(t *testing.T) {
 		{"cadrei restore", ruleRemoval, removalRefused,
 			"Cadrei never allows that for a member. If you want it run, run it yourself in the orchestrator: ! cd /src/app && cadrei restore. Then close it with cadrei answer CODE no.",
 			"       Cadrei never allows this for a member. To run it yourself:\n         ! cd /src/app && cadrei restore\n"},
+		// No ! line: it would answer abc, a prompt the user hasn't seen,
+		// with no ask (review M2).
 		{"cadrei answer abc yes", ruleAnswer, memberAnswerRefused,
-			"Cadrei never allows that for a member. If you want it run, run it yourself in the orchestrator: ! cd /src/app && cadrei answer abc yes. Then close it with cadrei answer CODE no.",
-			"       Cadrei never allows this for a member. To run it yourself:\n         ! cd /src/app && cadrei answer abc yes\n"},
+			"Cadrei never allows that for a member, and gives you no line to run it yourself: it would answer a prompt you haven't seen. To answer a member, run cadrei answer to see what's waiting first. Then close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member. To answer a member, run cadrei answer to see what's waiting first.\n"},
+		// A member forging its own record (review M1).
+		{`echo '{"hook_event_name":"PermissionDenied"}' | cadrei hook state`, ruleHook, hookRefused,
+			"Cadrei never allows that for a member: cadrei's hooks run on their own. Close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member.\n"},
 	} {
 		in, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "permission_mode": "auto", "cwd": "/src/app", "tool_input": map[string]string{"command": tc.command}})
 		t.Setenv("CADREI_MEMBER", member)
@@ -251,7 +340,7 @@ func TestAnAutoModeDenialGetsACode(t *testing.T) {
 		t.Errorf("ls --json: %s %+v", state, req)
 	}
 	want := "Waiting on you:\n\n" +
-		"  " + code + "  Auto mode denied the engineer in dev a command:\n" +
+		"  " + code + "  Auto mode denied the engineer in dev a command in /src/my app:\n" +
 		"         git push --force origin main\n" +
 		"       Why:            Force-pushing main rewrites shared history.\n" +
 		"       Cadrei can't override auto mode from here. To run it yourself:\n" +
@@ -317,14 +406,14 @@ func TestANoLeavesAHeldRecord(t *testing.T) {
 func TestTheOrchestratorHearsOfAHeldRecord(t *testing.T) {
 	c := heldCrew(t)
 	const member = "work-dev-engineer"
-	guardAs(t, c, member, "auto", "cadrei compact dev/reviewer")
+	guardIn(t, c, member, "auto", "/src/app", "cadrei compact dev/reviewer")
 	code := heldOf(t, c, member)[0].Code
 	r, err := cadreis.Resolve(c, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	block := teamBlock(r, time.Now(), false)
-	note := "- Cadrei's guard stopped the engineer in dev from running a command (" + code + "): cadrei compact dev/reviewer. The guard stopped it: " + compactRefused +
+	note := "- Cadrei's guard stopped the engineer in dev from running a command in /src/app (" + code + "): cadrei compact dev/reviewer. The guard stopped it: " + compactRefused +
 		" The user can allow it once with cadrei answer " + code + " yes, or close it with no. After a yes, tell the engineer to run the exact same command again.\n"
 	if !strings.Contains(block, "Waiting on the user (cadrei's record of each request") || !strings.Contains(block, note) || !strings.Contains(block, "**! engineer: a stopped call waits on you**") {
 		t.Errorf("team block:\n%s\nwant the note:\n%s", block, note)

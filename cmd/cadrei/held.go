@@ -33,26 +33,49 @@ func heldWhat(req *session.Request) string {
 	return "a call to " + req.Tool
 }
 
-// heldHead is a held record's first line in the listing and the note.
+// heldHead is a held record's first line in the listing and the note,
+// with the folder the member ran it in, when the record has it.
 func heldHead(w *waitingOn) string {
-	if w.req.Kind == session.ForGuard {
-		return "Cadrei's guard stopped " + w.place() + " from running " + heldWhat(w.req)
+	in := ""
+	if w.req.Dir != "" {
+		in = " in " + display(w.req.Dir)
 	}
-	return "Auto mode denied " + w.place() + " " + heldWhat(w.req)
+	if w.req.Kind == session.ForGuard {
+		return "Cadrei's guard stopped " + w.place() + " from running " + heldWhat(w.req) + in
+	}
+	return "Auto mode denied " + w.place() + " " + heldWhat(w.req) + in
 }
 
 // heldAllowable reports whether a yes can allow w's held record: a guard's
-// refusal by a rule the user can allow, of a command cadrei shows whole.
+// refusal by a rule the user can allow, of a command cadrei shows whole
+// and as it is, in a folder it knows (the allowance is for that folder).
 func heldAllowable(w *waitingOn) bool {
-	return w.req.Kind == session.ForGuard && allowable[w.req.Rule] && w.req.Key != "" && !strings.HasSuffix(w.req.Summary, "…")
+	return w.req.Kind == session.ForGuard && allowable[w.req.Rule] && w.req.Key != "" && w.req.Dir != "" &&
+		!w.req.Altered && !strings.HasSuffix(w.req.Summary, "…")
+}
+
+// noRoute are the refusals cadrei offers no ! line for. Typing and
+// keystrokes could press keys in another session's window. A member's
+// cadrei answer names a code for a prompt the user hasn't seen: a ! line
+// would answer it with no ask. cadrei hook is Claude Code's to run.
+var noRoute = setOf(ruleTyping, ruleKeys, ruleAnswer, ruleHook)
+
+// heldRoute is bangRoute for w's held record, but none for a refusal in
+// noRoute.
+func heldRoute(w *waitingOn) (line string, ok bool) {
+	if w.req.Kind == session.ForGuard && noRoute[w.req.Rule] {
+		return "", false
+	}
+	return bangRoute(w)
 }
 
 // bangRoute is the line the user types in the orchestrator to run w's
 // command themselves, in the folder the member ran it in: for a shell
-// command of one line that cadrei shows whole. ok is false for any other.
+// command of one line that cadrei shows whole and as it is (the line is
+// the command itself). ok is false for any other.
 func bangRoute(w *waitingOn) (line string, ok bool) {
 	s := w.req.Summary
-	if w.req.Tool != "Bash" || s == "" || strings.Contains(s, "⏎") || strings.HasSuffix(s, "…") {
+	if w.req.Tool != "Bash" || w.req.Altered || s == "" || strings.Contains(s, "⏎") || strings.HasSuffix(s, "…") {
 		return "", false
 	}
 	dir := w.req.Dir
@@ -68,13 +91,17 @@ func bangRoute(w *waitingOn) (line string, ok bool) {
 // heldYes is why a yes can't answer w's held record, or "" when it can.
 func heldYes(w *waitingOn, code string, c func(string) string) string {
 	closeIt := " Then close it with " + c("cadrei answer "+code+" no") + "."
-	route, ok := bangRoute(w)
+	closeNow := " Close it with " + c("cadrei answer "+code+" no") + "."
+	route, ok := heldRoute(w)
 	switch {
 	case heldAllowable(w):
 		return ""
 	case w.req.Kind == session.ForDenied && ok:
 		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. To run it yourself, type this in the orchestrator: " +
 			c(route) + "." + closeIt
+	case w.req.Kind == session.ForDenied && w.req.Altered:
+		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. The command holds a tab or a control character, which cadrei can't show you as it is, so there's no ! line for it either: tell the " +
+			w.role + " what to do instead." + closeIt
 	case w.req.Kind == session.ForDenied && w.req.Tool == "Bash":
 		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. It's too long or has several lines, so it can't be run with ! either: tell the " +
 			w.role + " what to do instead." + closeIt
@@ -82,7 +109,16 @@ func heldYes(w *waitingOn, code string, c func(string) string) string {
 		return "Auto mode denied that " + w.req.Tool + " call, and cadrei can't override the " + w.role + "'s auto mode from here. Only a shell command can be run with !, so tell the " +
 			w.role + " what to do instead." + closeIt
 	case w.req.Rule == ruleTyping || w.req.Rule == ruleKeys:
-		return "Cadrei never allows that for a member: it could press keys in another session's window, an approval too. Close it with " + c("cadrei answer "+code+" no") + "."
+		return "Cadrei never allows that for a member: it could press keys in another session's window, an approval too." + closeNow
+	case w.req.Rule == ruleAnswer:
+		return "Cadrei never allows that for a member, and gives you no line to run it yourself: it would answer a prompt you haven't seen. To answer a member, run " +
+			c("cadrei answer") + " to see what's waiting first." + closeIt
+	case w.req.Rule == ruleHook:
+		return "Cadrei never allows that for a member: cadrei's hooks run on their own." + closeNow
+	case allowable[w.req.Rule] && w.req.Dir == "":
+		return "Cadrei doesn't know which folder the " + w.role + " ran that in, so it can't allow it from here." + closeNow
+	case allowable[w.req.Rule] && w.req.Altered:
+		return "That command holds a tab or a control character, which cadrei can't show you as it is, so it can't be allowed from here." + closeNow
 	case allowable[w.req.Rule]:
 		return "That command is too long for cadrei to show you whole, so it can't be allowed from here. Close it with " + c("cadrei answer "+code+" no") +
 			", and ask the " + w.role + " to split it up."
@@ -109,7 +145,7 @@ func checkHeld(w *waitingOn, code, choice string, c func(string) string) string 
 // heldAsk is the guard's text for answering w's held record with choice.
 func heldAsk(w *waitingOn, choice string) string {
 	if choice == "yes" {
-		return "Cadrei: allow once? " + capital(w.place()) + " may run this command once, in the next " + minutes(session.AllowedFor) +
+		return "Cadrei: allow once? " + capital(w.place()) + " may run this command once, in " + display(w.req.Dir) + " only, in the next " + minutes(session.AllowedFor) +
 			", past cadrei's guard (its own permission mode and deny rules still apply): " + w.req.Summary + " The guard stopped it: " + w.req.Reason
 	}
 	return "Cadrei: close it? " + capital(w.place()) + " won't get to run " + w.req.Summary + ". " + heldWhy(w.req)
@@ -178,7 +214,7 @@ func heldNote(w *waitingOn) string {
 	if heldAllowable(w) {
 		return who + " The user can allow it once with cadrei answer " + w.req.Code + " yes, or close it with no. After a yes, tell the " + w.role + " to run the exact same command again."
 	}
-	if route, ok := bangRoute(w); ok && !(w.req.Rule == ruleTyping || w.req.Rule == ruleKeys) {
+	if route, ok := heldRoute(w); ok {
 		return who + " Cadrei can't allow it from here. The user can run it themselves by typing " + route + ", and close it with cadrei answer " + w.req.Code + " no."
 	}
 	return who + " Cadrei can't allow it from here. The user closes it with cadrei answer " + w.req.Code + " no."
@@ -197,7 +233,7 @@ func (e *env) listHeld(w *waitingOn, pad func(string) string) {
 		e.say("%s", "       "+pad("Say no:")+cmd("cadrei answer "+code+" no"))
 		return
 	}
-	switch route, ok := bangRoute(w); {
+	switch route, ok := heldRoute(w); {
 	case w.req.Kind == session.ForDenied && ok:
 		e.say("%s", "       Cadrei can't override auto mode from here. To run it yourself:")
 		e.say("%s", "         "+cmd(route))
@@ -205,6 +241,8 @@ func (e *env) listHeld(w *waitingOn, pad func(string) string) {
 		e.say("%s", "       Cadrei can't override auto mode from here. Tell the "+w.role+" what to do instead.")
 	case w.req.Rule == ruleTyping || w.req.Rule == ruleKeys:
 		e.say("%s", "       Cadrei never allows this for a member: it could press keys in another session's window.")
+	case w.req.Rule == ruleAnswer:
+		e.say("%s", "       Cadrei never allows this for a member. To answer a member, run "+cmd("cadrei answer")+" to see what's waiting first.")
 	case ok:
 		e.say("%s", "       Cadrei never allows this for a member. To run it yourself:")
 		e.say("%s", "         "+cmd(route))

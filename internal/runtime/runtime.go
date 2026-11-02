@@ -319,7 +319,10 @@ type Request struct {
 	Summary string // what it would run or touch: a command, a path, a URL
 	// Full is Summary whole, when Summary had to be cut short (at most
 	// FullLimit, cut again past that), so an answer can check it all.
-	Full     string
+	Full string
+	// Altered: what it would run held characters Summary shows otherwise
+	// (Altered), so Summary isn't the command itself.
+	Altered  bool
 	Question string   // a question's text, for a question
 	Options  []string // a question's option labels, at most MaxOptions
 	// Multi: a question that has no options, more options than recorded,
@@ -382,6 +385,15 @@ func TraceWord(s string) string {
 		return ""
 	}
 	return s
+}
+
+// Altered reports whether RequestText changes text other than by its line
+// breaks and its length: it holds a tab, or a control or invisible
+// character, so what cadrei shows isn't the text itself.
+func Altered(text string) bool {
+	return strings.ContainsFunc(strings.ReplaceAll(text, "\r\n", "\n"), func(r rune) bool {
+		return r != '\n' && (r == '\t' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || r == ' ' || r == ' ' || r == '￼')
+	})
 }
 
 // RequestText makes text one printable line of at most limit characters:

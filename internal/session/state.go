@@ -119,9 +119,10 @@ type Allowance struct {
 }
 
 // CommandKey is the digest a guard's refusal and its allowance go by: of
-// the exact command, as the member's runtime passed it.
-func CommandKey(command string) string {
-	sum := sha256.Sum256([]byte(command))
+// the exact command, as the member's runtime passed it, and the folder it
+// ran in, so a yes for one folder lets nothing by in another.
+func CommandKey(dir, command string) string {
+	sum := sha256.Sum256([]byte(dir + "\x00" + command))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -167,6 +168,9 @@ type Request struct {
 	Dir    string `json:"dir,omitempty"`
 	Rule   string `json:"rule,omitempty"`
 	Key    string `json:"key,omitempty"`
+	// Altered: what it would run held characters Summary shows otherwise
+	// (runtime.Altered), so Summary isn't the command itself.
+	Altered bool `json:"altered,omitempty"`
 	// Answering is when an answer by its code began: its key is pressed
 	// right after, so the tool's end may come before the answer drops it.
 	Answering time.Time `json:"answering,omitempty"`
@@ -480,7 +484,7 @@ func unchanged(prev *State) *State {
 // record is a new request from what the runtime (or the screen) said.
 func record(kind string, r *runtime.Request, call, source string) *Request {
 	req := &Request{Kind: kind, Tool: r.Tool, Summary: r.Summary, Question: r.Question,
-		Options: slices.Clone(r.Options), Multi: r.Multi, Call: call, Source: source, full: r.Full}
+		Options: slices.Clone(r.Options), Multi: r.Multi, Call: call, Source: source, full: r.Full, Altered: r.Altered}
 	for _, p := range r.Parts {
 		req.Parts = append(req.Parts, Part{Question: p.Question, Options: slices.Clone(p.Options), Multi: p.Multi})
 	}
@@ -503,10 +507,11 @@ func (s *State) hold(r *Request) {
 // Refusal is the record of a command the guard refused by rule, for why,
 // that the member ran in dir: a ForGuard request for the shell tool, with
 // the command cut as a hook cuts a summary (and kept whole, as an
-// approval's is), and key, its digest (CommandKey).
-func Refusal(command, why, dir, rule, key string) *Request {
+// approval's is), and its digest with dir (CommandKey).
+func Refusal(command, why, dir, rule string) *Request {
 	r := &Request{Kind: ForGuard, Tool: "Bash", Summary: runtime.RequestText(command, runtime.SummaryLimit),
-		Reason: runtime.RequestText(why, runtime.FullLimit), Rule: rule, Key: key, Source: FromHook}
+		Reason: runtime.RequestText(why, runtime.FullLimit), Rule: rule, Key: CommandKey(dir, command), Source: FromHook,
+		Altered: runtime.Altered(command)}
 	if strings.HasSuffix(r.Summary, "…") {
 		r.full = runtime.RequestText(command, runtime.FullLimit)
 	}
