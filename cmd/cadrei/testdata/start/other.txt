@@ -1,0 +1,8 @@
+ Welcome to Claude Code
+
+ Use the new terminal setup for this session?
+ It changes how Option+Enter works.
+
+ ❯ 1. Yes
+   2. No
+   3. Not now, ask me later

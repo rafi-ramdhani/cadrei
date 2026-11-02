@@ -301,3 +301,95 @@ func TestA022StateFileReads(t *testing.T) {
 		t.Errorf("written back: %s", raw)
 	}
 }
+
+var trustScreen = &runtime.StartScreen{Kind: runtime.StartTrust, Title: "Do you trust the files in this folder?", Options: []string{"No, exit", "Yes, I trust this folder"}}
+
+// N5: a starting member's start-up screen is its request, and it waits on
+// it; the same screen keeps its code, wherever the pointer is; another
+// takes its place; none left means it's starting again. A member a hook
+// wrote for isn't looked at.
+func TestAStartUpScreenIsARequest(t *testing.T) {
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	start := &State{State: Starting, Since: at, Session: "s1"}
+	s := SeeStart(start, trustScreen, at)
+	if !Starts(s) || s.State != Waiting || s.WaitingFor != ForStart || len(s.Open) != 1 || s.Current().Tool != runtime.StartTrust || s.Current().Source != FromScreen {
+		t.Fatalf("seen: %+v", s)
+	}
+	s.Open[0].Code = "s7k"
+	moved := *trustScreen
+	moved.At = 1
+	if again := SeeStart(s, &moved, at.Add(time.Second)); again != s {
+		t.Errorf("the same screen changed it: %+v", again)
+	}
+	login := &runtime.StartScreen{Kind: runtime.StartLogin, Title: "Select login method", Options: []string{"a", "b"}}
+	if next := SeeStart(s, login, at); next.Current().Tool != runtime.StartLogin || next.Current().Code != "" {
+		t.Errorf("another screen: %+v", next.Current())
+	}
+	if gone := SeeStart(s, nil, at); gone.State != Starting || len(gone.Open) != 0 || gone.WaitingFor != "" || gone.Session != "s1" {
+		t.Errorf("gone: %+v", gone)
+	}
+	if same := SeeStart(start, nil, at); same != start {
+		t.Errorf("nothing to see: %+v", same)
+	}
+	for _, other := range []*State{nil, {State: Working}, {State: Idle}, {State: Waiting, Open: []*Request{{Kind: ForApproval}}}} {
+		if got := SeeStart(other, trustScreen, at); got != other {
+			t.Errorf("%+v looked at: %+v", other, got)
+		}
+	}
+}
+
+// Any hook means the start-up screens are behind it: a start-up request
+// still open was answered in its window, and goes.
+func TestAHookEndsAStartUpRequest(t *testing.T) {
+	s := SeeStart(&State{State: Starting}, trustScreen, time.Now())
+	for _, ev := range []runtime.StateEvent{{Name: runtime.EvPrompt}, pre("Bash", "toolu_1", "k"), {Name: runtime.EvStop}} {
+		if next := run(t, s, ev); len(next.Open) != 0 || next.State == Waiting {
+			t.Errorf("%s: %+v", ev.Name, next)
+		}
+	}
+}
+
+// N7: a safeguard stop gets a request with its two choices, kept with its
+// code while the stop lasts, and ended once it doesn't. A later stop is a
+// new one. A member with no state gets none. Any hook but an idle
+// reminder means it's going again.
+func TestASafeguardStopIsARequest(t *testing.T) {
+	at := time.Date(2026, 1, 1, 10, 0, 5, 0, time.UTC)
+	idle := &State{State: Idle}
+	s := SeeStop(idle, at, true)
+	if s == idle || len(s.Open) != 1 || s.Current().Kind != ForSafeguard || !s.Current().At.Equal(at) || s.Current().Source != FromTranscript ||
+		len(s.Current().Options) != 2 || s.State != Idle {
+		t.Fatalf("stopped: %+v %+v", s, s.Current())
+	}
+	if again := SeeStop(s, at, true); again != s {
+		t.Errorf("the same stop changed it: %+v", again)
+	}
+	if later := SeeStop(s, at.Add(time.Minute), true); later == s || !later.Current().At.Equal(at.Add(time.Minute)) || len(later.Open) != 1 {
+		t.Errorf("a later stop: %+v", later.Current())
+	}
+	if over := SeeStop(s, time.Time{}, false); len(over.Open) != 0 {
+		t.Errorf("over: %+v", over)
+	}
+	if SeeStop(nil, at, true) != nil || SeeStop(idle, at, false) != idle {
+		t.Error("nothing to record")
+	}
+	if kept := run(t, s, runtime.StateEvent{Name: runtime.EvIdleReminder}); len(kept.Open) != 1 {
+		t.Errorf("an idle reminder: %+v", kept)
+	}
+	if gone := run(t, s, pre("Bash", "toolu_1", "k")); len(gone.Open) != 0 || gone.State != Working {
+		t.Errorf("going again: %+v", gone)
+	}
+}
+
+// A start-up screen that ends with no answer by its code was answered in
+// its window, whatever ended its request: never cancelled.
+func TestAStartUpScreenEndsInItsWindow(t *testing.T) {
+	build := t.TempDir()
+	s := SeeStart(&State{State: Starting}, trustScreen, time.Now())
+	s.Open[0].Code = "s7k"
+	LogPrompts(build, "work-dev-engineer", s, run(t, s, runtime.StateEvent{Name: runtime.EvPrompt}), Ending(runtime.EvPrompt), time.Now())
+	raw, _ := os.ReadFile(PromptLogPath(build))
+	if !strings.Contains(string(raw), `"code":"s7k","kind":"start","tool":"trust","source":"screen","event":"ended","ended":"in_window"`) {
+		t.Errorf("log: %s", raw)
+	}
+}

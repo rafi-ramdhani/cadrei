@@ -1,0 +1,14 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│                                                                              │
+│ Do you trust the files in this folder?                                       │
+│                                                                              │
+│ /Users/me/work/app                                                           │
+│                                                                              │
+│ Claude Code may read files in this folder. Reading untrusted files may lead  │
+│ Claude Code to behave in unexpected ways.                                    │
+│                                                                              │
+│ ❯ 1. Yes, proceed                                                            │
+│   2. No, exit                                                                │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+   Enter to confirm · Esc to exit

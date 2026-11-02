@@ -24,6 +24,23 @@ type Record struct {
 	Effort     string `json:"effort,omitempty"`
 	ModelFrom  string `json:"model_from,omitempty"`
 	EffortFrom string `json:"effort_from,omitempty"`
+	// PastStop is when the safeguard stop was that its chat was started
+	// again past, on another model: that stop, still at its transcript's
+	// end until its next reply, no longer counts.
+	PastStop time.Time `json:"past_stop,omitzero"`
+}
+
+// PassStop marks member name's chat, in build, as started again past the
+// safeguard stop at at (the zero time clears the mark). It reports
+// whether it has a record to mark.
+func PassStop(build, name string, at time.Time) bool {
+	path := RecordPath(build, name)
+	r := ReadRecord(path)
+	if r == nil {
+		return false
+	}
+	r.PastStop = at
+	return WriteRecord(path, *r) == nil
 }
 
 // Choice is the model and effort a record's start passed.

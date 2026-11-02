@@ -248,9 +248,14 @@ func (e *env) reportUp(u session.Up) func(session.Result) {
 				e.show("  ", why)
 			}
 		}
-		if res.Waiting {
+		where := strings.TrimSpace(u.Team + " " + u.Project)
+		switch {
+		case res.Start != nil:
+			// A start-up screen cadrei read: it has a code.
+			e.show("  ", "It's waiting on a start-up screen and won't get going until you answer it: "+printable(res.Start.Question))
+			e.show("  ", "See its choices with "+cmd("cadrei answer")+", or answer it in its window: "+cmd("cadrei attach "+where))
+		case res.Waiting:
 			// Logged out, say: up started it, but it sits there.
-			where := strings.TrimSpace(u.Team + " " + u.Project)
 			e.show("  ", "It's waiting on a login or setup screen and won't get going until you answer it: "+cmd("cadrei attach "+where))
 		}
 	}
@@ -661,7 +666,7 @@ func dropStates(home string, names []string) {
 
 // safeguardCheck looks at each member up just started or resumed: when the
 // runtime's safeguards stopped its last reply, it won't answer, and the
-// user has to pick the model again in its window or start it fresh. Each
+// user has to start it again on another model or start it fresh. Each
 // one gets a block after all the start lines. There's no wait for the
 // runtime's own retry: nothing retries in a chat that was just resumed.
 func (e *env) safeguardCheck(r *cadreis.Resolved, team, project string, roles []string) {
@@ -678,12 +683,20 @@ func (e *env) safeguardCheck(r *cadreis.Resolved, team, project string, roles []
 		if rec == nil {
 			continue
 		}
-		if _, stopped := session.Safeguard(rt.Sessions(), build, name, rt.Sessions().TranscriptFile(rec.ID, rec.Dir)); !stopped {
+		at, stopped := session.Safeguard(rt.Sessions(), build, name, rt.Sessions().TranscriptFile(rec.ID, rec.Dir))
+		if !stopped {
 			continue
 		}
-		member := strings.TrimSpace(team + "/" + role + " " + project)
 		e.note("", markWarn, rt.Model()+"'s safeguards stopped the "+role+"'s last reply, so it won't answer.")
+		// With its state hooks, the stop gets a code, which starts it again
+		// on another model or fresh.
+		if r := session.SeeStopOf(build, name, at, true); r != nil {
+			e.show("  ", "Start it again on another model: "+cmd("cadrei answer "+r.Code+" 1 <model>"))
+			e.show("  ", "Or start it fresh: "+cmd("cadrei answer "+r.Code+" 2"))
+			continue
+		}
 		e.show("  ", "Open its window and pick the model again: "+cmd("cadrei attach "+where))
+		member := strings.TrimSpace(team + "/" + role + " " + project)
 		e.show("  ", "Or start it fresh: "+cmd("cadrei stop "+member+" --fresh"))
 		e.show("  ", "then "+cmd("cadrei up "+member))
 	}

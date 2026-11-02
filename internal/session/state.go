@@ -35,12 +35,24 @@ const (
 	// ForPrompt: a prompt cadrei read off the member's screen, when no
 	// hook said what it asks (the catch-all).
 	ForPrompt = "prompt"
+	// ForStart: a screen the runtime shows before its prompt (a folder's
+	// trust, a login), read off the member's screen while it starts: no
+	// hook runs until those screens are behind it.
+	ForStart = "start"
+	// ForSafeguard: the runtime's safeguards stopped its last reply, so it
+	// won't answer until it starts again on another model, on its chat, or
+	// starts fresh (SafeguardOptions). Read from its transcript.
+	ForSafeguard = "safeguard"
 )
+
+// SafeguardOptions are what a safeguard stop's request offers, in order.
+var SafeguardOptions = []string{"Start it again on another model", "Start it fresh"}
 
 // Where a request's record came from.
 const (
-	FromHook   = "hook"   // the runtime's hook input
-	FromScreen = "screen" // the member's screen
+	FromHook       = "hook"       // the runtime's hook input
+	FromScreen     = "screen"     // the member's screen
+	FromTranscript = "transcript" // the member's transcript
 )
 
 // Limits on what a state holds: a member rarely has more than one prompt
@@ -83,8 +95,12 @@ type Call struct {
 // it, with the code cadrei gave it: an answer names the code, so it never
 // lands on a request that changed.
 type Request struct {
-	Code     string   `json:"code"`
-	Kind     string   `json:"kind"` // ForApproval, ForQuestion or ForPrompt
+	Code string `json:"code"`
+	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt, ForStart or ForSafeguard
+	// At is when the safeguard stop it's for happened.
+	At time.Time `json:"at,omitempty"`
+	// Tool is the tool it's for; for a start-up screen, what the screen
+	// asks (one of the runtime's Start kinds).
 	Tool     string   `json:"tool,omitempty"`
 	Summary  string   `json:"summary,omitempty"`
 	Question string   `json:"question,omitempty"` // a question's text, or a screen prompt's box
@@ -217,7 +233,12 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 	next := State{}
 	if prev != nil {
 		next = *prev
-		next.Open = slices.Clone(prev.Open)
+		// A hook runs only once the start-up screens are behind it: one
+		// still open was answered in its window, unseen. Any hook but an
+		// idle reminder says it's going again after a safeguard stop.
+		next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool {
+			return r.Kind == ForStart || r.Kind == ForSafeguard && ev.Name != runtime.EvIdleReminder
+		})
 		next.Calls = slices.Clone(prev.Calls)
 	}
 	if ev.Session != "" {
@@ -479,6 +500,92 @@ func (s *State) end(id, tool string, gone bool) {
 	}
 }
 
+// Starts reports whether s is the state of a member no hook has written
+// for yet: starting, or waiting on a start-up screen.
+func Starts(s *State) bool {
+	return s != nil && (s.State == Starting || s.State == Waiting && s.ofKind(ForStart) >= 0)
+}
+
+// ofKind is the index of s's first open request of kind, or -1.
+func (s *State) ofKind(kind string) int {
+	return slices.IndexFunc(s.Open, func(r *Request) bool { return r.Kind == kind })
+}
+
+// SeeStart gives the state after a look at a starting member's screen,
+// from prev: s is the start-up screen it shows, or nil for none. A screen
+// that waits on the user gets a request, and the member waits on it; the
+// one already open stays, with its code, while the screen asks the same.
+// Once none shows (it was answered, in its window or by its code), the
+// member is starting again. Only a member no hook has written for is
+// looked at (Starts). It returns prev itself when nothing changes.
+func SeeStart(prev *State, s *runtime.StartScreen, now time.Time) *State {
+	if !Starts(prev) {
+		return prev
+	}
+	var open *Request
+	if i := prev.ofKind(ForStart); i >= 0 {
+		open = prev.Open[i]
+	}
+	switch {
+	case s == nil && open == nil:
+		return prev
+	case s != nil && open != nil && open.Tool == s.Kind && open.Question == s.Title && slices.Equal(open.Options, s.Options) && open.Multi == s.Multi:
+		return prev
+	}
+	next := *prev
+	next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForStart })
+	next.Since = now
+	if s == nil {
+		next.State, next.WaitingFor = Starting, ""
+		return &next
+	}
+	r := &Request{Kind: ForStart, Tool: s.Kind, Question: s.Title, Options: slices.Clone(s.Options), Multi: s.Multi, Source: FromScreen}
+	next.Open = append([]*Request{r}, next.Open...)
+	next.State, next.WaitingFor = Waiting, ForStart
+	return &next
+}
+
+// SeeStop gives the state after a look at whether the runtime's safeguards
+// stopped the member's last reply, from prev: stopped, at at. A stop gets
+// a request offering SafeguardOptions; one no longer stopped ends it. It
+// returns prev itself when nothing changes, so a member with no state (no
+// state hooks) gets no code.
+func SeeStop(prev *State, at time.Time, stopped bool) *State {
+	if prev == nil {
+		return nil
+	}
+	i := prev.ofKind(ForSafeguard)
+	switch {
+	case stopped && i >= 0 && prev.Open[i].At.Equal(at), !stopped && i < 0:
+		return prev
+	}
+	next := *prev
+	next.Open = slices.DeleteFunc(slices.Clone(prev.Open), func(r *Request) bool { return r.Kind == ForSafeguard })
+	if stopped {
+		next.add(&Request{Kind: ForSafeguard, At: at, Options: slices.Clone(SafeguardOptions), Source: FromTranscript})
+	}
+	return &next
+}
+
+// SeeStopOf records what SeeStop says in member name's state in build,
+// under its lock, and notes in the prompt log what changed: a stop that
+// ended with no answer by its code was dealt with in its window. It
+// returns the safeguard stop's request, when one is open.
+func SeeStopOf(build, name string, at time.Time, stopped bool) *Request {
+	prev, next, err := ChangeState(build, name, time.Second, func(prev *State) *State { return SeeStop(prev, at, stopped) })
+	if err != nil {
+		return nil
+	}
+	LogPrompts(build, name, prev, next, func(string) string { return EndedInWindow }, time.Now())
+	if next == nil {
+		return nil
+	}
+	if i := next.ofKind(ForSafeguard); i >= 0 {
+		return next.Open[i]
+	}
+	return nil
+}
+
 // Drop ends the open request under code: the user answered it. It reports
 // whether there was one.
 func (s *State) Drop(code string) bool {
@@ -647,8 +754,20 @@ type safeguardCheck struct {
 
 // Safeguard says whether the runtime's safeguards stopped member name's
 // last reply in transcript, and when, through its cache in the build
-// folder's state/<name>.safeguard.
+// folder's state/<name>.safeguard. A stop its chat was started again past
+// (its record's PastStop) doesn't count.
 func Safeguard(ops runtime.SessionOps, build, name, transcript string) (time.Time, bool) {
+	at, stopped := safeguardIn(ops, build, name, transcript)
+	if stopped && !at.IsZero() {
+		if r := ReadRecord(RecordPath(build, name)); r != nil && r.PastStop.Equal(at) {
+			return at, false
+		}
+	}
+	return at, stopped
+}
+
+// safeguardIn is Safeguard, past stops and all.
+func safeguardIn(ops runtime.SessionOps, build, name, transcript string) (time.Time, bool) {
 	st, err := os.Stat(transcript)
 	if transcript == "" || err != nil || !st.Mode().IsRegular() {
 		return time.Time{}, false

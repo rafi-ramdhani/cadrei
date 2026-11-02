@@ -159,10 +159,12 @@ func TestSafeguardStopsShow(t *testing.T) {
 	}
 	os.Remove(recent)
 	placeTranscript(t, c, "work-dev-engineer", "safeguard-stuck.jsonl", nil)
+	// N7: with a code to start it on another model or fresh.
+	hint := regexp.MustCompile("\n    x engineer   stopped by safeguards\n                 Start it on another model \\(cadrei answer ([a-z2-9]{3}) 1 <model>\\) or fresh \\(cadrei answer ([a-z2-9]{3}) 2\\).\n")
 	for _, payload := range []string{`{"hook_event_name":"Stop"}`, `{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`} {
 		feed(t, c, "work-dev-engineer", payload)
 		out := must(t, "ls")
-		if !strings.Contains(out, "\n    x engineer   stopped by safeguards\n                 Pick the model again in its window, or start it fresh.\n") {
+		if !hint.MatchString(out) {
 			t.Errorf("ls after %s:\n%s", payload, out)
 		}
 	}
@@ -185,11 +187,13 @@ func TestSafeguardStopsShow(t *testing.T) {
 	}
 	t.Setenv("CADREI_ORCHESTRATOR", "")
 	t.Setenv("CADREI_HOME", "")
-	// Resuming it says so, after the start lines, and still exits 0.
+	// Resuming it says so, after the start lines, with the stop's code
+	// (N7), and still exits 0.
 	must(t, "stop", "dev/engineer")
 	code, out, _ := call("up", "dev/engineer")
-	block := "! Claude's safeguards stopped the engineer's last reply, so it won't answer.\n  Open its window and pick the model again: cadrei attach dev\n  Or start it fresh: cadrei stop dev/engineer --fresh\n  then cadrei up dev/engineer\n"
-	if code != 0 || !strings.HasSuffix(out, block) {
+	block := regexp.MustCompile("! Claude's safeguards stopped the engineer's last reply, so it won't answer. Start it again on another model: cadrei answer ([a-z2-9]{3}) 1 <model>" +
+		" Or start it fresh: cadrei answer ([a-z2-9]{3}) 2$")
+	if m := block.FindStringSubmatch(flat(out)); code != 0 || m == nil || startState(t, c, "work-dev-engineer").Current().Code != m[1] {
 		t.Errorf("up: %d %q", code, out)
 	}
 	// The start check doesn't wait: a stop seconds ago counts.
@@ -197,8 +201,13 @@ func TestSafeguardStopsShow(t *testing.T) {
 	placeTranscript(t, c, "work-dev-engineer", "safeguard-recent.jsonl", func(b []byte) []byte {
 		return []byte(strings.ReplaceAll(string(b), "2026-01-01T10:00:05.100Z", time.Now().UTC().Format(time.RFC3339Nano)))
 	})
-	if _, out, _ := call("up", "dev/engineer"); !strings.HasSuffix(out, block) {
+	if _, out, _ := call("up", "dev/engineer"); !block.MatchString(flat(out)) {
 		t.Errorf("up with a recent stop: %q", out)
+	}
+	// With no state (no state hooks, or stopped), no code.
+	must(t, "stop", "dev/engineer")
+	if s := session.SeeStopOf(c+"/.claude/build", "work-dev-engineer", time.Now(), true); s != nil {
+		t.Errorf("a stop with no state got a code: %+v", s)
 	}
 	// A fresh chat has no transcript, and no block.
 	must(t, "stop", "dev/engineer", "--fresh")

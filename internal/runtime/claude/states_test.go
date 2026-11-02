@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -202,6 +203,130 @@ func TestWaitingKnowsTheFirstScreens(t *testing.T) {
 		"Error: Do you trust the files in this folder? check failed", "> Your last message: Select login method: SSO"} {
 		if (sessions{}).Waiting(screen) {
 			t.Errorf("waiting: %q", screen)
+		}
+	}
+}
+
+// starts are the start-up screens in testdata, drawn from Claude Code
+// 2.1.304's own text (not seen live yet).
+const starts = "../../../cmd/cadrei/testdata/start"
+
+// N5: each start-up screen is read as what it asks, its options top down
+// (no numbers, no ✔, no frame) and where the pointer is. The API key's
+// screen keeps none of the key. Several servers at once, which take
+// ticks, are only their window's to answer.
+func TestStartScreensAreReadOffTheScreen(t *testing.T) {
+	for file, want := range map[string]runtime.StartScreen{
+		"trust.txt": {Kind: runtime.StartTrust, Title: "Is this a project you created or one you trust?",
+			Options: []string{"No, exit", "Yes, I trust this folder"}},
+		"trust-old.txt": {Kind: runtime.StartTrust, Title: "Do you trust the files in this folder?",
+			Options: []string{"Yes, proceed", "No, exit"}},
+		"login.txt": {Kind: runtime.StartLogin, Title: "Select login method",
+			Options: []string{"Claude account with subscription · Pro, Max, Team, or Enterprise", "Anthropic Console account · API usage billing",
+				"3rd-party platform · Amazon Bedrock, Microsoft Foundry, or Vertex AI"}},
+		"style.txt": {Kind: runtime.StartStyle, Title: "Choose the text style that looks best with your terminal",
+			Options: []string{"Auto (match terminal)", "Dark mode", "Light mode", "Dark mode (colorblind-friendly)", "Light mode (colorblind-friendly)",
+				"Dark mode (ANSI colors only)", "Light mode (ANSI colors only)"}},
+		"server.txt": {Kind: runtime.StartServer, Title: "New MCP server found in this project: docs-search",
+			Options: []string{"Use this MCP server", "Use this and all future MCP servers in this project", "Continue without using this MCP server"}, At: 2},
+		"servers.txt": {Kind: runtime.StartServer, Title: "2 new MCP servers found in this project",
+			Options: []string{"◻ docs-search", "◻ issue-tracker"}, Multi: true},
+		"apikey.txt": {Kind: runtime.StartAPIKey, Title: "Detected a custom API key in your environment. Do you want to use this API key?",
+			Options: []string{"No (recommended)", "Yes"}},
+		"bypass.txt": {Kind: runtime.StartBypass, Title: "WARNING: Claude Code running in Bypass Permissions mode",
+			Options: []string{"No, exit", "Yes, I accept"}},
+		"imports.txt": {Kind: runtime.StartImports, Title: "Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/shared/rules.md",
+			Options: []string{"No, disable external imports", "Yes, allow external imports"}},
+		"other.txt": {Kind: runtime.StartOther, Title: "Welcome to Claude Code⏎Use the new terminal setup for this session? It changes how Option+Enter works.",
+			Options: []string{"Yes", "No", "Not now, ask me later"}},
+	} {
+		raw, err := os.ReadFile(filepath.Join(starts, file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, ok := (sessions{}).StartScreen(string(raw))
+		if !ok || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %v %+v", file, ok, got)
+		}
+		if strings.Contains(fmt.Sprint(got), "PLACEHOLDER") {
+			t.Errorf("%s keeps the key: %+v", file, got)
+		}
+	}
+}
+
+// The pointer moved is read where it is; a menu scrolled past its top, or
+// with a scroll arrow, isn't read whole; more options than cadrei keeps
+// aren't either.
+func TestAStartScreenIsReadWholeOrNot(t *testing.T) {
+	raw, _ := os.ReadFile(filepath.Join(starts, "trust.txt"))
+	moved := strings.Replace(strings.Replace(string(raw), " ❯ No, exit", "   No, exit", 1), "   Yes, I trust", " ❯ Yes, I trust", 1)
+	if got, ok := (sessions{}).StartScreen(moved); !ok || got.At != 1 || got.Multi {
+		t.Errorf("moved: %v %+v", ok, got)
+	}
+	login, _ := os.ReadFile(filepath.Join(starts, "login.txt"))
+	for name, screen := range map[string]string{
+		"scrolled": strings.Replace(string(login), "   2. Anthropic", "   9. Anthropic", 1),
+		"arrow":    strings.Replace(string(login), "   3. 3rd-party", "   ↓  3rd-party", 1) + "\n",
+		"too many": strings.Repeat("x\n", 3) + " Select login method:\n\n ❯ 1. a\n   2. b\n   3. c\n   4. d\n   5. e\n   6. f\n   7. g\n   8. h\n   9. i\n   10. j\n",
+	} {
+		if got, ok := (sessions{}).StartScreen(screen); !ok || !got.Multi {
+			t.Errorf("%s: %v %+v", name, ok, got)
+		}
+	}
+}
+
+// What a start-up screen asks is read whole: the files the imports screen
+// would import, and everything above an unknown screen's menu, up to a
+// rule. A list the screen cuts short, no list, or a question past what
+// cadrei reads leaves it to the window.
+func TestAStartScreensQuestionIsReadWhole(t *testing.T) {
+	raw, _ := os.ReadFile(filepath.Join(starts, "imports.txt"))
+	imports := string(raw)
+	two := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   ~/.aws/credentials\n", 1)
+	if got, ok := (sessions{}).StartScreen(two); !ok || got.Multi ||
+		got.Title != "Allow external CLAUDE.md file imports?⏎External imports:⏎/Users/me/shared/rules.md⏎~/.aws/credentials" {
+		t.Errorf("two files: %v %+v", ok, got)
+	}
+	relative := strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   ../shared/rules.md\n   ./docs/more.md\n", 1)
+	if got, ok := (sessions{}).StartScreen(relative); !ok || got.Multi || !strings.HasSuffix(got.Title, "External imports:⏎../shared/rules.md⏎./docs/more.md") {
+		t.Errorf("relative paths: %v %+v", ok, got)
+	}
+	settings := "────────\n Claude Code can change these settings for you:\n (shell profile, global settings)\n\n Continue?\n\n ❯ Yes\n   No\n"
+	if got, ok := (sessions{}).StartScreen(settings); !ok || got.Multi || got.Kind != runtime.StartOther ||
+		got.Title != "Claude Code can change these settings for you: (shell profile, global settings)⏎Continue?" {
+		t.Errorf("settings: %v %+v", ok, got)
+	}
+	for name, screen := range map[string]string{
+		"imports not shown": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   … +2 imports not shown.\n   Yes covers those too, plus any this project adds later.\n", 1),
+		"a path cut short":  strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/very/long/pa…\n", 1),
+		"a path cut inside": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/sh…/rules.md\n", 1),
+		"a line not a path": strings.Replace(imports, "   /Users/me/shared/rules.md\n", "   /Users/me/shared/rules.md\n   ...and 3 more\n", 1),
+		"a path wrapped": strings.Replace(imports, "   /Users/me/shared/rules.md\n",
+			"   /Users/me/"+strings.Repeat("deep/", 43)+"\n   rules.md\n", 1),
+		"no imports listed": strings.Replace(imports, " External imports:\n   /Users/me/shared/rules.md\n", "", 1),
+		"a long question":   strings.Repeat(" more text\n", headingReach+2) + "\n Continue?\n\n ❯ Yes\n   No\n",
+		"a long line":       " " + strings.Repeat("x", titleLimit+1) + "\n\n ❯ Yes\n   No\n",
+	} {
+		if got, ok := (sessions{}).StartScreen(screen); !ok || !got.Multi {
+			t.Errorf("%s: %v %+v", name, ok, got)
+		}
+	}
+}
+
+// No start-up screen: a screen with the prompt's footer (a menu there is
+// the member's own), one with no pointer, an empty input line, a menu
+// with nothing above it, and no screen at all.
+func TestNoStartScreen(t *testing.T) {
+	raw, _ := os.ReadFile(filepath.Join(starts, "trust.txt"))
+	for name, screen := range map[string]string{
+		"footer":     string(raw) + "\n  ? for shortcuts\n",
+		"no pointer": strings.ReplaceAll(string(raw), "❯", " "),
+		"input":      "────────\n❯ \n────────\n",
+		"no heading": " ❯ 1. Yes\n   2. No\n",
+		"empty":      "",
+	} {
+		if got, ok := (sessions{}).StartScreen(screen); ok {
+			t.Errorf("%s: %+v", name, got)
 		}
 	}
 }
