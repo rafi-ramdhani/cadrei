@@ -105,11 +105,12 @@ const (
 )
 
 // key is the one key the stub member got, after up to two seconds, or
-// what it got with more after it.
+// what it got with more after it. It waits for the key in the file: the
+// stub's shell makes the file before it writes it.
 func key(t *testing.T, home, role string) string {
 	t.Helper()
 	for i := 0; i < 40; i++ {
-		if raw, err := os.ReadFile(home + "/key-" + role); err == nil {
+		if raw, err := os.ReadFile(home + "/key-" + role); err == nil && len(raw) > 0 {
 			extra, _ := os.ReadFile(home + "/extra-" + role)
 			return string(raw) + string(extra)
 		}
