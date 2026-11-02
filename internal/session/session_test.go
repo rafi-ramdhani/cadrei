@@ -423,8 +423,24 @@ func TestStartFolderIsNotAFormat(t *testing.T) {
 	dir := filepath.Join(base, "a#{session_name}#(echo hi)##b")
 	os.MkdirAll(dir, 0o755)
 	for _, w := range []string{"one", "two"} {
-		if err := tm.Start(StartSpec{Session: "cadrei-hash", Window: w, Dir: dir, Argv: []string{"sleep", "30"}}); err != nil {
+		// The command writes where it runs, and the test waits for that
+		// before it asks tmux. tmux 3.6 built with systemd (Ubuntu's) moves
+		// a new pane's process into its own cgroup before it changes to the
+		// -c folder, so for a moment the pane sits in the server's folder.
+		out := filepath.Join(base, w)
+		argv := []string{"sh", "-c", `pwd -P > "$1.tmp" && mv "$1.tmp" "$1"; exec sleep 30`, "sh", out}
+		if err := tm.Start(StartSpec{Session: "cadrei-hash", Window: w, Dir: dir, Argv: argv}); err != nil {
 			t.Fatal(err)
+		}
+		var ran []byte
+		// Up to 10 s, as waitFile: a loaded machine can be slow to start it.
+		for i := 0; i < 200 && len(ran) == 0; i++ {
+			if ran, _ = os.ReadFile(out); len(ran) == 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if got := strings.TrimSuffix(string(ran), "\n"); got != dir {
+			t.Errorf("window %s's command ran in %q, not %q", w, got, dir)
 		}
 		got, _ := tm.run("display-message", "-p", "-t", "=cadrei-hash:="+w, "#{pane_current_path}")
 		if got != dir {
