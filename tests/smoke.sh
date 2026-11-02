@@ -457,9 +457,11 @@ check "a question with several picks keeps each question" bash -c "grep -qF '\"p
 # own <name> <args>: cadrei <args> in $C as from the user's own terminal
 # (orphaned, under no agent session, as when this test itself runs in
 # one), its output in $T/own-<name>, its exit status in $T/own-<name>.code.
+# The status is kept with ||, so set -e doesn't end the subshell on a
+# command that fails before it writes the status.
 own() {
   local name=$1; shift
-  ( (sleep 0.3; cd "$C" && env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID cadrei "$@" > "$T/own-$name" 2>&1; echo $? > "$T/own-$name.code") & )
+  ( (sleep 0.3; cd "$C"; s=0; env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION -u CLAUDE_CODE_SESSION_ID cadrei "$@" > "$T/own-$name" 2>&1 || s=$?; echo "$s" > "$T/own-$name.code") & )
   for _ in $(seq 100); do [ -e "$T/own-$name.code" ] && return 0; sleep 0.1; done
   return 1
 }
