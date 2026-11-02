@@ -564,7 +564,7 @@ var answerWait = 2 * time.Second
 
 // goneFor is how long the prompt must stay off the screen to count as
 // gone: longer than a redraw.
-const goneFor = 250 * time.Millisecond
+var goneFor = 250 * time.Millisecond
 
 // runAnswer is cadrei answer [<code> yes|no|<n>].
 func runAnswer(e *env) int {

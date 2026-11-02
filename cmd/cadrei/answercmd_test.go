@@ -228,6 +228,10 @@ func TestAPromptThatFlickersIsntTakenForGone(t *testing.T) {
 	promptMember(t, home, "engineer", "bash-prompt-live.txt")
 	code := request(t, c, "engineer", mkdirRequest)
 	ownTerminal(t)
+	// The stub's screen is empty for 0.15 s and a cat: well under this,
+	// even on a slow runner.
+	goneFor = 750 * time.Millisecond
+	t.Cleanup(func() { goneFor = 250 * time.Millisecond })
 	n, out, errOut := call("answer", code, "yes")
 	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
@@ -434,7 +438,9 @@ func stepsMember(t *testing.T, home, role string, screens ...string) {
 		// a look between them saw an empty screen, which an answer takes for
 		// a prompt that's gone (on a busy CI runner, now and then).
 		"show() { f=; [ -e \""+dir+"/$1\" ] && f=$(awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"); printf '\\033[H\\033[2J%s' \"$f\"; }\n"+
-		"i=0; show 0; stty raw -echo\n"+
+		// Raw before the first screen shows, as in promptMember: a key that
+		// comes once it shows is read, never left in a cooked line.
+		"stty raw -echo; i=0; show 0\n"+
 		"while :; do\n"+
 		"  k=$(dd bs=1 count=1 2>/dev/null)\n"+
 		"  [ \"$k\" = \"$(printf '\\033')\" ] && { dd bs=1 count=2 >/dev/null 2>&1; k=→; }\n"+
