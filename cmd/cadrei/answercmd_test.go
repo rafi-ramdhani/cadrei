@@ -62,13 +62,16 @@ func promptMember(t *testing.T, home, role, fixture string) {
 	grown := home + "/grown-" + role
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
-		stubReady+"sleep 1\nprintf '\\033[H\\033[2J'\ncat '"+abs+"'\n"+
+		// The terminal goes raw before the prompt shows, so a key that
+		// comes once it shows is read, never left echoed in a line that
+		// waits for Enter (seen on CI: the key showed under the prompt).
+		// Raw, each line ends in \r\n.
+		stubReady+"sleep 1\nstty raw -echo\nprintf '\\033[H\\033[2J'\nawk '{ printf \"%s\\r\\n\", $0 }' '"+abs+"'\n"+
 		"if [ -e \""+grown+"\" ]; then (set -- $(stty size </dev/tty); rows=$1 cols=$2; while sleep 0.1; do\n"+
 		"  set -- $(stty size </dev/tty); [ \"$1\" -gt \"$rows\" ] || [ \"$2\" -gt \"$cols\" ] || continue\n"+
-		// The key's read has the terminal raw: each line ends in \r\n.
 		"  printf '\\033[H\\033[2J'; awk '{ printf \"%s\\r\\n\", $0 }' \""+grown+"\"; exit 0\n"+
 		"done) & fi\n"+
-		"stty raw -echo\nk=$(dd bs=1 count=1 2>/dev/null)\n"+
+		"k=$(dd bs=1 count=1 2>/dev/null)\n"+
 		// Any key after it (an Enter, say) in the next half second.
 		"stty min 0 time 5\ne=$(dd bs=1 count=8 2>/dev/null)\nstty sane\n"+
 		"printf '%s' \"$e\" > \""+home+"/extra-"+role+"\"\n"+
@@ -270,7 +273,11 @@ func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
 	for role, size := range map[string][2]int{"engineer": {80, 24}, "reviewer": {220, 60}} {
 		code := request(t, c, role, tallRequest())
 		if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
-			t.Errorf("%s: exit %d: %q %q\nits screen:\n%s", role, n, out, errOut, tm.Screen(s, role))
+			// Its terminal's mode too: echo on and icanon would mean the key
+			// sat in a line waiting for Enter.
+			pty, _ := exec.Command("tmux", "-L", socket, "display", "-p", "-t", "="+s+":="+role, "#{pane_tty}").Output()
+			mode, _ := exec.Command("sh", "-c", "stty -a < '"+strings.TrimSpace(string(pty))+"'").CombinedOutput()
+			t.Errorf("%s: exit %d: %q %q\nits screen:\n%s\nits terminal:\n%s", role, n, out, errOut, tm.Screen(s, role), mode)
 		}
 		for i := 0; i < 160; i++ {
 			if _, err := os.Stat(home + "/key-" + role); err == nil {
