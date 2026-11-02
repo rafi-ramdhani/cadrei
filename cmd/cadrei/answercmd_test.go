@@ -75,7 +75,9 @@ func promptMember(t *testing.T, home, role, fixture string) {
 		"printf '%s' \"$k\" > \""+home+"/key-"+role+"\"\n"+
 		"[ -e \""+home+"/stay\" ] || printf '\\033[H\\033[2J'\n"+
 		// What its window shows next, when a test gives it.
-		"[ -e \""+home+"/after-"+role+"\" ] && cat \""+home+"/after-"+role+"\"\nexec sleep 300\n")
+		// With home/flicker, the screen stays empty a moment first, as a
+		// redraw read half done.
+		"[ -e \""+home+"/after-"+role+"\" ] && { [ -e \""+home+"/flicker\" ] && sleep 0.15; cat \""+home+"/after-"+role+"\"; }\nexec sleep 300\n")
 	must(t, "up", "dev/"+role)
 	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
 	screen := ""
@@ -207,6 +209,28 @@ func TestAnswerSaysWhenThePromptStays(t *testing.T) {
 	n, out, errOut := call("answer", code, "yes")
 	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+}
+
+// PR D review (L2): a screen with no prompt for a moment (a redraw read
+// half done) isn't the prompt gone: when it comes back, the answer says
+// it stayed, and the request stays open under its code.
+func TestAPromptThatFlickersIsntTakenForGone(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	os.WriteFile(home+"/flicker", nil, 0o644)
+	os.WriteFile(home+"/after-engineer", []byte(screenFixture(t, "bash-prompt-live.txt")), 0o644)
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	code := request(t, c, "engineer", mkdirRequest)
+	ownTerminal(t)
+	n, out, errOut := call("answer", code, "yes")
+	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if st := stateOf(c); st.Current() == nil || st.Current().Code != code {
+		t.Errorf("the request went: %+v", st)
 	}
 }
 

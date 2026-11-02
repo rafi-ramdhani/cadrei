@@ -562,6 +562,10 @@ func askReason(w *waitingOn, choice string) string {
 // answerWait is how long the prompt may take to go after the key.
 var answerWait = 2 * time.Second
 
+// goneFor is how long the prompt must stay off the screen to count as
+// gone: longer than a redraw.
+const goneFor = 250 * time.Millisecond
+
 // runAnswer is cadrei answer [<code> yes|no|<n>].
 func runAnswer(e *env) int {
 	if len(e.args) == 1 {
@@ -659,13 +663,22 @@ func runAnswer(e *env) int {
 	if many(w.req) {
 		shows = func(screen string) bool { return stillAsks(screen, w.req) }
 	}
+	// One look with no prompt isn't proof: tmux can read a frame the
+	// runtime is still drawing. Gone is no prompt for goneFor, looked at
+	// again and again, even past answerWait once a look saw none.
 	gone := false
+	var absent time.Time
 	for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
-		if !shows(t.Screen(w.session, w.window)) {
+		if shows(t.Screen(w.session, w.window)) {
+			absent = time.Time{}
+		} else if absent.IsZero() {
+			absent = time.Now()
+		}
+		if !absent.IsZero() && time.Since(absent) >= goneFor {
 			gone = true
 			break
 		}
-		if time.Since(start) >= answerWait {
+		if time.Since(start) >= answerWait && absent.IsZero() {
 			break
 		}
 	}
