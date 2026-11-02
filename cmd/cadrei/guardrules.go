@@ -117,6 +117,7 @@ const (
 	ruleCompact = "compact"
 	ruleMemory  = "memory"
 	ruleHook    = "hook"
+	ruleOpaque  = "unread" // cadrei with a command the guard can't read
 )
 
 var allowable = setOf(ruleCompact, ruleMemory)
@@ -136,6 +137,8 @@ func memberRule(command string) (rule, why string) {
 		return ruleAnswer, memberAnswerRefused
 	case guardLine(hookRule, command, 0):
 		return ruleHook, hookRefused
+	case guardLine(opaqueRule{}, command, 0):
+		return ruleOpaque, opaqueRefused
 	case guardLine(compactRule, command, 0):
 		return ruleCompact, compactRefused
 	case guardLine(memoryRule{}, command, 0):
@@ -241,6 +244,7 @@ const (
 	removalRefused      = "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator."
 	compactRefused      = "Team members can't run cadrei compact. Ask the user to do it from the orchestrator."
 	hookRefused         = "Team members can't run cadrei hook: cadrei's hooks run on their own."
+	opaqueRefused       = "Team members can't run cadrei with a command cadrei can't read, like cadrei $x or cadrei $(cat f). Write the command out."
 	strictRefused       = "Run cadrei answer <code> <choice> on its own, with nothing around it, so cadrei can ask you."
 	typingRefused       = "Cadrei sessions can't type into tmux windows. To compact a member, run cadrei compact <team>/<role> [project]."
 	keystrokeRefused    = "Cadrei sessions can't press keys in other apps."

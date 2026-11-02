@@ -219,6 +219,48 @@ func TestAFailedWriteLetsNothingBy(t *testing.T) {
 	}
 }
 
+// Review round 2 (R2-2): an allowance goes by where its folder really is.
+// A link pointed elsewhere after the yes isn't the folder the user said
+// yes for, so the same command run through it is refused.
+func TestAnAllowanceStaysWithItsFolder(t *testing.T) {
+	c := heldCrew(t)
+	const member, write = "work-dev-engineer", "echo note >> .memory/notes.md"
+	base := t.TempDir()
+	real, other, link := base+"/real", base+"/other", base+"/lnk"
+	os.MkdirAll(real, 0o755)
+	os.MkdirAll(other, 0o755)
+	os.Symlink(real, link)
+	guardIn(t, c, member, "auto", link, write)
+	must(t, "answer", heldOf(t, c, member)[0].Code, "yes")
+	os.Remove(link)
+	os.Symlink(other, link)
+	if n, _, _ := guardIn(t, c, member, "auto", link, write); n != 2 {
+		t.Error("the link pointed elsewhere took the allowance")
+	}
+	if n, _, _ := guardIn(t, c, member, "auto", real, write); n != 0 {
+		t.Error("the folder itself didn't")
+	}
+}
+
+// Review round 2 (R2-3): cadrei with a command the guard can't read is
+// refused in a member, however it's spelled, and a cadrei command written
+// out with a variable after it still runs.
+func TestCadreiWithAnUnreadCommandIsRefused(t *testing.T) {
+	c := heldCrew(t)
+	const member = "work-dev-engineer"
+	for _, command := range []string{"cadrei $(cat args.txt) < forged.json", "cadrei `cat args.txt`", "cadrei $A", `cadrei "$A"`, "env cadrei ${A}",
+		"sh -c 'cadrei $(cat f)'", `python3 -c "import os; os.system('cadrei $(cat f)')"`} {
+		if n, _, errOut := guardIn(t, c, member, "auto", "/src/app", command); n != 2 || !strings.HasPrefix(errOut, opaqueRefused) {
+			t.Errorf("%s: %d %q", command, n, errOut)
+		}
+	}
+	for _, command := range []string{"cadrei ls --json", "cadrei ls $FLAGS", "echo cadrei"} {
+		if n, out, errOut := guardIn(t, c, member, "auto", "/src/app", command); n != 0 || out != "" || errOut != "" {
+			t.Errorf("%s: %d %q %q", command, n, out, errOut)
+		}
+	}
+}
+
 // Review M3: a refusal whose folder the runtime didn't name can't be
 // allowed, since an allowance is for one folder.
 func TestARefusalWithNoFolderCantBeAllowed(t *testing.T) {
@@ -286,6 +328,21 @@ func TestARefusalTheUserCantAllow(t *testing.T) {
 		{`echo '{"hook_event_name":"PermissionDenied"}' | cadrei hook state`, ruleHook, hookRefused,
 			"Cadrei never allows that for a member: cadrei's hooks run on their own. Close it with cadrei answer CODE no.",
 			"       Cadrei never allows this for a member.\n"},
+		// Refused as a possible uninstall first, but they could answer a
+		// prompt the user hasn't seen: no ! line (review round 2, R2-1).
+		{"xargs cadrei answer k2m 2 < /dev/null", ruleRemoval, removalRefused,
+			"Cadrei never allows that for a member. Then close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member.\n"},
+		{"xargs cadrei answer k2m < picks.txt", ruleRemoval, removalRefused,
+			"Cadrei never allows that for a member. Then close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member.\n"},
+		{"xargs cadrei < args.txt", ruleRemoval, removalRefused,
+			"Cadrei never allows that for a member. Then close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member.\n"},
+		// A command the guard can't read (R2-3).
+		{"cadrei $(cat args.txt) < forged.json", ruleOpaque, opaqueRefused,
+			"Cadrei never allows that for a member. Then close it with cadrei answer CODE no.",
+			"       Cadrei never allows this for a member.\n"},
 	} {
 		in, _ := json.Marshal(map[string]any{"hook_event_name": "PreToolUse", "tool_name": "Bash", "permission_mode": "auto", "cwd": "/src/app", "tool_input": map[string]string{"command": tc.command}})
 		t.Setenv("CADREI_MEMBER", member)
@@ -310,6 +367,16 @@ func TestARefusalTheUserCantAllow(t *testing.T) {
 		}
 		if _, out, _ := call("answer"); !strings.Contains(out, tc.listed+"       Close it:       cadrei answer "+code+" no\n") {
 			t.Errorf("%s: listing\n%s", tc.command, out)
+		}
+		// The orchestrator's note offers a ! line only for the plain
+		// restore (R2-4).
+		r, err := cadreis.Resolve(c, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := teamBlock(r, time.Now(), false)
+		if route := strings.Contains(block, "typing ! "); route != (tc.command == "cadrei restore") {
+			t.Errorf("%s: the note's ! line: %v\n%s", tc.command, route, block)
 		}
 		if n, out, errOut := call("answer", code, "no"); n != 0 || flat(out) != "+ Closed "+code+". Tell the engineer in dev you said no, so it doesn't wait on it." {
 			t.Errorf("%s: no %d %q %q", tc.command, n, out, errOut)

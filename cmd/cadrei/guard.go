@@ -302,6 +302,29 @@ func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *li
 	return false
 }
 
+// opaqueRule looks for cadrei's program run with a command the guard can't
+// read: a variable or a substitution right after it (cadrei $x, cadrei
+// $(cat f), cadrei `cat f`), whatever the line names elsewhere. In a
+// member, that could be any command, cadrei hook or answer too.
+type opaqueRule struct{}
+
+func (opaqueRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
+	for i := p; i+1 < len(words); i++ {
+		if isCadrei(words[i]) && words[i+1].expands {
+			return true
+		}
+	}
+	return false
+}
+
+// opaqueText is cadrei followed by an expansion, in code another program
+// runs.
+var opaqueText = regexp.MustCompile(`(?i)(^|[^a-z0-9_./-])(cadrei|cadre)["']?\s+["']?(\$[({a-z_0-9@*#?!-]|` + "`)")
+
+func (opaqueRule) calls(text string) bool    { return opaqueText.MatchString(text) }
+func (opaqueRule) mentions(text string) bool { return opaqueText.MatchString(text) }
+func (opaqueRule) blunt(text string) bool    { return opaqueText.MatchString(text) }
+
 var (
 	programs = map[string]bool{"cadrei": true, "cadre": true}
 	shells   = setOf("sh", "bash", "zsh", "dash", "ksh", "mksh", "yash", "fish", "csh", "tcsh", "busybox", "eval", "source", ".")

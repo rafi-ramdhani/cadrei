@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 )
 
@@ -120,8 +121,14 @@ type Allowance struct {
 
 // CommandKey is the digest a guard's refusal and its allowance go by: of
 // the exact command, as the member's runtime passed it, and the folder it
-// ran in, so a yes for one folder lets nothing by in another.
+// ran in, so a yes for one folder lets nothing by in another. The folder
+// goes by where it really is, as the ask shows it, when it's taken and
+// when it's used: a link pointed elsewhere after the yes isn't the same
+// folder.
 func CommandKey(dir, command string) string {
+	if dir != "" {
+		dir = paths.Real(dir)
+	}
 	sum := sha256.Sum256([]byte(dir + "\x00" + command))
 	return hex.EncodeToString(sum[:])
 }

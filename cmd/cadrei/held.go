@@ -3,6 +3,7 @@
 package main
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -58,16 +59,35 @@ func heldAllowable(w *waitingOn) bool {
 // keystrokes could press keys in another session's window. A member's
 // cadrei answer names a code for a prompt the user hasn't seen: a ! line
 // would answer it with no ask. cadrei hook is Claude Code's to run.
-var noRoute = setOf(ruleTyping, ruleKeys, ruleAnswer, ruleHook)
+var noRoute = setOf(ruleTyping, ruleKeys, ruleAnswer, ruleHook, ruleOpaque)
 
 // heldRoute is bangRoute for w's held record, but none for a refusal in
-// noRoute.
+// noRoute, nor for a command any of those rules finds, whatever rule the
+// record names (xargs cadrei answer ... < f is refused as a possible
+// uninstall first), nor for an uninstall or restore its line can't show.
 func heldRoute(w *waitingOn) (line string, ok bool) {
-	if w.req.Kind == session.ForGuard && noRoute[w.req.Rule] {
+	if w.req.Kind == session.ForGuard && noRoute[w.req.Rule] || routeBlocked(w.req.Summary) {
 		return "", false
 	}
 	return bangRoute(w)
 }
+
+// routeBlocked reports whether command could answer for a member, type or
+// press keys in a window, run cadrei's hooks, or run cadrei with a command
+// its line doesn't show, or is an uninstall or restore that isn't the
+// plain one, with its words written out.
+func routeBlocked(command string) bool {
+	for _, r := range []guardRule{answerRule, hookRule, opaqueRule{}, tmuxRule{}, keystrokeRule{}} {
+		if guardLine(r, command, 0) {
+			return true
+		}
+	}
+	return removesCrews(command) && !plainRemoval.MatchString(command)
+}
+
+// plainRemoval is cadrei uninstall or restore as one simple command, by
+// cadrei's name, with literal words: its line shows all it runs.
+var plainRemoval = regexp.MustCompile(`^\s*cadrei[ \t]+(uninstall|restore)([ \t]+[A-Za-z0-9_./=:@-]+)*\s*$`)
 
 // bangRoute is the line the user types in the orchestrator to run w's
 // command themselves, in the folder the member ran it in: for a shell
@@ -99,6 +119,9 @@ func heldYes(w *waitingOn, code string, c func(string) string) string {
 	case w.req.Kind == session.ForDenied && ok:
 		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. To run it yourself, type this in the orchestrator: " +
 			c(route) + "." + closeIt
+	case w.req.Kind == session.ForDenied && routeBlocked(w.req.Summary):
+		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. The command could answer or type for a member, so there's no ! line for it either: tell the " +
+			w.role + " what to do instead." + closeIt
 	case w.req.Kind == session.ForDenied && w.req.Altered:
 		return "Auto mode denied that, and cadrei can't override the " + w.role + "'s auto mode from here. The command holds a tab or a control character, which cadrei can't show you as it is, so there's no ! line for it either: tell the " +
 			w.role + " what to do instead." + closeIt
