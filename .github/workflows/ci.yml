@@ -70,15 +70,17 @@ jobs:
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.1 ./...
       # Verbose, so tests/skips.sh can fail on a test that skipped where it
       # shouldn't: such a test tests nothing, and no other step would say.
+      # cmd/cadrei takes 5 to 9 minutes under -race here, close to go test's
+      # 10-minute default, so both race steps set their own limit.
       - name: Test
         run: |
           set -o pipefail
-          go test -race -v ./... 2>&1 | tee test.log
+          go test -race -timeout 20m -v ./... 2>&1 | tee test.log
           tests/skips.sh race < test.log
       - name: Test with the test-only parts (-tags cadreitest)
         run: |
           set -o pipefail
-          go test -race -v -tags cadreitest ./... 2>&1 | tee test-tag.log
+          go test -race -timeout 20m -v -tags cadreitest ./... 2>&1 | tee test-tag.log
           tests/skips.sh race < test-tag.log
       # The tests that time cadrei skip under -race, whose program isn't the
       # real one: run them once without it (criteria 46, 52, 118 and 124).
