@@ -236,10 +236,22 @@ func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
 	}
 	exec.Command("tmux", "-L", socket, "resize-window", "-t", "="+s+":=engineer", "-x", "80", "-y", "24").Run()
 	ownTerminal(t)
+	// A stub on a loaded runner can take seconds to take its key (it
+	// failed once on CI under -race with -tags cadreitest, the stub doing
+	// nothing for 4 s), so the answer and the look for the key wait longer
+	// here. A key that's really lost still fails, with the screen it left.
+	answerWait = 10 * time.Second
+	t.Cleanup(func() { answerWait = 2 * time.Second })
 	for role, size := range map[string][2]int{"engineer": {80, 24}, "reviewer": {220, 60}} {
 		code := request(t, c, role, tallRequest())
 		if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
-			t.Errorf("%s: exit %d: %q %q", role, n, out, errOut)
+			t.Errorf("%s: exit %d: %q %q\nits screen:\n%s", role, n, out, errOut, tm.Screen(s, role))
+		}
+		for i := 0; i < 160; i++ {
+			if _, err := os.Stat(home + "/key-" + role); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 		if k := key(t, home, role); k != "1" {
 			t.Errorf("%s: key %q", role, k)
