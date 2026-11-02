@@ -490,6 +490,32 @@ code=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requ
 own fresh answer "$code" 2
 check "its code starts the member fresh" bash -c "flat < '$T/own-fresh' | grep -q 'Started the engineer on app (fresh chat)' && ! grep -q '$(sed -n 1p <<<"$eng")' '$C/.claude/build/sessions/demo-dev-app-engineer.json'"
 rm -r "$transcripts"
+# 0.2.3 (PR D): a command the guard stops in a member gets a code the
+# member's reason names, and a yes by it lets that exact command by the
+# guard once. Auto mode's denial gets a code too: its yes says how to run
+# the command yourself, and its no closes it.
+check "its settings copy runs the state hook when auto mode denies a call" bash -c "grep -q PermissionDenied \"\$(args_of demo-dev-app-engineer | grep -A1 -x -- --settings | tail -1)\""
+printf '%s\n' '{"hook_event_name":"PreToolUse","tool_name":"Bash","permission_mode":"auto","cwd":"/tmp","tool_input":{"command":"cadrei compact dev/reviewer"}}' > "$T/prd-compact.json"
+printf '%s\n' '{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_use_id":"toolu_d","cwd":"/tmp","tool_input":{"command":"git push --force"},"reason":"Smoke says no."}' > "$T/prd-denied.json"
+prd_guard() { CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook guard < "$T/prd-compact.json"; }
+held_code() { py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r["kind"] == sys.argv[2]][0]["code"])' "$st/demo-dev-app-engineer.json" "$1"; }
+code=0; prd_guard 2> "$T/prd-refused" || code=$?
+gc=$(held_code guard)
+check "a command the guard stops gets a code the member sees" bash -c "test '$code' = 2 && flat < '$T/prd-refused' | grep -q 'under code $gc: they can allow it once from the orchestrator'"
+check "ls --json shows it on the member" bash -c "cd '$C' && cadrei ls --json | grep -q '\"code\": \"$gc\"'"
+own heldlist answer
+check "cadrei answer lists it" grep -q "$gc  Cadrei's guard stopped the engineer on app from running a command:" "$T/own-heldlist"
+own allow answer "$gc" yes
+check "its yes allows it once" bash -c "test \$(cat '$T/own-allow.code') = 0 && flat < '$T/own-allow' | grep -q 'Allowed once: the engineer on app may run that command once'"
+check "the guard lets that command by" prd_guard
+check "but only once" bash -c "! (CADREI_HOME='$C' CADREI_MEMBER=demo-dev-app-engineer cadrei hook guard < '$T/prd-compact.json' 2>/dev/null)"
+CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state < "$T/prd-denied.json"
+dc=$(held_code denied)
+own denyyes answer "$dc" yes
+# /tmp, as its real path (/private/tmp on macOS).
+check "an auto-mode denial's yes shows how to run it yourself" bash -c "test \$(cat '$T/own-denyyes.code') = 1 && flat < '$T/own-denyyes' | grep -Eq '! cd (/private)?/tmp && git push --force'"
+own denyno answer "$dc" no
+check "its no closes it" bash -c "flat < '$T/own-denyno' | grep -q 'Closed $dc' && grep -q '\"code\":\"$dc\",\"kind\":\"denied\",.*\"ended\":\"by_code\"' '$st/prompts.log'"
 cd "$HOME/.cadrei/life"
 cadrei up dev/engineer >/dev/null
 check "another cadrei's team runs apart" running cadrei-life-dev

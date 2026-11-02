@@ -81,8 +81,10 @@ func waitingIn(views []sessionView) []waitingOn {
 	var out []waitingOn
 	for _, v := range views {
 		for _, m := range v.Members {
-			// One stopped by safeguards holds that stop's request only.
-			if m.status.State != session.Waiting && m.status.State != session.SafeguardStopped {
+			// One stopped by safeguards holds that stop's request only, and
+			// any member a held record (a call refused or denied) that it
+			// doesn't wait on.
+			if m.status.State != session.Waiting && m.status.State != session.SafeguardStopped && len(m.status.Requests) == 0 {
 				continue
 			}
 			dir, build := "", ""
@@ -197,6 +199,9 @@ func answerable(req *session.Request) bool {
 		return !req.Multi && req.Question != "" && len(startChoices(req)) > 0
 	case session.ForSafeguard:
 		return slices.Equal(req.Options, session.SafeguardOptions)
+	case session.ForGuard, session.ForDenied:
+		// Answered with no key: no closes it, and a yes is checked by kind.
+		return true
 	case session.ForApproval:
 		return checkable(req.Tool) && req.Summary != "" && !cutShort(req) && (req.Tool != "ExitPlanMode" || planText(req.Summary) != "")
 	}
@@ -379,6 +384,8 @@ func (w *waitingOn) note() string {
 	who := capital(w.place()) + " (" + w.req.Code + ")"
 	window := " Only its window can answer that: " + w.attach() + "."
 	switch {
+	case session.Held(w.req):
+		return heldNote(w)
 	case w.req.Kind == session.ForApproval:
 		verb, object, _ := act(w.req)
 		if !answerable(w.req) {
@@ -468,6 +475,8 @@ func nothingWaiting(code string, c func(string) string) string {
 // a command (cmd for the screen, plain text for the guard).
 func checkChoice(w *waitingOn, code, choice string, c func(string) string) string {
 	switch {
+	case session.Held(w.req):
+		return checkHeld(w, code, choice, c)
 	case w.req.Kind == session.ForQuestion && w.req.Multi:
 		return "That question has more options or questions than cadrei keeps, so answer it in its window: " + c(w.attach())
 	case w.req.Kind == session.ForPrompt && !answerable(w.req):
@@ -536,6 +545,8 @@ func askReason(w *waitingOn, choice string) string {
 		return "Cadrei: answer the start-up screen of " + w.place() + " with \"" + choice + ". " + label + "\"?" + startEffect(w, label) + " It asks: " + w.req.Question
 	case session.ForSafeguard:
 		return stopAsk(w, choice)
+	case session.ForGuard, session.ForDenied:
+		return heldAsk(w, choice)
 	}
 	verb, object, _ := act(w.req)
 	label, picked := approvalPick(w.req, choice)
@@ -621,6 +632,9 @@ func runAnswer(e *env) int {
 	if w.req.Kind == session.ForSafeguard {
 		return e.answerStop(w, build, choice)
 	}
+	if session.Held(w.req) {
+		return e.answerHeld(w, build, choice)
+	}
 	pressed := time.Now()
 	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
 		if why := answerSteps(t, w, picks); why != "" {
@@ -699,8 +713,9 @@ var growWait = 1500 * time.Millisecond
 func promptScreen(t session.Tmux, w *waitingOn) (screen string, restore func()) {
 	screen = t.Screen(w.session, w.window)
 	// A start-up screen is read as it is: one cadrei can't read whole is
-	// answered in its window. A safeguard stop shows no prompt.
-	if !answerable(w.req) || w.req.Kind == session.ForStart || w.req.Kind == session.ForSafeguard || promptShows(screen, w) && !t.Grown(w.session, w.window) {
+	// answered in its window. A safeguard stop, and a held record, show no
+	// prompt.
+	if !answerable(w.req) || w.req.Kind == session.ForStart || w.req.Kind == session.ForSafeguard || session.Held(w.req) || promptShows(screen, w) && !t.Grown(w.session, w.window) {
 		return screen, func() {}
 	}
 	width, height := fitSize(w)
@@ -788,12 +803,13 @@ func answered(build string, w *waitingOn, choice string, pressed time.Time) {
 		state := session.Working
 		switch {
 		case no:
-			next.Open, next.Calls, state = nil, nil, session.Idle
+			// A call refused or denied stays held: it was over already.
+			next.Open, next.Calls, state = next.HeldOnes(), nil, session.Idle
 		case w.req.Kind == session.ForStart:
 			// Still before its first hook: the next look reads what it
 			// shows now.
 			state = session.Starting
-		case len(next.Open) > 0:
+		case len(next.Live()) > 0:
 			state = session.Waiting
 		}
 		if next.State != state {
@@ -829,6 +845,8 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 		e.say("")
 		code := w.req.Code
 		switch {
+		case session.Held(w.req):
+			e.listHeld(&w, pad)
 		case w.req.Kind == session.ForApproval:
 			_, object, kind := act(w.req)
 			e.say("%s", "  "+code+"  "+capital(w.place())+" wants to "+kind+":")
@@ -1511,8 +1529,9 @@ func keyFor(screen string, w *waitingOn, choice string) (key, why string) {
 // text for the guard).
 func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (key, why string) {
 	window := " Answer it in its window: " + c(w.attach())
-	if w.req.Kind == session.ForSafeguard {
-		// Starting it again needs nothing from its screen.
+	if w.req.Kind == session.ForSafeguard || session.Held(w.req) {
+		// Starting it again, or answering a call that's over, needs
+		// nothing from its screen.
 		return choice, ""
 	}
 	if !promptShows(screen, w) {

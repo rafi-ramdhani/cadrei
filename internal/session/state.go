@@ -2,6 +2,8 @@ package session
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -43,7 +45,29 @@ const (
 	// won't answer until it starts again on another model, on its chat, or
 	// starts fresh (SafeguardOptions). Read from its transcript.
 	ForSafeguard = "safeguard"
+	// ForGuard: cadrei's guard refused one of the member's commands, so it
+	// didn't run. The member went on, or stopped to say so: its record
+	// stays for the user to answer (Held).
+	ForGuard = "guard"
+	// ForDenied: the runtime's auto mode denied one of the member's tool
+	// calls, so it didn't run. Held, as a guard's refusal is.
+	ForDenied = "denied"
 )
+
+// How long a held request and an allowance last. A refused or denied call
+// is over when its record opens, so nothing in the member's own session
+// ends the record: the user's answer does, or the member's next start,
+// or HeldFor. A yes that allows a refused command once lasts AllowedFor.
+const (
+	HeldFor    = 30 * time.Minute
+	AllowedFor = 10 * time.Minute
+)
+
+// Held reports whether r is about a call that's already over (a guard's
+// refusal or an auto-mode denial): no prompt shows for it, the member
+// doesn't wait on it, and only the user's answer, the member's next start
+// or HeldFor ends it.
+func Held(r *Request) bool { return r.Kind == ForGuard || r.Kind == ForDenied }
 
 // SafeguardOptions are what a safeguard stop's request offers, in order.
 var SafeguardOptions = []string{"Start it again on another model", "Start it fresh"}
@@ -81,6 +105,24 @@ type State struct {
 	// Legacy is the one request a 0.2.2 state file held. ReadState moves
 	// it into Open.
 	Legacy *Request `json:"request,omitempty"`
+	// Allowed are refused commands the user allowed once by their codes:
+	// the guard lets each one by once, until it's Until.
+	Allowed []Allowance `json:"allowed,omitempty"`
+}
+
+// Allowance is a refused command the user allowed once by its code: Key is
+// the command's digest (CommandKey).
+type Allowance struct {
+	Code  string    `json:"code"`
+	Key   string    `json:"key"`
+	Until time.Time `json:"until"`
+}
+
+// CommandKey is the digest a guard's refusal and its allowance go by: of
+// the exact command, as the member's runtime passed it.
+func CommandKey(command string) string {
+	sum := sha256.Sum256([]byte(command))
+	return hex.EncodeToString(sum[:])
 }
 
 // Call is a tool call that started: the runtime's id for it, the tool and
@@ -96,8 +138,9 @@ type Call struct {
 // lands on a request that changed.
 type Request struct {
 	Code string `json:"code"`
-	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt, ForStart or ForSafeguard
-	// At is when the safeguard stop it's for happened.
+	Kind string `json:"kind"` // ForApproval, ForQuestion, ForPrompt, ForStart, ForSafeguard, ForGuard or ForDenied
+	// At is when the safeguard stop it's for happened, or when the call it's
+	// for was refused or denied.
 	At time.Time `json:"at,omitempty"`
 	// Tool is the tool it's for; for a start-up screen, what the screen
 	// asks (one of the runtime's Start kinds).
@@ -116,6 +159,14 @@ type Request struct {
 	// which: it's theirs once all but one of them end.
 	Maybe  []string `json:"maybe,omitempty"`
 	Source string   `json:"source,omitempty"` // FromHook or FromScreen
+	// For a held request: why the call didn't run (the guard's reason, or
+	// auto mode's own words), and the folder the member ran it in. For a
+	// guard's refusal, also the rule that refused it, and the command's
+	// digest (CommandKey).
+	Reason string `json:"reason,omitempty"`
+	Dir    string `json:"dir,omitempty"`
+	Rule   string `json:"rule,omitempty"`
+	Key    string `json:"key,omitempty"`
 	// Answering is when an answer by its code began: its key is pressed
 	// right after, so the tool's end may come before the answer drops it.
 	Answering time.Time `json:"answering,omitempty"`
@@ -150,12 +201,65 @@ func (s *State) Requests() []*Request {
 	return s.Open
 }
 
-// Current is the oldest open request, or nil.
+// Current is the oldest open request the member waits on (not Held), or
+// nil.
 func (s *State) Current() *Request {
-	if s == nil || len(s.Open) == 0 {
+	if live := s.Live(); len(live) > 0 {
+		return live[0]
+	}
+	return nil
+}
+
+// Live are the open requests the member waits on: all but the Held ones.
+func (s *State) Live() []*Request {
+	if s == nil {
 		return nil
 	}
-	return s.Open[0]
+	var out []*Request
+	for _, r := range s.Open {
+		if !Held(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// HeldOnes are the open Held requests, oldest first.
+func (s *State) HeldOnes() []*Request {
+	if s == nil {
+		return nil
+	}
+	var out []*Request
+	for _, r := range s.Open {
+		if Held(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// expire drops the held requests and allowances whose time is up at now.
+func (s *State) expire(now time.Time) {
+	s.Open = slices.DeleteFunc(s.Open, func(r *Request) bool { return Held(r) && now.Sub(r.At) >= HeldFor })
+	s.Allowed = slices.DeleteFunc(s.Allowed, func(a Allowance) bool { return !now.Before(a.Until) })
+	if len(s.Allowed) == 0 {
+		s.Allowed = nil
+	}
+}
+
+// Expired is s as of now: without the held requests and allowances whose
+// time is up. It returns s itself when none is.
+func Expired(s *State, now time.Time) *State {
+	if s == nil {
+		return nil
+	}
+	next := *s
+	next.Open, next.Allowed = slices.Clone(s.Open), slices.Clone(s.Allowed)
+	next.expire(now)
+	if len(next.Open) == len(s.Open) && len(next.Allowed) == len(s.Allowed) {
+		return s
+	}
+	return &next
 }
 
 // Same reports whether two states say the same.
@@ -225,7 +329,10 @@ const queued = time.Second
 // dialog draws. A permission request, which names no call, is matched to
 // the open call with the same tool and input. A call's end ends only its
 // own request, so another tool finishing while a prompt waits leaves it
-// waiting. A new prompt, a turn's end and a new session end them all.
+// waiting. A new prompt, a turn's end and a new session end them all, but
+// for the Held ones: a refused or denied call is over already, so only the
+// user's answer, a new session or HeldFor ends those, and the member never
+// waits on them. An auto-mode denial opens one.
 func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 	if ev.Name == runtime.EvEnd {
 		return nil
@@ -240,6 +347,8 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 			return r.Kind == ForStart || r.Kind == ForSafeguard && ev.Name != runtime.EvIdleReminder
 		})
 		next.Calls = slices.Clone(prev.Calls)
+		next.Allowed = slices.Clone(prev.Allowed)
+		next.expire(now)
 	}
 	if ev.Session != "" {
 		next.Session = ev.Session
@@ -254,10 +363,11 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		next.State = state
 		next.Error = false
 	}
-	clear := func() { next.Open, next.Calls, next.WaitingFor = nil, nil, "" }
-	// settle: waiting while a request is open, working once none is.
+	clear := func() { next.Open, next.Calls, next.WaitingFor = next.HeldOnes(), nil, "" }
+	// settle: waiting while a request it waits on is open, working once
+	// none is.
 	settle := func() {
-		if len(next.Open) > 0 {
+		if len(next.Live()) > 0 {
 			become(Waiting)
 			return
 		}
@@ -300,7 +410,7 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 				// With no call to go by, a new prompt takes the place of
 				// any other that names none: two such at once is rare, and
 				// one left from a prompt already answered isn't.
-				next.Open = slices.DeleteFunc(next.Open, func(r *Request) bool { return r.Call == "" })
+				next.Open = slices.DeleteFunc(next.Open, func(r *Request) bool { return r.Call == "" && !Held(r) })
 				r.Maybe = next.openCalls(ev.Tool)
 			}
 			next.add(r)
@@ -309,7 +419,7 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 	case runtime.EvPromptShown:
 		// The catch-all: a prompt shows and no hook recorded one, so the
 		// one read off the screen stands for it.
-		if len(next.Open) > 0 || ev.Request == nil {
+		if len(next.Live()) > 0 || ev.Request == nil {
 			return unchanged(prev)
 		}
 		next.add(record(ForPrompt, ev.Request, next.loneCall(), FromScreen))
@@ -325,15 +435,26 @@ func Apply(prev *State, ev runtime.StateEvent, now time.Time) *State {
 		clear()
 		become(Idle)
 		next.Error, next.EndedAt = true, now
+	case runtime.EvDenied:
+		// The call won't run, and its record stays for the user.
+		if ev.Request != nil {
+			r := record(ForDenied, ev.Request, "", FromHook)
+			r.At, r.Reason, r.Dir = now, ev.Reason, ev.Dir
+			next.hold(r)
+		}
+		next.end(ev.ToolID, ev.Tool, false)
+		settle()
 	case runtime.EvStart:
+		// A new session: nothing of the last one's is open anymore.
 		clear()
+		next.Open, next.Allowed = nil, nil
 		become(Idle)
 	case runtime.EvIdleReminder:
 		// The runtime reminds the user of an idle input line: over a
 		// prompt cadrei still has open only when the member's screen shows
 		// none (a no or Esc in its window ended it, with no hook to say
 		// so), since the reminder can come while a slow prompt is up.
-		if next.State != Idle && (len(next.Open) == 0 || ev.NoPrompt) {
+		if next.State != Idle && (len(next.Live()) == 0 || ev.NoPrompt) {
 			clear()
 			become(Idle)
 		}
@@ -366,10 +487,104 @@ func record(kind string, r *runtime.Request, call, source string) *Request {
 	return req
 }
 
+// hold opens a held request, or keeps the one already open for the same
+// call (the same kind, tool, rule and command or input, from the same
+// folder), with its code, from when it opened: a call tried again and
+// refused again is the same one.
+func (s *State) hold(r *Request) {
+	for _, o := range s.Open {
+		if Held(o) && o.Kind == r.Kind && o.Tool == r.Tool && o.Rule == r.Rule && o.Key == r.Key && o.Summary == r.Summary && o.Dir == r.Dir {
+			return
+		}
+	}
+	s.add(r)
+}
+
+// Refusal is the record of a command the guard refused by rule, for why,
+// that the member ran in dir: a ForGuard request for the shell tool, with
+// the command cut as a hook cuts a summary (and kept whole, as an
+// approval's is), and key, its digest (CommandKey).
+func Refusal(command, why, dir, rule, key string) *Request {
+	r := &Request{Kind: ForGuard, Tool: "Bash", Summary: runtime.RequestText(command, runtime.SummaryLimit),
+		Reason: runtime.RequestText(why, runtime.FullLimit), Rule: rule, Key: key, Source: FromHook}
+	if strings.HasSuffix(r.Summary, "…") {
+		r.full = runtime.RequestText(command, runtime.FullLimit)
+	}
+	if filepath.IsAbs(dir) {
+		r.Dir = runtime.RequestText(dir, runtime.FullLimit)
+	}
+	return r
+}
+
+// Refuse gives the state after the guard refused one of the member's
+// commands, from prev (nil for none): r, a ForGuard request, opens, unless
+// the same one is open already. The member's own state stays as it is,
+// and with none yet, it's Unknown until a hook says.
+func Refuse(prev *State, r *Request, now time.Time) *State {
+	next := State{State: Unknown, Since: now}
+	if prev != nil {
+		next = *prev
+		next.Open, next.Allowed = slices.Clone(prev.Open), slices.Clone(prev.Allowed)
+		next.expire(now)
+	}
+	r.At = now
+	next.hold(r)
+	return &next
+}
+
+// Allow ends the guard's refusal under code, which the user answered with
+// a yes, and lets its command by once, until AllowedFor from now. It
+// reports whether there was one.
+func (s *State) Allow(code string, now time.Time) bool {
+	for _, r := range s.Open {
+		if r.Code == code && r.Kind == ForGuard && r.Key != "" {
+			s.Drop(code)
+			s.Allowed = append(slices.DeleteFunc(slices.Clone(s.Allowed), func(a Allowance) bool { return a.Key == r.Key }),
+				Allowance{Code: code, Key: r.Key, Until: now.Add(AllowedFor)})
+			return true
+		}
+	}
+	return false
+}
+
+// TakeAllowance uses up the allowance for the command with digest key, so
+// the guard lets it by this once: it reports whether there was one, still
+// good at now.
+func (s *State) TakeAllowance(key string, now time.Time) bool {
+	for i, a := range s.Allowed {
+		if a.Key == key && now.Before(a.Until) {
+			s.Allowed = slices.Delete(slices.Clone(s.Allowed), i, i+1)
+			if len(s.Allowed) == 0 {
+				s.Allowed = nil
+			}
+			return true
+		}
+	}
+	return false
+}
+
 // add opens a request, dropping the oldest past MaxRequests.
+// Held requests and the others count apart, so calls refused over and over
+// never push out a prompt the member waits on.
 func (s *State) add(r *Request) {
-	if len(s.Open) >= MaxRequests {
-		s.Open = s.Open[len(s.Open)-MaxRequests+1:]
+	var same []int
+	for i, o := range s.Open {
+		if Held(o) == Held(r) {
+			same = append(same, i)
+		}
+	}
+	if len(same) >= MaxRequests {
+		drop := map[int]bool{}
+		for _, i := range same[:len(same)-MaxRequests+1] {
+			drop[i] = true
+		}
+		var kept []*Request
+		for i, o := range s.Open {
+			if !drop[i] {
+				kept = append(kept, o)
+			}
+		}
+		s.Open = kept
 	}
 	s.Open = append(s.Open, r)
 }
@@ -493,7 +708,7 @@ func (s *State) end(id, tool string, gone bool) {
 		return
 	}
 	for i, r := range s.Open {
-		if r.Call == "" && len(r.Maybe) == 0 && tool != "" && r.Tool == tool {
+		if r.Call == "" && len(r.Maybe) == 0 && tool != "" && r.Tool == tool && !Held(r) {
 			s.Open = slices.Delete(s.Open, i, i+1)
 			return
 		}

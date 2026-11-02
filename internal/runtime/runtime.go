@@ -306,6 +306,10 @@ type StateEvent struct {
 	// as the runtime passed it to the hook: never the member's own
 	// description of it. For EvPromptShown, cadrei reads it off the screen.
 	Request *Request
+	// For EvDenied: why the runtime's auto mode denied the call, in its
+	// own words (one printable line, RequestText), and the folder the
+	// member ran it in.
+	Reason, Dir string
 }
 
 // Request is what a member asks the user: a tool it wants to run, or a
@@ -416,6 +420,7 @@ const (
 	EvStopFailure  = "stop-failure"  // its turn ended on an error: idle
 	EvStart        = "start"         // its session started: idle
 	EvIdleReminder = "idle-reminder" // the runtime reminds the user it is idle
+	EvDenied       = "denied"        // its auto mode denied a tool call, which won't run
 	EvEnd          = "end"           // its session ended
 )
 
@@ -495,6 +500,9 @@ type ShellCall struct {
 	// (Claude Code: default, acceptEdits, auto, plan, dontAsk,
 	// bypassPermissions), or "" when the input doesn't say.
 	Mode string
+	// Dir is the folder the session runs it in, or "" when the input
+	// doesn't say.
+	Dir string
 }
 
 // Sent is a message the orchestrator sent, as its notify hook reads it.

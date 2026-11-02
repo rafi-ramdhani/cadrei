@@ -86,7 +86,7 @@ func (m *memberView) fill() {
 	m.TurnError = m.status.Error && m.status.State == session.Idle
 	m.Request = nil
 	if r := m.status.Request; r != nil {
-		m.Request = &requestView{Code: r.Code, Kind: r.Kind, Tool: r.Tool, Summary: r.Summary, Options: r.Options, Multi: r.Multi}
+		m.Request = &requestView{Code: r.Code, Kind: r.Kind, Tool: r.Tool, Summary: r.Summary, Options: r.Options, Multi: r.Multi, Reason: r.Reason}
 		if r.Kind == session.ForQuestion || r.Kind == session.ForPrompt || r.Kind == session.ForStart {
 			m.Request.Summary = runtime.RequestText(r.Question, runtime.SummaryLimit)
 		}
@@ -120,10 +120,12 @@ type contextView struct {
 	Compacted *time.Time `json:"compacted,omitempty"`
 }
 
-// requestView is a waiting member's request in ls --json: kind is approval
-// or question (an open list: any other means answer it in its window);
-// summary is the command, path or URL, or a question's text; options are a
-// question's labels; multi means only its window can answer it.
+// requestView is a member's request in ls --json: kind is approval or
+// question (an open list); summary is the command, path or URL, or a
+// question's text; options are a question's labels; multi means only its
+// window can answer it. guard and denied are a call cadrei's guard refused
+// or auto mode denied, which didn't run: reason says why, and the member
+// may be working or idle meanwhile.
 type requestView struct {
 	Code    string   `json:"code"`
 	Kind    string   `json:"kind"`
@@ -131,6 +133,7 @@ type requestView struct {
 	Summary string   `json:"summary,omitempty"`
 	Options []string `json:"options,omitempty"`
 	Multi   bool     `json:"multi,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
 }
 
 // choice is the model and effort cadrei passed the member.

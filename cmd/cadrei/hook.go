@@ -299,17 +299,17 @@ func writeState(rt runtime.Runtime, home, name string, input []byte, start time.
 		}
 		// The catch-all: the runtime says a prompt is up, and no hook
 		// recorded one, so cadrei reads it off the member's own screen.
-		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) == 0 {
+		if ev.Name == runtime.EvPromptShown && len(prev.Live()) == 0 {
 			ev.Request = screenRequest(session.OwnScreen())
 		}
 		// One a hook recorded: its choices, which no hook gives.
-		if ev.Name == runtime.EvPromptShown && len(prev.Requests()) > 0 {
+		if ev.Name == runtime.EvPromptShown && len(prev.Live()) > 0 {
 			return withChoices(build, name, prev, session.OwnScreen())
 		}
 		// An idle reminder over an open request: a no or Esc in the
 		// member's window ends a prompt with no hook to say so, and the
 		// screen tells whether one still shows.
-		if ev.Name == runtime.EvIdleReminder && len(prev.Requests()) > 0 {
+		if ev.Name == runtime.EvIdleReminder && len(prev.Live()) > 0 {
 			ev.NoPrompt = noPrompt(session.OwnScreen())
 		}
 		// The end of a call a request may be one of several calls': with no

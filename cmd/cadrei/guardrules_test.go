@@ -117,7 +117,13 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked := func(who, mode, command, why string) {
 		t.Helper()
 		code, out, errOut := guardAs(t, c, who, mode, fill(command))
-		if code != 2 || out != "" || (why != "" && strings.TrimSpace(errOut) != fill(why)) || errOut == "" {
+		// A member's reason goes on with the code cadrei noted it under
+		// (PR D): what matters here is the reason.
+		got := strings.TrimSpace(errOut)
+		if who != "" {
+			got, _, _ = strings.Cut(got, " Cadrei noted it for the user under code ")
+		}
+		if code != 2 || out != "" || (why != "" && got != fill(why)) || errOut == "" {
 			t.Errorf("%s %q: exit %d, %q %q", map[bool]string{true: "M", false: "O"}[who != ""], command, code, out, errOut)
 		}
 	}

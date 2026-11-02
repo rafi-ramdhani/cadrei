@@ -50,7 +50,8 @@ const compactSoon = 80
 // chance.
 func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait bool) memberStatus {
 	build := rt.BuildDir(home)
-	st := session.ReadState(session.StatePath(build, name))
+	// Held records past their time are gone, even before a hook says so.
+	st := session.Expired(session.ReadState(session.StatePath(build, name)), now)
 	rec := session.ReadRecord(session.RecordPath(build, name))
 	transcript := ""
 	switch {
@@ -71,6 +72,7 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 					m.Request, m.Requests = r, []*session.Request{r}
 				}
 			}
+			m.Requests = append(m.Requests, st.HeldOnes()...)
 			return m
 		}
 	}
@@ -79,7 +81,13 @@ func statusOfMember(rt runtime.Runtime, home, name string, now time.Time, wait b
 	}
 	m := memberStatus{State: st.State, Since: st.Since, WaitingFor: st.WaitingFor, Error: st.Error}
 	if st.State == session.Waiting {
-		m.Request, m.Requests = st.Current(), st.Requests()
+		m.Request, m.Requests = st.Current(), st.Live()
+	}
+	// A call refused or denied is held for the user in any state: the
+	// member doesn't wait on it, so it comes after what it does wait on.
+	m.Requests = append(m.Requests, st.HeldOnes()...)
+	if m.Request == nil && st.State != session.Waiting && len(m.Requests) > 0 {
+		m.Request = m.Requests[0]
 	}
 	if (m.State == session.Working || m.State == session.Waiting) && transcript != "" {
 		if fi, err := os.Stat(transcript); err == nil && now.Sub(fi.ModTime()) >= quietAfter {
@@ -193,6 +201,13 @@ func (m memberStatus) text(now time.Time) string {
 	default:
 		return "running · can't tell what it's doing"
 	}
+	if h := m.held(); h != nil {
+		if h.Kind == session.ForGuard {
+			s += " · cadrei's guard stopped a command: cadrei answer"
+		} else {
+			s += " · auto mode denied a call: cadrei answer"
+		}
+	}
 	if m.Quiet > 0 {
 		s += " · no activity for " + duration(m.Quiet)
 	}
@@ -200,6 +215,17 @@ func (m memberStatus) text(now time.Time) string {
 		s += " · " + c
 	}
 	return s
+}
+
+// held is the oldest record of a call the member's guard refused or its
+// auto mode denied, when one is open, or nil.
+func (m memberStatus) held() *session.Request {
+	for _, r := range m.Requests {
+		if session.Held(r) {
+			return r
+		}
+	}
+	return nil
 }
 
 // contextText says how full the member's context is: "context 142k",

@@ -8,8 +8,10 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
+	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/paths"
 	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
@@ -29,6 +31,11 @@ import (
 // user before cadrei answer <code> <choice> in its strict form, in the
 // permission modes known to prompt, and refuses every other form of it.
 //
+// A member's refusal is recorded for the user, with a code (memberRefused).
+// A refused cadrei compact, or a write into a .memory folder, the user can
+// allow once by that code: the guard then lets that exact command by, once,
+// and the member's own permission mode and deny rules still decide.
+//
 // It errs on the side of refusing, and refuses anything it can't read.
 // It's one of the layers: the members' deny rules come first, and the
 // commands themselves refuse a member's window (memberAnyway) and, for
@@ -46,23 +53,15 @@ func runHookGuard(e *env) int {
 		return guardRefuses(e, "cadrei couldn't read this command ("+err.Error()+"), so it's blocked.")
 	case !call.Shell:
 		return 0
+	case inMember():
+		if rule, why := memberRule(call.Command); rule != "" {
+			return memberRefused(e, rt, call, rule, why)
+		}
+		return 0
 	case guardLine(tmuxRule{}, call.Command, 0):
 		return guardRefuses(e, typingRefused)
 	case guardLine(keystrokeRule{}, call.Command, 0):
 		return guardRefuses(e, keystrokeRefused)
-	}
-	if inMember() {
-		switch {
-		case removesCrews(call.Command):
-			return guardRefuses(e, "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator.")
-		case guardLine(answerRule, call.Command, 0):
-			return guardRefuses(e, memberAnswerRefused)
-		case guardLine(compactRule, call.Command, 0):
-			return guardRefuses(e, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
-		case guardLine(memoryRule{}, call.Command, 0):
-			return guardRefuses(e, memoryRefused)
-		}
-		return 0
 	}
 	if !guardLine(answerRule, call.Command, 0) || answerListing.MatchString(call.Command) {
 		return 0
@@ -105,6 +104,106 @@ func runHookGuard(e *env) int {
 	return 0
 }
 
+// The rules the guard refuses a member's command by, as its record names
+// them. The ones in allowable the user can allow once by the record's
+// code; the others never: uninstall and restore are the user's to run, and
+// cadrei answer, typing into tmux windows and keystrokes could press
+// another member's approval.
+const (
+	ruleTyping  = "typing"
+	ruleKeys    = "keystrokes"
+	ruleRemoval = "removal"
+	ruleAnswer  = "answer"
+	ruleCompact = "compact"
+	ruleMemory  = "memory"
+)
+
+var allowable = setOf(ruleCompact, ruleMemory)
+
+// memberRule is the rule that refuses command in a member, and why, or ""
+// when none does. The ones the user can never allow come first, so a
+// command one of them refuses is never let by as another rule's.
+func memberRule(command string) (rule, why string) {
+	switch {
+	case guardLine(tmuxRule{}, command, 0):
+		return ruleTyping, typingRefused
+	case guardLine(keystrokeRule{}, command, 0):
+		return ruleKeys, keystrokeRefused
+	case removesCrews(command):
+		return ruleRemoval, removalRefused
+	case guardLine(answerRule, command, 0):
+		return ruleAnswer, memberAnswerRefused
+	case guardLine(compactRule, command, 0):
+		return ruleCompact, compactRefused
+	case guardLine(memoryRule{}, command, 0):
+		return ruleMemory, memoryRefused
+	}
+	return "", ""
+}
+
+// guardLockWait is how long the guard waits for a member's lock: well
+// under the runtime's hook timeout.
+var guardLockWait = 2 * time.Second
+
+// memberRefused refuses a member's command that rule refuses, and records
+// it in the member's state, for the user to see from the orchestrator with
+// a code; the reason the member sees names the code. One the user allowed
+// once by its code goes by instead, this once (exit 0, nothing said), when
+// rule is one they can allow. Without a crew and member cadrei knows, it
+// only refuses.
+func memberRefused(e *env, rt runtime.Runtime, call runtime.ShellCall, rule, why string) int {
+	name, home := os.Getenv("CADREI_MEMBER"), os.Getenv("CADREI_HOME")
+	if name == "" || home == "" {
+		return guardRefuses(e, why)
+	}
+	if c := hookCrew(home); c == nil || name == orchestrator.Name(c.Name) || !memberOf(*c, name) {
+		return guardRefuses(e, why)
+	}
+	build := rt.BuildDir(paths.Real(home))
+	if st, err := os.Stat(build); err != nil || !st.IsDir() {
+		return guardRefuses(e, why)
+	}
+	key := session.CommandKey(call.Command)
+	if allowable[rule] {
+		taken := false
+		session.ChangeState(build, name, guardLockWait, func(prev *session.State) *session.State {
+			if prev == nil {
+				return nil
+			}
+			next := *prev
+			if taken = next.TakeAllowance(key, time.Now()); taken {
+				return &next
+			}
+			return prev
+		})
+		if taken {
+			return 0
+		}
+	}
+	now := time.Now()
+	r := session.Refusal(call.Command, why, call.Dir, rule, key)
+	prev, next, err := session.ChangeState(build, name, guardLockWait, func(prev *session.State) *session.State { return session.Refuse(prev, r, now) })
+	if err != nil {
+		return guardRefuses(e, why)
+	}
+	session.LogPrompts(build, name, prev, next, session.Ending(""), now)
+	for _, o := range next.HeldOnes() {
+		if o.Kind == session.ForGuard && o.Rule == rule && o.Key == key {
+			return guardRefuses(e, why+refusalNote(rule, o.Code))
+		}
+	}
+	return guardRefuses(e, why)
+}
+
+// refusalNote is what a member's refusal adds to its reason: the code the
+// user sees it by, and whether they can allow it.
+func refusalNote(rule, code string) string {
+	if allowable[rule] {
+		return " Cadrei noted it for the user under code " + code + ": they can allow it once from the orchestrator. If they do, run the exact same command again, once."
+	}
+	return " Cadrei noted it for the user under code " + code + ", but it can't be allowed from the orchestrator."
+}
+
 // guardScreen is what the member's window shows, as the guard reads it
 // (grown for a moment when the prompt doesn't fit), and what puts the
 // window's size back.
@@ -133,6 +232,8 @@ func plain(s string) string { return s }
 // The guard's reasons, shown to the session it refused.
 const (
 	memberAnswerRefused = "Only the user can answer for a member. Ask the user to do it from the orchestrator."
+	removalRefused      = "Team members can't run cadrei uninstall or cadrei restore, in any form. Ask the user to do it from the orchestrator."
+	compactRefused      = "Team members can't run cadrei compact. Ask the user to do it from the orchestrator."
 	strictRefused       = "Run cadrei answer <code> <choice> on its own, with nothing around it, so cadrei can ask you."
 	typingRefused       = "Cadrei sessions can't type into tmux windows. To compact a member, run cadrei compact <team>/<role> [project]."
 	keystrokeRefused    = "Cadrei sessions can't press keys in other apps."

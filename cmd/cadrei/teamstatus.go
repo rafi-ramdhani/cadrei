@@ -77,6 +77,11 @@ func teamLine(members []teamMember, now time.Time) string {
 	var urgent, calm []string
 	counts := map[string]int{}
 	for _, m := range members {
+		// A call refused or denied waits on the user, while the member
+		// itself may not.
+		if m.status.State != session.SafeguardStopped && m.status.State != session.Waiting && m.status.held() != nil {
+			urgent = append(urgent, "**! "+name(m)+": a stopped call waits on you**")
+		}
 		switch m.status.State {
 		case session.SafeguardStopped:
 			urgent = append(urgent, "**✗ "+name(m)+" stopped by safeguards**")
