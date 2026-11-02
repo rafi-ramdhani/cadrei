@@ -386,7 +386,10 @@ func stepsMember(t *testing.T, home, role string, screens ...string) {
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
 		stubReady+"sleep 1\n"+
-		"show() { printf '\\033[H\\033[2J'; [ -e \""+dir+"/$1\" ] && awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"; }\n"+
+		// Each screen is drawn in one write, clear and all: drawn in two,
+		// a look between them saw an empty screen, which an answer takes for
+		// a prompt that's gone (on a busy CI runner, now and then).
+		"show() { f=; [ -e \""+dir+"/$1\" ] && f=$(awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"); printf '\\033[H\\033[2J%s' \"$f\"; }\n"+
 		"i=0; show 0; stty raw -echo\n"+
 		"while :; do\n"+
 		"  k=$(dd bs=1 count=1 2>/dev/null)\n"+
