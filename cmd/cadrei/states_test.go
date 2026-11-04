@@ -64,7 +64,7 @@ func TestLsShowsWhatMembersDo(t *testing.T) {
 		{`{"hook_event_name":"PermissionRequest","tool_name":"Bash"}`, "    ! engineer   waiting on you · approve it with cadrei answer <code> yes"},
 		{`{"hook_event_name":"Stop"}`, "    o engineer   idle since <now>"},
 		{`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion"}`, "    ! engineer   waiting on you · it asked you something in its window"},
-		{`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}}`, "    ! engineer   waiting on you · it asked you something: cadrei answer"},
+		{`{"hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship it?","options":[{"label":"Yes"},{"label":"No"}]}]}}`, "    ! engineer   waiting on you · it asked you something: cadrei answer <code>"},
 		{`{"hook_event_name":"StopFailure","error":"rate_limit"}`, "    o engineer   idle since <now> · its last turn hit an error"},
 		{`{"hook_event_name":"UserPromptSubmit"}`, "    * engineer   working just now"},
 		{`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`, "    o engineer   idle since <now>"},
@@ -182,7 +182,8 @@ func TestSafeguardStopsShow(t *testing.T) {
 	}
 	t.Setenv("CADREI_HOME", c)
 	t.Setenv("CADREI_ORCHESTRATOR", "1")
-	if s := snapshotText(t, "resume"); !strings.Contains(s, "- Stopped by safeguards: the engineer in dev (work-dev-engineer), since Jan 1, opened with cadrei attach dev\n") {
+	// PR E: with its code and the two ways on, for the greeting to quote.
+	if s := snapshotText(t, "resume"); !regexp.MustCompile(`- Stopped by safeguards: the engineer in dev \(work-dev-engineer\), since Jan 1, opened with cadrei attach dev\. The engineer in dev \(([a-z2-9]{3})\) was stopped by Claude's safeguards, so it won't answer on that model\. .* the user types ! cadrei answer ([a-z2-9]{3}) 1 <model>\. .* they type ! cadrei answer ([a-z2-9]{3}) 2\.\n`).MatchString(s) {
 		t.Errorf("snapshot:\n%s", s)
 	}
 	t.Setenv("CADREI_ORCHESTRATOR", "")

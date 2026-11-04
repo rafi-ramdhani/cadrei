@@ -301,7 +301,7 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer zz9 yes`, "Nothing's waiting under zz9 anymore. Run cadrei answer to see what's waiting now.")
 	for _, mode := range []string{"bypassPermissions", "dontAsk", "plan", ""} {
 		blocked(member, mode, `cadrei answer 7f3 yes`, memberAnswerRefused)
-		blocked("", mode, `cadrei answer 7f3 yes`, "Claude Code can't ask the user in this permission mode. Ask them to type ! cadrei answer 7f3 yes themselves, or to answer in the member's window.")
+		blocked("", mode, `cadrei answer 7f3 yes`, "Claude Code can't ask the user in this permission mode. Ask them to type ! cadrei answer 7f3 yes themselves.")
 	}
 	for _, mode := range []string{"auto", "acceptEdits"} {
 		blocked(member, mode, `cadrei answer 7f3 yes`, memberAnswerRefused)

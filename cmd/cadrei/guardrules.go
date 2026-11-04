@@ -79,7 +79,7 @@ func runHookGuard(e *env) int {
 	}
 	code, choice := m[2], strings.Join(strings.Fields(m[3]), " ")
 	if !promptModes[call.Mode] {
-		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves, or to answer in the member's window.")
+		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves.")
 	}
 	var w *waitingOn
 	if home := os.Getenv("CADREI_HOME"); home != "" {

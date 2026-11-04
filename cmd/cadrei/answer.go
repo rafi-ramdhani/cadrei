@@ -1610,7 +1610,7 @@ func keyOn(screen string, w *waitingOn, choice string, c func(string) string) (k
 		return choice, ""
 	}
 	if others := otherChoices(w.req); choice == "yes" && !hasPlainYes(w.req) && len(others) > 0 {
-		return "", "This prompt has no plain \"Yes\". Pick one of its choices with " + c("cadrei answer "+w.req.Code+" <n>") + " (" + numberedOf(w.req, others) + "), or answer it in its window: " + c(w.attach())
+		return "", "This prompt has no plain \"Yes\". Pick one of its choices with " + c("cadrei answer "+w.req.Code+" <n>") + ": " + numberedOf(w.req, others) + "."
 	}
 	label := "Yes"
 	if choice == "no" {

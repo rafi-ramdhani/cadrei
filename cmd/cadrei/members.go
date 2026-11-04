@@ -177,13 +177,13 @@ func (m memberStatus) text(now time.Time) string {
 		case r != nil && r.Kind == session.ForApproval:
 			s = "waiting on you · approve it with cadrei answer " + r.Code + " yes"
 		case r != nil && r.Kind == session.ForQuestion && !r.Multi:
-			s = "waiting on you · it asked you something: cadrei answer"
+			s = "waiting on you · it asked you something: cadrei answer " + r.Code
 		case r != nil && r.Kind == session.ForPrompt && !r.Multi:
-			s = "waiting on you · it shows a prompt: cadrei answer"
+			s = "waiting on you · it shows a prompt: cadrei answer " + r.Code
 		case r != nil && r.Kind == session.ForPrompt:
 			s = "waiting on you · it shows a prompt in its window"
 		case r != nil && r.Kind == session.ForStart:
-			s = "waiting on you · a start-up screen: cadrei answer"
+			s = "waiting on you · a start-up screen: cadrei answer " + r.Code
 		case m.WaitingFor == session.ForQuestion:
 			s = "waiting on you · it asked you something in its window"
 		default:
@@ -270,8 +270,10 @@ func forTime(d time.Duration) string {
 	return "for " + duration(d)
 }
 
-// safeguardHint is the line under a member stopped by safeguards.
-const safeguardHint = "Pick the model again in its window, or start it fresh."
+// safeguardHint is the line under a member stopped by safeguards that has
+// no code. Picking the model in its window isn't offered: it saves the
+// model as the user's default for every new session.
+const safeguardHint = "Stop it, then start it fresh: cadrei stop, then cadrei up --fresh."
 
 // brief says a state for the orchestrator's snapshot: "engineer working
 // for 4m", "reviewer waiting on you for 1m", with how full its context is

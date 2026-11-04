@@ -167,7 +167,7 @@ func TestAnApprovalsOtherChoices(t *testing.T) {
 			t.Errorf("plan %s: %q %q", choice, got, why)
 		}
 	}
-	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n> (2. Yes, manually approve edits), or answer it in its window: cadrei attach dev` {
+	if _, why := keyFor(plan, p, "yes"); flat(render(why, false)) != `This prompt has no plain "Yes". Pick one of its choices with cadrei answer 7f3 <n>: 2. Yes, manually approve edits.` {
 		t.Errorf("plan yes: %q", why)
 	}
 	for _, choice := range []string{"1", "3"} {

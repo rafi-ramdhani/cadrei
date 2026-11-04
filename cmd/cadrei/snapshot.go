@@ -123,6 +123,9 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 			var live, held []string
 			for _, w := range waitingIn([]sessionView{{Team: v.Team, Project: v.Project, Members: []memberView{m}}}) {
 				switch {
+				case w.req.Kind == session.ForSafeguard && m.status.State == session.SafeguardStopped:
+					// Its stop's code, and the two ways on.
+					stopped[len(stopped)-1] += ". " + w.note()
 				case session.Held(w.req):
 					held = append(held, w.note())
 				case m.status.State == session.Waiting:

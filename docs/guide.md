@@ -423,6 +423,8 @@ When a member runs in a different permission-mode class from your orchestrator, 
 
 A member that's `waiting` needs you: Claude Code is asking you something in its window. Either it wants to run something it isn't allowed to yet (a permission prompt), or it asked you a question. You can answer both from your orchestrator, without going to the member's window.
 
+**How your orchestrator hears about it.** While members run, your orchestrator keeps `cadrei answer --wait` going in the background. That command waits until something new is waiting on you, shows it, and ends, and Claude Code wakes your orchestrator when it does. So your orchestrator tells you right away, even when you haven't typed anything, then starts the wait again. When your orchestrator runs in tmux, its status bar also shows `! 2 waiting` while anything waits on you. Members ask you right away too: they don't wait for the orchestrator to pass a message on first.
+
 **A permission prompt.** Your orchestrator tells you who's waiting and what for, then runs `cadrei answer 7f3 yes`. Claude Code stops it and asks you, in its own prompt:
 
 ```text
@@ -453,7 +455,7 @@ The code lasts until you answer it, the member restarts, or 30 minutes pass.
 **A block a grant can fix.** When auto mode or a rule blocks a member, your orchestrator asks you here first: `Let the engineer on my-app run gh pr merge 42 --squash once?`. On a yes it gives a one-time grant and restarts the member, which picks up its chat.
 
 More:
-- `cadrei answer` with no code shows who's waiting on you, with the line that answers each. You can run it, and `cadrei answer <code> <choice>`, in your own terminal too.
+- `cadrei answer` with no code shows who's waiting on you, with the line that answers each. `cadrei answer <code>` shows just that one, and `cadrei answer --wait` waits for the next one (add `--timeout 30m` to stop waiting after a while). You can run them, and `cadrei answer <code> <choice>`, in your own terminal too.
 - Each request has its own short code. If the member's prompt changed in the meantime, the old code answers nothing.
 - `yes` only ever picks the plain "Yes", the one-time allow. It never picks "always allow" or "switch to auto mode".
 - A prompt's other choices, like "always allow" or a plan's "Yes, manually approve edits", show up word for word a few seconds after the prompt does. Pick one by its number, like `cadrei answer 7f3 2`. When a choice is saved and lasts, like "don't ask again", your orchestrator's ask says so plainly.
