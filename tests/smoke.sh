@@ -118,7 +118,8 @@ check "the orchestrator text knows cadrei's first message is no request" grep -q
 check "skill: the Secrets rule for the orchestrator" grep -q "Never write a real-looking secret in a task, a message or a file, not even a fake one. Use a placeholder, and pass this rule on when a task touches secrets." "$SK"
 check "skill: a crew is made with cadrei new, never init" bash -c "grep -q 'cadrei new <name>' '$SK' && ! grep -q 'cadrei init <' '$SK'"
 check "skill: never runs the archive or restore itself" grep -q "Never run \`cadrei uninstall --archive\` or \`cadrei restore\` yourself" "$SK"
-check "skill: the safeguard stop question" grep -q "\`Restart it fresh\` or \`I'll fix it in its window\`" "$SK"
+check "skill: a safeguard stop's two ways on, by its code" bash -c "grep -q '! cadrei answer 7f3 1 <model>' '$SK' && grep -q '! cadrei answer 7f3 2' '$SK' && grep -q 'Never offer to pick the model in its window' '$SK'"
+check "skill: keep a wait running while members run" grep -q "keep one \`cadrei answer --wait\` running in the background" "$SK"
 check "skill: leftover one-time grants at session start" grep -q "Run \`cadrei allow list\`" "$SK"
 check "skill: stopping everything only on request" grep -q "or \`cadrei stop --all\` (every crew's) only when the user asks for it directly" "$SK"
 check "skill: uninstall only on request, after the dry run" grep -q "Run \`cadrei uninstall --dry-run\`, show the plan" "$SK"
@@ -518,6 +519,24 @@ own denyyes answer "$dc" yes
 check "an auto-mode denial's yes shows how to run it yourself" bash -c "test \$(cat '$T/own-denyyes.code') = 1 && flat < '$T/own-denyyes' | grep -Eq '! cd (/private)?/tmp && git push --force'"
 own denyno answer "$dc" no
 check "its no closes it" bash -c "flat < '$T/own-denyno' | grep -q 'Closed $dc' && grep -q '\"code\":\"$dc\",\"kind\":\"denied\",.*\"ended\":\"by_code\"' '$st/prompts.log'"
+# 0.2.3 (PR E): a wait in the background ends once a request comes in
+# that no wait showed yet, with its code, and only one runs at a time; a
+# code alone shows that one request.
+own waitnow answer --wait --timeout 2s
+own waitnew answer --wait --timeout 20s & waiter=$!
+for _ in $(seq 50); do [ -e "$st/wait.lock" ] && break; sleep 0.1; done
+sleep 0.5
+own waittwice answer --wait
+check "only one wait runs at a time" bash -c "test \$(cat '$T/own-waittwice.code') = 1 && flat < '$T/own-waittwice' | grep -q 'is already running for this crew'"
+printf '%s\n' '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo smoke-wait"}}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
+wait "$waiter"
+wc=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r.get("summary") == "echo smoke-wait"][0]["code"])' "$st/demo-dev-app-engineer.json")
+check "a wait ends on a new request, with its code" bash -c "test \$(cat '$T/own-waitnew.code') = 0 && grep -q 'New and waiting on you:' '$T/own-waitnew' && grep -q '$wc  The engineer on app wants to run a command:' '$T/own-waitnew'"
+own one answer "$wc"
+check "a code alone shows that one request" bash -c "test \$(cat '$T/own-one.code') = 0 && grep -q '$wc  The engineer on app wants to run a command:' '$T/own-one' && grep -q 'echo smoke-wait' '$T/own-one' && ! grep -q 'Waiting on you' '$T/own-one'"
+own waitseen answer --wait --timeout 1s
+check "a request a wait showed doesn't end the next one" bash -c "grep -qx 'Nothing new came in for 1s.' '$T/own-waitseen'"
+printf '%s\n' '{"hook_event_name":"Stop"}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
 cd "$HOME/.cadrei/life"
 cadrei up dev/engineer >/dev/null
 check "another cadrei's team runs apart" running cadrei-life-dev
@@ -861,7 +880,13 @@ check "its session is marked as the orchestrator" test "$(tm show-options -qv -t
 check "with the keys to switch and leave in its status bar" bash -c "tm show-options -qv -t =cadrei-demo: status-right | grep -q 'Ctrl-b s switch · Ctrl-b d leave'"
 check "with the mouse on and long scrollback in its window" bash -c "test \"\$(tm show-options -qv -t =cadrei-demo: mouse)\" = on && test \"\$(tm display -p -t =cadrei-demo:=orchestrator '#{history_limit}')\" = 50000"
 check "ls shows it" bash -c "cadrei ls | grep -q '^Orchestrator  open in tmux'"
+# 0.2.3 (PR E): its bar counts what waits on the user.
+check "its status bar has the waiting badge first" bash -c "tm show-options -qv -t =cadrei-demo: status-right | grep -q '^#{?@cadrei_waiting,'"
+cadrei up dev/engineer app >/dev/null
+printf '%s\n' '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo smoke-badge"}}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
+check "a member's request counts on the badge" bash -c "test \"\$(tm show-options -qv -t =cadrei-demo: @cadrei_waiting)\" -ge 1"
 check "stop leaves it" bash -c "cadrei stop --all --yes >/dev/null; running cadrei-demo"
+check "and the badge goes back to 0" test "$(tm show-options -qv -t =cadrei-demo: @cadrei_waiting)" = 0
 check "stop has no --with-orchestrator" bash -c "! cadrei stop --all --with-orchestrator --yes 2>/dev/null && running cadrei-demo"
 tm kill-session -t =cadrei-demo
 
