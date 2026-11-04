@@ -19,7 +19,9 @@
 # (live-e2e, a fresh folder under $TMPDIR) to it, and starts and stops
 # that member. With no case named, every case runs; name some to run only
 # those (see cases below). Cases that need something set up by hand print
-# what to do and wait for Enter.
+# what to do and wait for Enter. The crew's orchestrator must be closed
+# when it starts: the orphanwait case opens it in tmux, has it start its
+# wait, and kills its tmux session.
 set -euo pipefail
 
 if [ "${CADREI_LIVE:-}" != yes ] || [ -z "${CADREI_LIVE_CREW:-}" ]; then
@@ -37,6 +39,36 @@ done
 
 C="$HOME/.cadrei/$CADREI_LIVE_CREW"
 [ -d "$C" ] || { echo "No crew at $C. Make one with: cadrei new $CADREI_LIVE_CREW"; exit 2; }
+crew() { (cd "$C" && cadrei "$@"); }
+json() { crew ls --json | python3 -c "$1"; }
+
+# A wait holds this flock while it runs.
+WAITLOCK="$C/.claude/build/state/wait.lock"
+wait_held() {
+  python3 -I - "$WAITLOCK" <<'EOF'
+import fcntl, os, sys
+try:
+    fd = os.open(sys.argv[1], os.O_RDONLY)
+except FileNotFoundError:
+    sys.exit(1)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    sys.exit(0)
+sys.exit(1)
+EOF
+}
+orchestrator_open() {
+  [ "$(json 'import json,sys; print(json.load(sys.stdin).get("orchestrator", {}).get("running", False))')" = True ]
+}
+
+# This script runs its own waits: one the crew's orchestrator runs would
+# turn them away, and they'd mark codes as shown for that orchestrator.
+if orchestrator_open || wait_held; then
+  echo "This crew's orchestrator, or a wait it started, is running. Close the crew's orchestrator first."
+  exit 2
+fi
+
 P=$(mktemp -d "${TMPDIR:-/tmp}/cadrei-live-XXXXXX")
 P=$(cd "$P" && pwd -P)
 git -C "$P" init -q
@@ -52,8 +84,6 @@ skipped=()
 say() { printf '\n== %s\n' "$*"; }
 ok() { pass=$((pass + 1)); printf '  ok   %s\n' "$1"; }
 bad() { failed+=("$1"); printf '  FAIL %s\n' "$1"; }
-crew() { (cd "$C" && cadrei "$@"); }
-json() { crew ls --json | python3 -c "$1"; }
 
 # The prober's own window, from cadrei ls --json.
 session=""
@@ -144,7 +174,7 @@ EOF
 crew project add live-e2e --path "$P" --no-trust >/dev/null
 
 # The cases, in order. A name on the command line runs only those.
-all=(startup bash long wrapped heredoc tall write edit multiedit notebook longpath read fetch search mcp plan question wrapdesc multi twoq parallel first twoprompts guard denied safeguard otherscreens orchestrator)
+all=(startup bash long wrapped heredoc tall write edit multiedit notebook longpath read fetch search mcp plan question wrapdesc multi twoq parallel first twoprompts guard denied safeguard otherscreens orchestrator orphanwait)
 want=("$@")
 [ ${#want[@]} -gt 0 ] || want=("${all[@]}")
 runs() { local c; for c in "${want[@]}"; do [ "$c" = "$1" ] && return 0; done; return 1; }
@@ -210,6 +240,32 @@ runs denied && by_hand "denied" "Set PERMISSION_MODE=auto in $C/cadrei.conf, res
 runs safeguard && by_hand "safeguard" "A safeguard stop can't be called up on purpose. If one happened during this release's use, check its code started the member again on another model with cadrei answer <code> 1 <model>, and that the stop didn't come back on that chat. If it did come back, note that 2 is the way out."
 runs otherscreens && by_hand "otherscreens" "Live-only checks from PR C: (1) with an .mcp.json in $P naming a server, restart the prober and check the MCP server screen gets a code before any hook runs, and that it isn't dropped when SessionStart fires; (2) with a CLAUDE.md that imports a file outside $P, check how the imports screen draws each file line (cut or wrapped), and whether its No is saved; (3) restart the prober (it resumes) and check it keeps one session id, so an old safeguard stop doesn't come back under a new code."
 runs orchestrator && by_hand "orchestrator" "Open this crew's orchestrator in plan mode (PERMISSION_MODE=plan in $C/cadrei.conf, then cadrei), leave a prober prompt waiting (ask it to run mkdir live-orch), and check the orchestrator offers ! cadrei answer <code> yes for you to type, and that typing it works. Then set the mode back."
+if runs orphanwait; then
+  # A wait ends with the orchestrator that started it, even when Claude
+  # Code leaves its background command running.
+  say "orphanwait"
+  osess="cadrei-$CADREI_LIVE_CREW"
+  if orchestrator_open; then
+    bad "orphanwait: close the crew's orchestrator before this case"
+  elif ! (cd "$C" && cadrei --tmux --detach) >/dev/null 2>&1; then
+    bad "orphanwait: the orchestrator didn't open"
+  else
+    sleep 15
+    tmux send-keys -t "=$osess:=orchestrator" -l "Start your cadrei answer --wait in the background now, as your skill says, then say done."
+    sleep 0.5
+    tmux send-keys -t "=$osess:=orchestrator" Enter
+    for _ in $(seq 120); do wait_held && break; sleep 1; done
+    if wait_held; then
+      ok "orphanwait: the orchestrator's wait runs"
+      tmux kill-session -t "=$osess"
+      for _ in $(seq 10); do wait_held || break; sleep 1; done
+      if wait_held; then bad "orphanwait: the wait outlived its orchestrator"; else ok "orphanwait: the wait ended with its orchestrator"; fi
+    else
+      bad "orphanwait: the orchestrator never started a wait"
+      tmux kill-session -t "=$osess" 2>/dev/null || true
+    fi
+  fi
+fi
 
 say "the prompt log"
 in_window=$(tail -n +"$((START_LINE + 1))" "$LOG" | grep -c '"ended":"in_window"' || true)

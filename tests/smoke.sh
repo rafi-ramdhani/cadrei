@@ -528,6 +528,8 @@ for _ in $(seq 50); do [ -e "$st/wait.lock" ] && break; sleep 0.1; done
 sleep 0.5
 own waittwice answer --wait
 check "only one wait runs at a time" bash -c "test \$(cat '$T/own-waittwice.code') = 1 && flat < '$T/own-waittwice' | grep -q 'is already running for this crew'"
+code=0; env -u CLAUDECODE CADREI_LIVE=yes CADREI_LIVE_CREW="$(basename "$C")" "$ROOT/tests/live-prompts.sh" > "$T/live-busy" 2>&1 || code=$?
+check "the live check won't start while a wait runs" bash -c "test '$code' = 2 && grep -q 'Close the crew.s orchestrator first' '$T/live-busy' && test ! -e '$C/members/live'"
 printf '%s\n' '{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"echo smoke-wait"}}' | CADREI_HOME="$C" CADREI_MEMBER=demo-dev-app-engineer cadrei hook state
 wait "$waiter"
 wc=$(py 'import json,sys; print([r for r in json.load(open(sys.argv[1]))["requests"] if r.get("summary") == "echo smoke-wait"][0]["code"])' "$st/demo-dev-app-engineer.json")
