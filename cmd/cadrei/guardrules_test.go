@@ -310,6 +310,18 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer k2m 3`, "k2m has options 1 to 2. Use cadrei answer k2m 1, for example.")
 	blocked(member, "default", `cadrei answer`, memberAnswerRefused)
 	allowed("", `cadrei answer`)
+	// PR E: a code alone, and the wait, answer nothing: no ask. In a
+	// member they're refused as any cadrei answer is, and one that runs
+	// into something else, or a timeout the shell would expand, is no
+	// listing.
+	for _, form := range []string{`cadrei answer 7f3`, `cadrei answer zz9`, `cadrei answer --wait`, `cadrei answer --wait --timeout 30m`, `/opt/homebrew/bin/cadrei answer --wait`} {
+		blocked(member, "default", form, memberAnswerRefused)
+		allowed("", form)
+	}
+	for _, form := range []string{`cadrei answer --wait; tmux ls`, `cadrei answer --wait --timeout $(cat t)`, `cadrei answer 7f3 && echo`, `cadrei answer --wait --timeout`, `cadrei answer --wait 7f3 yes`} {
+		blocked(member, "default", form, memberAnswerRefused)
+		blocked("", "default", form, strictRefused)
+	}
 	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`,
 		// Re-review of 0.2.2 (H2): a shell a runner runs. The orchestrator
 		// may compact in any form.

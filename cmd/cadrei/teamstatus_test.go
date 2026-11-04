@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -90,7 +91,7 @@ func TestHookTeamStatus(t *testing.T) {
 	// The hide rule: no hint, no marker.
 	playbook := readFile(t, c+"/playbook.md")
 	os.WriteFile(c+"/playbook.md", []byte(playbook+"\n## Preferences\n\n- Don't end replies with the team status line.\n"), 0o644)
-	if out := block(); out != head+"playbook.md hides the team line, so don't add it. Status only:\nTeam: engineer starting\n" {
+	if out := block(); out != head+"playbook.md hides the team line, so don't add it. Status only:\nTeam: engineer starting\n"+waitAsk {
 		t.Errorf("hidden: %q", out)
 	}
 	if _, err := os.Stat(home + "/.cadrei/config/team-line-hint"); err == nil {
@@ -104,13 +105,23 @@ func TestHookTeamStatus(t *testing.T) {
 	}
 	os.Chmod(home+"/.cadrei/config", 0o700)
 	first := head + "End your reply with this line, exactly, after a blank line:\nTeam: engineer starting\nFirst time only: right under it, add exactly:\n" +
-		`(Say "hide the team line" if you'd rather not see this.)` + "\n"
+		`(Say "hide the team line" if you'd rather not see this.)` + "\n" + waitAsk
 	if out := block(); out != first {
 		t.Errorf("first: %q", out)
 	}
-	if out := block(); out != head+"End your reply with this line, exactly, after a blank line:\nTeam: engineer starting\n" {
+	later := head + "End your reply with this line, exactly, after a blank line:\nTeam: engineer starting\n"
+	if out := block(); out != later+waitAsk {
 		t.Errorf("later: %q", out)
 	}
+	// PR E (N8): with a wait running, the block doesn't ask for one.
+	lock, err := fsx.Acquire(waitLockPath(c+"/.claude/build"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := block(); out != later {
+		t.Errorf("with a wait running: %q", out)
+	}
+	lock.Release()
 	// Once a member has finished a task, a reminder of the every-chat hook
 	// offer, once.
 	feed(t, c, "work-dev-engineer", `{"hook_event_name":"Stop"}`)

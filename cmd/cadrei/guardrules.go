@@ -260,7 +260,8 @@ var promptModes = setOf("default", "acceptEdits", "auto")
 // cadrei by its name or a full path, literal words, nothing around it.
 // The choice is yes, no, or a pick for each of up to four questions (a
 // number, or numbers joined by commas). answerListing is cadrei answer
-// with nothing after it.
+// that answers nothing: with nothing after it, a code alone, or --wait
+// (with a --timeout of letters and digits), as one simple command.
 const picksRule = `[0-9]{1,2}(?:,[0-9]{1,2}){0,5}`
 
 // stopModelRule is 1 and a model, a safeguard stop's answer: a model name
@@ -270,7 +271,7 @@ const stopModelRule = `1[ \t]+[A-Za-z0-9._:/@][A-Za-z0-9._:/@-]{0,199}`
 
 var (
 	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|` + stopModelRule + `|` + picksRule + `(?:[ \t]+` + picksRule + `){0,3})\s*$`)
-	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer\s*$`)
+	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer(?:[ \t]+[a-z0-9]{3}|[ \t]+--wait(?:[ \t]+--timeout[ \t]+[0-9][0-9a-z.]{0,15})?)?\s*$`)
 )
 
 // tmuxRule looks for a tmux command that isn't read-only: one that types,

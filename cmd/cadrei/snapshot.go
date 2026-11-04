@@ -35,8 +35,9 @@ const seed = "(cadrei opened this chat)"
 var preAllowed = []string{"cadrei ls", "cadrei ls --json", "cadrei ls --all", "cadrei ls --json --all", "cadrei ls --all --json", "cadrei allow", "cadrei allow list",
 	// It only records the user's no to the every-chat hook.
 	"cadrei hook skip",
-	// The listing of who's waiting: it answers nothing.
-	"cadrei answer",
+	// The listing of who's waiting, and the wait for the next one: they
+	// answer nothing.
+	"cadrei answer", "cadrei answer --wait",
 	// What the crew's other machines pushed, at each session start. It
 	// never force-pushes, and it says which files came in changed.
 	"cadrei pull"}

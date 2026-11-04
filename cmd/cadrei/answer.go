@@ -568,10 +568,11 @@ var goneFor = 250 * time.Millisecond
 
 // runAnswer is cadrei answer [<code> yes|no|<n>].
 func runAnswer(e *env) int {
-	if len(e.args) == 1 {
-		return e.failWith("Use " + cmd("cadrei answer") + " to see who's waiting on you, or " + cmd("cadrei answer <code> yes|no|<n>") + " to answer.")
+	waiting := len(e.args) > 0 && e.args[0] == "--wait"
+	if len(e.args) > 0 && strings.HasPrefix(e.args[0], "-") && !waiting {
+		return e.failWith("Use " + cmd("cadrei answer") + " to see who's waiting on you, " + cmd("cadrei answer <code>") + " for one of them, " + cmd("cadrei answer <code> yes|no|<n>") + " to answer, or " + cmd("cadrei answer --wait") + " to wait for the next.")
 	}
-	if len(e.args) > 1+runtime.MaxParts {
+	if len(e.args) > 1+runtime.MaxParts && !waiting {
 		return e.failWith("Use " + cmd("cadrei answer <code> <n> <n>") + ", one answer for each question, at most " + strconv.Itoa(runtime.MaxParts) + ".")
 	}
 	if e.memberAnyway("answer for you") {
@@ -589,14 +590,22 @@ func runAnswer(e *env) int {
 		return e.failWith("cadrei answer runs only in the orchestrator cadrei opened, or in your own terminal.")
 	}
 	t := session.Default()
-	if len(e.args) == 0 {
+	switch {
+	case len(e.args) == 0:
 		return e.listWaiting(r, t)
+	case waiting:
+		return e.runWait(r, t, rt.BuildDir(r.Path), e.args[1:])
 	}
 	// A question asked with others takes an answer for each.
 	code, choice := e.args[0], strings.Join(e.args[1:], " ")
 	w := findWaiting(r, t, code)
 	if w == nil {
 		return e.failWith(nothingWaiting(code, cmd))
+	}
+	// A code alone: that one request, with the line that answers it.
+	if choice == "" {
+		e.showRequest(w)
+		return 0
 	}
 	if why := checkChoice(w, code, choice, cmd); why != "" {
 		return e.failWith(why)
@@ -853,108 +862,118 @@ func (e *env) listWaiting(r *cadreis.Resolved, t session.Tmux) int {
 		return 0
 	}
 	e.say("Waiting on you:")
-	pad := func(label string) string { return label + spaces(16-len(label)) }
+	e.listRequests(list)
+	return 0
+}
+
+// listRequests shows each of list as the listing does, after a blank line.
+func (e *env) listRequests(list []waitingOn) {
 	for _, w := range list {
 		e.say("")
-		code := w.req.Code
-		switch {
-		case session.Held(w.req):
-			e.listHeld(&w, pad)
-		case w.req.Kind == session.ForApproval:
-			_, object, kind := act(w.req)
-			e.say("%s", "  "+code+"  "+capital(w.place())+" wants to "+kind+":")
-			// A command of several lines, line by line.
-			for _, l := range strings.Split(object, "⏎") {
-				e.say("%s", "         "+l)
-			}
-			if !answerable(w.req) {
-				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
-				continue
-			}
-			if hasPlainYes(w.req) {
-				e.say("%s", "       "+pad("Allow it once:")+cmd("cadrei answer "+code+" yes"))
-			}
-			e.say("%s", "       "+pad("Say no:")+cmd("cadrei answer "+code+" no"))
-			// Its other choices, as its screen showed them.
-			if others := otherChoices(w.req); len(others) > 0 {
-				e.say("%s", "       Its other choices:")
-				for _, n := range others {
-					e.say("%s", fmt.Sprintf("         %d. %s%s", n, w.req.Options[n-1], lastsTag(w.req.Options[n-1])))
-				}
-				e.say("%s", "       "+pad("Pick one:")+cmd("cadrei answer "+code+" "+strconv.Itoa(others[0])))
-			}
-		case many(w.req) && answerable(w.req):
-			lead := " asks:"
-			if len(w.req.Parts) > 1 {
-				lead = fmt.Sprintf(" asks %d questions:", len(w.req.Parts))
-			}
-			e.say("%s", "  "+code+"  "+capital(w.place())+lead)
-			for _, p := range w.req.Parts {
-				more := ""
-				if p.Multi {
-					more = " (pick one or more)"
-				}
-				e.say("%s", "         "+p.Question+more)
-				for i, o := range p.Options {
-					e.say("%s", fmt.Sprintf("           %d. %s", i+1, o))
-				}
-			}
-			e.say("%s", "       "+pad("Answer:")+cmd(partsExample(w.req)))
-		case w.req.Kind == session.ForQuestion && answerable(w.req):
-			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
-			for i, o := range w.req.Options {
-				e.say("%s", fmt.Sprintf("         %d. %s", i+1, o))
-			}
-			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" 1"))
-		case w.req.Kind == session.ForQuestion:
-			e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
-			e.say("%s", "       It has more options or questions than cadrei keeps. Answer it in its window: "+cmd(w.attach()))
-		case w.req.Kind == session.ForPrompt && answerable(w.req):
-			e.say("%s", "  "+code+"  "+capital(w.place())+" shows a prompt:")
-			for _, l := range strings.Split(w.req.Question, "⏎") {
-				e.say("%s", "         "+strings.TrimSpace(l))
-			}
-			ok := offered(w.req)
-			for _, n := range ok {
-				e.say("%s", fmt.Sprintf("         %d. %s", n, w.req.Options[n-1]))
-			}
-			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ok[0])))
-		case w.req.Kind == session.ForStart:
-			e.say("%s", "  "+code+"  "+capital(w.place())+" waits on a start-up screen:")
-			for _, l := range strings.Split(w.req.Question, "⏎") {
-				e.say("%s", "         "+l)
-			}
-			if w.req.Tool == runtime.StartOther {
-				e.say("%s", "         ("+unknownScreen+")")
-			}
-			ns, refused := startOffered(&w)
-			if !answerable(w.req) || len(ns) == 0 {
-				e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
-				continue
-			}
-			for i, o := range w.req.Options {
-				switch n := i + 1; {
-				case slices.Contains(ns, n):
-					e.say("%s", fmt.Sprintf("         %d. %s", n, o))
-				case refused != "" && trustYes(w.req, o):
-					e.say("%s", fmt.Sprintf("         %d. %s (only in its window: %s)", n, o, refused))
-				default:
-					e.say("%s", fmt.Sprintf("         %d. %s (only in its window)", n, o))
-				}
-			}
-			e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ns[0])))
-		case w.req.Kind == session.ForSafeguard && answerable(w.req):
-			e.say("%s", "  "+code+"  "+modelName()+"'s safeguards stopped the last reply of "+w.place()+", so it won't answer on that model:")
-			e.say("%s", "         1. "+w.req.Options[0]+" (on its chat, for this start only)")
-			e.say("%s", "         2. "+w.req.Options[1]+" (a new chat that won't remember this one)")
-			e.say("%s", "       "+pad("Another model:")+cmd("cadrei answer "+code+" 1 <model>"))
-			e.say("%s", "       "+pad("Start it fresh:")+cmd("cadrei answer "+code+" 2"))
-		default:
-			e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
-			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
-		}
+		e.showRequest(&w)
 	}
-	return 0
+}
+
+// showRequest shows one request, with the line that answers it.
+func (e *env) showRequest(w *waitingOn) {
+	pad := func(label string) string { return label + spaces(16-len(label)) }
+	code := w.req.Code
+	switch {
+	case session.Held(w.req):
+		e.listHeld(w, pad)
+	case w.req.Kind == session.ForApproval:
+		_, object, kind := act(w.req)
+		e.say("%s", "  "+code+"  "+capital(w.place())+" wants to "+kind+":")
+		// A command of several lines, line by line.
+		for _, l := range strings.Split(object, "⏎") {
+			e.say("%s", "         "+l)
+		}
+		if !answerable(w.req) {
+			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
+			return
+		}
+		if hasPlainYes(w.req) {
+			e.say("%s", "       "+pad("Allow it once:")+cmd("cadrei answer "+code+" yes"))
+		}
+		e.say("%s", "       "+pad("Say no:")+cmd("cadrei answer "+code+" no"))
+		// Its other choices, as its screen showed them.
+		if others := otherChoices(w.req); len(others) > 0 {
+			e.say("%s", "       Its other choices:")
+			for _, n := range others {
+				e.say("%s", fmt.Sprintf("         %d. %s%s", n, w.req.Options[n-1], lastsTag(w.req.Options[n-1])))
+			}
+			e.say("%s", "       "+pad("Pick one:")+cmd("cadrei answer "+code+" "+strconv.Itoa(others[0])))
+		}
+	case many(w.req) && answerable(w.req):
+		lead := " asks:"
+		if len(w.req.Parts) > 1 {
+			lead = fmt.Sprintf(" asks %d questions:", len(w.req.Parts))
+		}
+		e.say("%s", "  "+code+"  "+capital(w.place())+lead)
+		for _, p := range w.req.Parts {
+			more := ""
+			if p.Multi {
+				more = " (pick one or more)"
+			}
+			e.say("%s", "         "+p.Question+more)
+			for i, o := range p.Options {
+				e.say("%s", fmt.Sprintf("           %d. %s", i+1, o))
+			}
+		}
+		e.say("%s", "       "+pad("Answer:")+cmd(partsExample(w.req)))
+	case w.req.Kind == session.ForQuestion && answerable(w.req):
+		e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
+		for i, o := range w.req.Options {
+			e.say("%s", fmt.Sprintf("         %d. %s", i+1, o))
+		}
+		e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" 1"))
+	case w.req.Kind == session.ForQuestion:
+		e.say("%s", "  "+code+"  "+capital(w.place())+" asks: "+w.req.Question)
+		e.say("%s", "       It has more options or questions than cadrei keeps. Answer it in its window: "+cmd(w.attach()))
+	case w.req.Kind == session.ForPrompt && answerable(w.req):
+		e.say("%s", "  "+code+"  "+capital(w.place())+" shows a prompt:")
+		for _, l := range strings.Split(w.req.Question, "⏎") {
+			e.say("%s", "         "+strings.TrimSpace(l))
+		}
+		ok := offered(w.req)
+		for _, n := range ok {
+			e.say("%s", fmt.Sprintf("         %d. %s", n, w.req.Options[n-1]))
+		}
+		e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ok[0])))
+	case w.req.Kind == session.ForStart:
+		e.say("%s", "  "+code+"  "+capital(w.place())+" waits on a start-up screen:")
+		for _, l := range strings.Split(w.req.Question, "⏎") {
+			e.say("%s", "         "+l)
+		}
+		if w.req.Tool == runtime.StartOther {
+			e.say("%s", "         ("+unknownScreen+")")
+		}
+		ns, refused := startOffered(w)
+		if !answerable(w.req) || len(ns) == 0 {
+			e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
+			return
+		}
+		for i, o := range w.req.Options {
+			switch n := i + 1; {
+			case slices.Contains(ns, n):
+				e.say("%s", fmt.Sprintf("         %d. %s", n, o))
+			case refused != "" && trustYes(w.req, o):
+				e.say("%s", fmt.Sprintf("         %d. %s (only in its window: %s)", n, o, refused))
+			default:
+				e.say("%s", fmt.Sprintf("         %d. %s (only in its window)", n, o))
+			}
+		}
+		e.say("%s", "       "+pad("Answer:")+cmd("cadrei answer "+code+" "+strconv.Itoa(ns[0])))
+	case w.req.Kind == session.ForSafeguard && answerable(w.req):
+		e.say("%s", "  "+code+"  "+modelName()+"'s safeguards stopped the last reply of "+w.place()+", so it won't answer on that model:")
+		e.say("%s", "         1. "+w.req.Options[0]+" (on its chat, for this start only)")
+		e.say("%s", "         2. "+w.req.Options[1]+" (a new chat that won't remember this one)")
+		e.say("%s", "       "+pad("Another model:")+cmd("cadrei answer "+code+" 1 <model>"))
+		e.say("%s", "       "+pad("Start it fresh:")+cmd("cadrei answer "+code+" 2"))
+	default:
+		e.say("%s", "  "+code+"  "+capital(w.place())+" is waiting on you.")
+		e.say("%s", "       Answer it in its window: "+cmd(w.attach()))
+	}
 }
 
 // promptOption is one numbered option of a prompt on a member's screen.

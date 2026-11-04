@@ -148,6 +148,11 @@ func teamBlock(r *cadreis.Resolved, now time.Time, offer bool) string {
 	if offer && finished {
 		ask = offerAsk
 	}
+	// With members running, a wait in the background tells the orchestrator
+	// of a new prompt while the user isn't typing.
+	if rt, err := runtime.Get(runtimeName()); err == nil && !waitRunning(rt.BuildDir(r.Path)) {
+		ask = waitAsk + ask
+	}
 	// Who waits on the user, from cadrei's record of each request.
 	if waiting := waitingIn(views); len(waiting) > 0 {
 		var b strings.Builder
@@ -167,6 +172,9 @@ func teamBlock(r *cadreis.Resolved, now time.Time, offer bool) string {
 	}
 	return block + ask
 }
+
+// waitAsk is the block's line when members run and no wait does.
+const waitAsk = "No cadrei answer --wait is running. Start one in the background now, as the skill's \"Waiting on the user\" says, so a new prompt wakes you.\n"
 
 // offerAsk reminds the orchestrator, once, of the every-chat hook offer
 // the skill makes after the first relayed task, which a model can skip.
