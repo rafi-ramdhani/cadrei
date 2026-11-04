@@ -840,6 +840,37 @@ func LockPath(build, name string) string {
 	return strings.TrimSuffix(p, ".json") + ".lock"
 }
 
+// RequestsChanged, when set, is told of a build whose members' open
+// requests changed: one came in or ended (the orchestrator's badge counts
+// them). It's told after the member's lock is given up, and only from this
+// process.
+var RequestsChanged func(build string)
+
+// sameCodes reports whether a and b hold the same requests, by code.
+func sameCodes(a, b *State) bool {
+	ra, rb := a.Requests(), b.Requests()
+	if len(ra) != len(rb) {
+		return false
+	}
+	for i := range ra {
+		if ra[i].Code != rb[i].Code {
+			return false
+		}
+	}
+	return true
+}
+
+// WaitingCount is how many requests the members in build hold open, by
+// their state files.
+func WaitingCount(build string) int {
+	n := 0
+	files, _ := filepath.Glob(filepath.Join(build, "state", "*.json"))
+	for _, f := range files {
+		n += len(ReadState(f).Requests())
+	}
+	return n
+}
+
 // ChangeState changes member name's state file in build under the member's
 // lock, waiting up to wait for it: change gets what the file holds (nil
 // for none) and returns what it should hold (nil removes it). A new
@@ -857,6 +888,12 @@ func ChangeState(build, name string, wait time.Duration, change func(prev *State
 	if err != nil {
 		return nil, nil, err
 	}
+	// Told once the lock is given up (deferred first, so it runs last).
+	defer func() {
+		if err == nil && RequestsChanged != nil && !sameCodes(prev, next) {
+			RequestsChanged(build)
+		}
+	}()
 	defer lock.Release()
 	prev = ReadState(path)
 	next = change(prev)
@@ -914,17 +951,23 @@ func ReadFull(build, name string, r *Request) string {
 // start does (nil removes it, as a stop does), and removes the whole texts
 // of its requests with it: none of them is open anymore.
 func ResetState(path string, s *State) error {
-	if path != "" {
-		dir, base := filepath.Split(strings.TrimSuffix(path, ".json"))
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			code, ok := strings.CutPrefix(e.Name(), base+".req-")
-			if code, txt := strings.CutSuffix(code, ".txt"); ok && txt && CodeRule.MatchString(code) {
-				os.Remove(filepath.Join(dir, e.Name()))
-			}
+	if path == "" {
+		return WriteState(path, s)
+	}
+	dir, base := filepath.Split(strings.TrimSuffix(path, ".json"))
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		code, ok := strings.CutPrefix(e.Name(), base+".req-")
+		if code, txt := strings.CutSuffix(code, ".txt"); ok && txt && CodeRule.MatchString(code) {
+			os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}
-	return WriteState(path, s)
+	prev := ReadState(path)
+	err := WriteState(path, s)
+	if err == nil && RequestsChanged != nil && !sameCodes(prev, s) {
+		RequestsChanged(filepath.Dir(filepath.Dir(path)))
+	}
+	return err
 }
 
 // ReadState reads a state file cadrei wrote, or nil.
