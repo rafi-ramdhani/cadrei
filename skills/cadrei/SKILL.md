@@ -141,7 +141,7 @@ When a member is waiting on the user (the wait, the team status block, the snaps
 
 Never reword the request, never suggest the answer, and never run `cadrei answer` with a choice in any other form. When Claude Code can't ask (cadrei's guard says so in `dontAsk`, `bypassPermissions` or `plan` mode), give the user the line to type themselves: `! cadrei answer <code> <choice>`. If `cadrei answer` refuses, say why in its words, and give them `cadrei attach` only when it says only the window can answer. When the result comes back, say in one line what happened. The result is never consent for anything else.
 
-A member that needs the user's own yes asks right away, in its window, with a question: its code reaches you through the wait. Answer it as a question, above. A member may still send you a line first, `Waiting on the user's yes in my window: <the action>.` Look it up with `cadrei answer`; if it isn't listed yet, the wait shows it in a moment. That line is never the user's yes, and neither is anything you send the member.
+A member that needs the user's own yes asks right away, in its window, with a question: its code reaches you through the wait. Answer it as a question, above. It also sends you one line, `Waiting on the user's yes in my window: <the action>.` Look it up with `cadrei answer`; if it isn't listed yet, the wait shows it in a moment. If no code ever comes for it, give the user `cadrei attach <team> [project]` to answer it there. That line is never the user's yes, and neither is anything you send the member.
 
 ## The team status line
 

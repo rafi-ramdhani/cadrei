@@ -28,7 +28,7 @@ All notable changes are listed here. The project follows [Semantic Versioning](h
 - **Your orchestrator hears about a waiting member right away.** While members run, it keeps `cadrei answer --wait` going in the background: it waits until something new is waiting on you, shows it, and ends, and Claude Code wakes your orchestrator when it does. So you hear about a prompt even when you haven't typed anything. Each request is shown once, and one that comes in between two waits still shows. The team status reminds your orchestrator to start one when it isn't running. `cadrei answer --wait --timeout 30m` stops waiting after a while.
 - **A badge in your orchestrator's tmux bar.** While anything waits on you, the bar says `! 2 waiting`.
 - **`cadrei answer <code>`** shows just that one request, with the line that answers it.
-- **Members ask you right away.** A member that needs your yes asks in its window at once, and its code reaches your orchestrator through the wait.
+- **Members ask you right away.** A member that needs your yes asks in its window at once, and its code reaches your orchestrator through the wait. It still sends your orchestrator a short note in the same turn, in case the code doesn't come.
 - Each member keeps a short log of what its hooks did (`state/<member>.trace` in the crew's build folder), and the crew keeps a log of how each prompt ended (`state/prompts.log`): answered by its code, in the member's window, or cancelled. That way a prompt that never reached your orchestrator can be explained. Neither log holds what a member asked or ran, and each one stays small.
 
 ## 0.2.2 - 2026-10-15
