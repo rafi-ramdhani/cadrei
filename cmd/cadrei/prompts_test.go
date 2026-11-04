@@ -152,6 +152,29 @@ func TestAQuestionBesideASendMessageWaits(t *testing.T) {
 	}
 }
 
+// 2026-11-02: an engineer in auto mode got the orchestrator's message,
+// sent "Waiting on the user's yes in my window", then asked with
+// AskUserQuestion, and cadrei ls --json showed it working with no code. The
+// installed cadrei was 0.2.2, which records a question only at its
+// permission request. Each hook here carries auto mode, as Claude Code
+// sends it, and no permission request comes (auto mode may send none for
+// a question): the question's own start records it, with a code, in ls
+// --json too.
+func TestAQuestionAfterASendMessageInAutoModeGetsACode(t *testing.T) {
+	c := teamOf(t)
+	auto := func(ev string) string { return strings.Replace(ev, "{", `{"permission_mode":"auto",`, 1) }
+	for _, ev := range []string{`{"hook_event_name":"UserPromptSubmit"}`, sendStart, sendEnd, shipStart} {
+		feed(t, c, "work-dev-engineer", auto(ev))
+	}
+	st := stateOf(c)
+	if st.State != session.Waiting || st.Current() == nil || st.Current().Kind != session.ForQuestion {
+		t.Fatalf("state: %+v", st)
+	}
+	if state, req := lsRequest(t, "engineer"); state != session.Waiting || req == nil || req.Code != st.Current().Code || req.Kind != session.ForQuestion || req.Summary != "Ship it?" {
+		t.Errorf("ls --json: %s %+v", state, req)
+	}
+}
+
 // Two prompts at once each get a code, and the listing shows both.
 func TestTwoPromptsAtOnceBothShow(t *testing.T) {
 	c := teamOf(t)
@@ -185,6 +208,14 @@ func TestHooksAtOnceAllCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CADREI_HOME", c)
+	// 40 hooks wait their turn for one lock. Under -race on a busy CI
+	// runner they take over 3 s, past the 2 s a hook waits before it drops
+	// its event (traced), which is what failed here now and then: a lost
+	// PreToolUse leaves its request with no call. This test is about the
+	// lock keeping every change, so it waits as long as they take.
+	was := stateLockWait
+	stateLockWait = time.Minute
+	t.Cleanup(func() { stateLockWait = was })
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)

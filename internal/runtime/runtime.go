@@ -306,6 +306,10 @@ type StateEvent struct {
 	// as the runtime passed it to the hook: never the member's own
 	// description of it. For EvPromptShown, cadrei reads it off the screen.
 	Request *Request
+	// For EvDenied: why the runtime's auto mode denied the call, in its
+	// own words (one printable line, RequestText), and the folder the
+	// member ran it in.
+	Reason, Dir string
 }
 
 // Request is what a member asks the user: a tool it wants to run, or a
@@ -315,7 +319,10 @@ type Request struct {
 	Summary string // what it would run or touch: a command, a path, a URL
 	// Full is Summary whole, when Summary had to be cut short (at most
 	// FullLimit, cut again past that), so an answer can check it all.
-	Full     string
+	Full string
+	// Altered: what it would run held characters Summary shows otherwise
+	// (Altered), so Summary isn't the command itself.
+	Altered  bool
 	Question string   // a question's text, for a question
 	Options  []string // a question's option labels, at most MaxOptions
 	// Multi: a question that has no options, more options than recorded,
@@ -380,6 +387,15 @@ func TraceWord(s string) string {
 	return s
 }
 
+// Altered reports whether RequestText changes text other than by its line
+// breaks and its length: it holds a tab, or a control or invisible
+// character, so what cadrei shows isn't the text itself.
+func Altered(text string) bool {
+	return strings.ContainsFunc(strings.ReplaceAll(text, "\r\n", "\n"), func(r rune) bool {
+		return r != '\n' && (r == '\t' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Co, r) || r == ' ' || r == ' ' || r == '￼')
+	})
+}
+
 // RequestText makes text one printable line of at most limit characters:
 // a line break shows as ⏎, any other control or invisible character as ?,
 // and what's past the limit is cut, with an ellipsis.
@@ -416,6 +432,7 @@ const (
 	EvStopFailure  = "stop-failure"  // its turn ended on an error: idle
 	EvStart        = "start"         // its session started: idle
 	EvIdleReminder = "idle-reminder" // the runtime reminds the user it is idle
+	EvDenied       = "denied"        // its auto mode denied a tool call, which won't run
 	EvEnd          = "end"           // its session ended
 )
 
@@ -495,6 +512,9 @@ type ShellCall struct {
 	// (Claude Code: default, acceptEdits, auto, plan, dontAsk,
 	// bypassPermissions), or "" when the input doesn't say.
 	Mode string
+	// Dir is the folder the session runs it in, or "" when the input
+	// doesn't say.
+	Dir string
 }
 
 // Sent is a message the orchestrator sent, as its notify hook reads it.

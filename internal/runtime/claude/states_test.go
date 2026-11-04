@@ -63,6 +63,12 @@ func TestStateEvent(t *testing.T) {
 		`{"hook_event_name":"Notification","notification_type":"agent_completed"}`:                        {},
 		`{"hook_event_name":"PostToolUse","tool_name":"Bash"}`:                                            {Name: runtime.EvToolDone},
 		`{"hook_event_name":"PostToolUseFailure","tool_name":"Bash"}`:                                     {Name: runtime.EvToolDone},
+		// PR D (N6): auto mode's denial, its reason in its own words, and
+		// the folder (only an absolute one).
+		`{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_use_id":"toolu_1","cwd":"/src/app","tool_input":{"command":"git push --force"},"reason":"Force push\nneeds consent"}`: {Name: runtime.EvDenied,
+			Request: &runtime.Request{Tool: "Bash", Summary: "git push --force"}, Reason: "Force push⏎needs consent", Dir: "/src/app"},
+		`{"hook_event_name":"PermissionDenied","tool_name":"WebFetch","cwd":"relative","tool_input":{"url":"https://example.com"}}`: {Name: runtime.EvDenied,
+			Request: &runtime.Request{Tool: "WebFetch", Summary: "https://example.com"}},
 		`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Ship?","options":[{"label":"Yes"},{"label":"No"}]}]}}`: {Name: runtime.EvToolUse, Question: true,
 			Request: &runtime.Request{Tool: "AskUserQuestion", Question: "Ship?", Options: []string{"Yes", "No"}}},
 		`{"hook_event_name":"Notification","notification_type":"idle_prompt"}`:                   {Name: runtime.EvIdleReminder},
@@ -120,7 +126,7 @@ func TestARequestIsWhatClaudeCodePassed(t *testing.T) {
 		want        runtime.Request
 	}{
 		{"Bash", `{"command":"gh pr merge 42 --squash","description":"Merge it"}`, runtime.Request{Tool: "Bash", Summary: "gh pr merge 42 --squash"}},
-		{"Bash", `{"command":"echo a\nrm -rf x\u200b\u001b[2J"}`, runtime.Request{Tool: "Bash", Summary: "echo a⏎rm -rf x??[2J"}},
+		{"Bash", `{"command":"echo a\nrm -rf x\u200b\u001b[2J"}`, runtime.Request{Tool: "Bash", Summary: "echo a⏎rm -rf x??[2J", Altered: true}},
 		{"Edit", `{"file_path":"/w/a.go","old_string":"x","new_string":"y"}`, runtime.Request{Tool: "Edit", Summary: "/w/a.go"}},
 		{"Write", `{"file_path":"/w/b.md","content":"hi"}`, runtime.Request{Tool: "Write", Summary: "/w/b.md"}},
 		{"WebFetch", `{"url":"https://example.com/x","prompt":"read"}`, runtime.Request{Tool: "WebFetch", Summary: "https://example.com/x"}},
@@ -360,6 +366,13 @@ func TestShellCallReadsTheBashCall(t *testing.T) {
 	ops := sessions{}
 	if c, err := ops.ShellCall(strings.NewReader(`{"tool_name":"Bash","permission_mode":"acceptEdits","tool_input":{"command":"ls -la"}}`)); c != (runtime.ShellCall{Command: "ls -la", Shell: true, Mode: "acceptEdits"}) || err != nil {
 		t.Errorf("Bash: %+v %v", c, err)
+	}
+	// PR D: the folder it runs in, only an absolute one.
+	if c, _ := ops.ShellCall(strings.NewReader(`{"tool_name":"Bash","cwd":"/src/app","tool_input":{"command":"ls"}}`)); c.Dir != "/src/app" {
+		t.Errorf("cwd: %+v", c)
+	}
+	if c, _ := ops.ShellCall(strings.NewReader(`{"tool_name":"Bash","cwd":"src","tool_input":{"command":"ls"}}`)); c.Dir != "" {
+		t.Errorf("relative cwd: %+v", c)
 	}
 	if c, err := ops.ShellCall(strings.NewReader(`{"tool_name":"Read","tool_input":{"file_path":"/x"}}`)); c.Shell || err != nil {
 		t.Errorf("Read: %+v %v", c, err)

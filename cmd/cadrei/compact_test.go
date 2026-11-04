@@ -37,10 +37,12 @@ func inputMember(t *testing.T, home string, ready, echo bool) {
 }
 
 // typedLine is the line the stub member got, after up to within: a
-// loaded machine can take more than a second to pass the keys on.
+// loaded machine can take more than a second to pass the keys on. It
+// waits for the whole line: the stub's shell makes the file before it
+// writes it, and a look in between read it empty (on CI, now and then).
 func typedLine(home string, within time.Duration) string {
 	for end := time.Now().Add(within); time.Now().Before(end); {
-		if raw, err := os.ReadFile(home + "/typed"); err == nil {
+		if raw, err := os.ReadFile(home + "/typed"); err == nil && strings.HasSuffix(string(raw), "\n") {
 			return string(raw)
 		}
 		time.Sleep(50 * time.Millisecond)

@@ -23,7 +23,7 @@ import (
 
 // stateEvents are the hook events a member's settings copy runs
 // cadrei hook state for, and what each means for its state.
-var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Stop", "StopFailure", "Notification", "SessionEnd"}
+var stateEvents = []string{"UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "PermissionDenied", "Stop", "StopFailure", "Notification", "SessionEnd"}
 
 // callWord is a tool's name or a call's id as the hook got it, for
 // matching one call's hooks to each other: any printable text up to
@@ -47,6 +47,8 @@ func StateHook(binary string) string { return hookCommand(binary, "state") }
 // carries a digest of the tool's input to be matched to its call's start.
 // Notification's permission_prompt comes 6 seconds after any prompt, and
 // names nothing, so it only says to look at the screen (the catch-all).
+// PermissionDenied comes when auto mode denies a call: the call won't run,
+// and its reason is the classifier's.
 func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 	var in struct {
 		Event      string          `json:"hook_event_name"`
@@ -56,6 +58,8 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 		ToolID     string          `json:"tool_use_id"`
 		Input      json.RawMessage `json:"tool_input"`
 		Type       string          `json:"notification_type"`
+		Reason     string          `json:"reason"`
+		Dir        string          `json:"cwd"`
 	}
 	if json.NewDecoder(io.LimitReader(input, 1<<20)).Decode(&in) != nil {
 		return runtime.StateEvent{}
@@ -78,6 +82,12 @@ func (sessions) StateEvent(input io.Reader) runtime.StateEvent {
 		}
 	case "PostToolUse", "PostToolUseFailure":
 		ev.Name = runtime.EvToolDone
+	case "PermissionDenied":
+		ev.Name, ev.Request = runtime.EvDenied, request(in.Tool, in.Input)
+		ev.Reason = runtime.RequestText(in.Reason, runtime.SummaryLimit)
+		if filepath.IsAbs(in.Dir) {
+			ev.Dir = runtime.RequestText(in.Dir, runtime.FullLimit)
+		}
 	case "PermissionRequest":
 		ev.Name, ev.InputKey = runtime.EvPermission, inputKey(in.Input)
 		ev.Question = in.Tool == "AskUserQuestion"
@@ -187,7 +197,7 @@ func request(tool string, input json.RawMessage) *runtime.Request {
 			summary = tool + " " + summary
 		}
 	}
-	r.Summary = runtime.RequestText(summary, runtime.SummaryLimit)
+	r.Summary, r.Altered = runtime.RequestText(summary, runtime.SummaryLimit), runtime.Altered(summary)
 	if strings.HasSuffix(r.Summary, "…") {
 		r.Full = runtime.RequestText(summary, runtime.FullLimit)
 	}
@@ -239,7 +249,7 @@ const guardLimit = 8 << 20
 
 // ShellCall: Claude Code's PreToolUse input. The Bash tool's command is
 // the command line; any other tool runs none. permission_mode is the
-// session's mode. Input that isn't Claude Code's, is cut short, or has a
+// session's mode, and cwd the folder it runs in. Input that isn't Claude Code's, is cut short, or has a
 // Bash call without its command is an error.
 func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
 	raw, err := io.ReadAll(io.LimitReader(input, guardLimit+1))
@@ -252,6 +262,7 @@ func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
 	var in struct {
 		Tool  *string `json:"tool_name"`
 		Mode  string  `json:"permission_mode"`
+		Dir   string  `json:"cwd"`
 		Input struct {
 			Command *string `json:"command"`
 		} `json:"tool_input"`
@@ -267,7 +278,11 @@ func (sessions) ShellCall(input io.Reader) (runtime.ShellCall, error) {
 	case in.Input.Command == nil:
 		return runtime.ShellCall{}, errors.New("the Bash call has no command")
 	}
-	return runtime.ShellCall{Command: *in.Input.Command, Shell: true, Mode: in.Mode}, nil
+	dir := ""
+	if filepath.IsAbs(in.Dir) {
+		dir = in.Dir
+	}
+	return runtime.ShellCall{Command: *in.Input.Command, Shell: true, Mode: in.Mode, Dir: dir}, nil
 }
 
 // SessionSettings: a Claude Code process runs claude (a native build, or

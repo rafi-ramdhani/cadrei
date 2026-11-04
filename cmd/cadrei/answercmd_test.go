@@ -62,20 +62,25 @@ func promptMember(t *testing.T, home, role, fixture string) {
 	grown := home + "/grown-" + role
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
-		stubReady+"sleep 1\nprintf '\\033[H\\033[2J'\ncat '"+abs+"'\n"+
+		// The terminal goes raw before the prompt shows, so a key that
+		// comes once it shows is read, never left echoed in a line that
+		// waits for Enter (seen on CI: the key showed under the prompt).
+		// Raw, each line ends in \r\n.
+		stubReady+"sleep 1\nstty raw -echo\nprintf '\\033[H\\033[2J'\nawk '{ printf \"%s\\r\\n\", $0 }' '"+abs+"'\n"+
 		"if [ -e \""+grown+"\" ]; then (set -- $(stty size </dev/tty); rows=$1 cols=$2; while sleep 0.1; do\n"+
 		"  set -- $(stty size </dev/tty); [ \"$1\" -gt \"$rows\" ] || [ \"$2\" -gt \"$cols\" ] || continue\n"+
-		// The key's read has the terminal raw: each line ends in \r\n.
 		"  printf '\\033[H\\033[2J'; awk '{ printf \"%s\\r\\n\", $0 }' \""+grown+"\"; exit 0\n"+
 		"done) & fi\n"+
-		"stty raw -echo\nk=$(dd bs=1 count=1 2>/dev/null)\n"+
+		"k=$(dd bs=1 count=1 2>/dev/null)\n"+
 		// Any key after it (an Enter, say) in the next half second.
 		"stty min 0 time 5\ne=$(dd bs=1 count=8 2>/dev/null)\nstty sane\n"+
 		"printf '%s' \"$e\" > \""+home+"/extra-"+role+"\"\n"+
 		"printf '%s' \"$k\" > \""+home+"/key-"+role+"\"\n"+
 		"[ -e \""+home+"/stay\" ] || printf '\\033[H\\033[2J'\n"+
 		// What its window shows next, when a test gives it.
-		"[ -e \""+home+"/after-"+role+"\" ] && cat \""+home+"/after-"+role+"\"\nexec sleep 300\n")
+		// With home/flicker, the screen stays empty a moment first, as a
+		// redraw read half done.
+		"[ -e \""+home+"/after-"+role+"\" ] && { [ -e \""+home+"/flicker\" ] && sleep 0.15; cat \""+home+"/after-"+role+"\"; }\nexec sleep 300\n")
 	must(t, "up", "dev/"+role)
 	t.Cleanup(func() { session.Default().KillSession("cadrei-work-dev") })
 	screen := ""
@@ -105,11 +110,12 @@ const (
 )
 
 // key is the one key the stub member got, after up to two seconds, or
-// what it got with more after it.
+// what it got with more after it. It waits for the key in the file: the
+// stub's shell makes the file before it writes it.
 func key(t *testing.T, home, role string) string {
 	t.Helper()
 	for i := 0; i < 40; i++ {
-		if raw, err := os.ReadFile(home + "/key-" + role); err == nil {
+		if raw, err := os.ReadFile(home + "/key-" + role); err == nil && len(raw) > 0 {
 			extra, _ := os.ReadFile(home + "/extra-" + role)
 			return string(raw) + string(extra)
 		}
@@ -209,6 +215,32 @@ func TestAnswerSaysWhenThePromptStays(t *testing.T) {
 	}
 }
 
+// PR D review (L2): a screen with no prompt for a moment (a redraw read
+// half done) isn't the prompt gone: when it comes back, the answer says
+// it stayed, and the request stays open under its code.
+func TestAPromptThatFlickersIsntTakenForGone(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	os.WriteFile(home+"/flicker", nil, 0o644)
+	os.WriteFile(home+"/after-engineer", []byte(screenFixture(t, "bash-prompt-live.txt")), 0o644)
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	code := request(t, c, "engineer", mkdirRequest)
+	ownTerminal(t)
+	// The stub's screen is empty for 0.15 s and a cat: well under this,
+	// even on a slow runner.
+	goneFor = 750 * time.Millisecond
+	t.Cleanup(func() { goneFor = 250 * time.Millisecond })
+	n, out, errOut := call("answer", code, "yes")
+	if n != 1 || out != "" || flat(errOut) != "! I pressed your answer, but the prompt is still on the engineer's screen. Check its window: cadrei attach dev" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if st := stateOf(c); st.Current() == nil || st.Current().Code != code {
+		t.Errorf("the request went: %+v", st)
+	}
+}
+
 // tallRequest is the permission request for tallCommand, as the hook gets
 // it.
 func tallRequest() string {
@@ -236,10 +268,26 @@ func TestAPromptTooBigForItsWindowIsReadGrown(t *testing.T) {
 	}
 	exec.Command("tmux", "-L", socket, "resize-window", "-t", "="+s+":=engineer", "-x", "80", "-y", "24").Run()
 	ownTerminal(t)
+	// A stub on a loaded runner can take seconds to take its key (it
+	// failed once on CI under -race with -tags cadreitest, the stub doing
+	// nothing for 4 s), so the answer and the look for the key wait longer
+	// here. A key that's really lost still fails, with the screen it left.
+	answerWait = 10 * time.Second
+	t.Cleanup(func() { answerWait = 2 * time.Second })
 	for role, size := range map[string][2]int{"engineer": {80, 24}, "reviewer": {220, 60}} {
 		code := request(t, c, role, tallRequest())
 		if n, out, errOut := call("answer", code, "yes"); n != 0 || errOut != "" {
-			t.Errorf("%s: exit %d: %q %q", role, n, out, errOut)
+			// Its terminal's mode too: echo on and icanon would mean the key
+			// sat in a line waiting for Enter.
+			pty, _ := exec.Command("tmux", "-L", socket, "display", "-p", "-t", "="+s+":="+role, "#{pane_tty}").Output()
+			mode, _ := exec.Command("sh", "-c", "stty -a < '"+strings.TrimSpace(string(pty))+"'").CombinedOutput()
+			t.Errorf("%s: exit %d: %q %q\nits screen:\n%s\nits terminal:\n%s", role, n, out, errOut, tm.Screen(s, role), mode)
+		}
+		for i := 0; i < 160; i++ {
+			if _, err := os.Stat(home + "/key-" + role); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
 		if k := key(t, home, role); k != "1" {
 			t.Errorf("%s: key %q", role, k)
@@ -386,8 +434,13 @@ func stepsMember(t *testing.T, home, role string, screens ...string) {
 	writeStub(t, home+"/bin/claude", "#!/bin/sh\n"+stubAnswers+
 		"[ -n \"$TMUX\" ] || exit 0\n"+
 		stubReady+"sleep 1\n"+
-		"show() { printf '\\033[H\\033[2J'; [ -e \""+dir+"/$1\" ] && awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"; }\n"+
-		"i=0; show 0; stty raw -echo\n"+
+		// Each screen is drawn in one write, clear and all: drawn in two,
+		// a look between them saw an empty screen, which an answer takes for
+		// a prompt that's gone (on a busy CI runner, now and then).
+		"show() { f=; [ -e \""+dir+"/$1\" ] && f=$(awk '{ printf \"%s\\r\\n\", $0 }' \""+dir+"/$1\"); printf '\\033[H\\033[2J%s' \"$f\"; }\n"+
+		// Raw before the first screen shows, as in promptMember: a key that
+		// comes once it shows is read, never left in a cooked line.
+		"stty raw -echo; i=0; show 0\n"+
 		"while :; do\n"+
 		"  k=$(dd bs=1 count=1 2>/dev/null)\n"+
 		"  [ \"$k\" = \"$(printf '\\033')\" ] && { dd bs=1 count=2 >/dev/null 2>&1; k=→; }\n"+

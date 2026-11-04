@@ -116,13 +116,22 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 			switch m.status.State {
 			case session.SafeguardStopped:
 				stopped = append(stopped, place+" ("+m.Name+"), since "+clock(m.status.Since, now)+", opened with "+attach)
-			case session.Waiting:
-				if w := waitingIn([]sessionView{{Team: v.Team, Project: v.Project, Members: []memberView{m}}}); len(w) == 1 {
-					waiting = append(waiting, w[0].note()+" Its window: "+attach)
-				} else {
-					waiting = append(waiting, place+", for "+waitingFor(m.status.WaitingFor)+", opened with "+attach)
+			}
+			// What it waits on, then any call its guard refused or its auto
+			// mode denied, which it doesn't wait on, whatever its state.
+			var live, held []string
+			for _, w := range waitingIn([]sessionView{{Team: v.Team, Project: v.Project, Members: []memberView{m}}}) {
+				switch {
+				case session.Held(w.req):
+					held = append(held, w.note())
+				case m.status.State == session.Waiting:
+					live = append(live, w.note()+" Its window: "+attach)
 				}
 			}
+			if m.status.State == session.Waiting && len(live) != 1 {
+				live = []string{place + ", for " + waitingFor(m.status.WaitingFor) + ", opened with " + attach}
+			}
+			waiting = append(append(waiting, live...), held...)
 		}
 		members = append(members, label+": "+strings.Join(parts, ", "))
 	}

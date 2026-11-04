@@ -51,9 +51,11 @@ var cadreiDeny = []string{"Edit(//**/.cadrei/config/**)", "Edit(//**/.cadrei/fra
 
 // FixedDeny is added to every member's copy: Protect, the commands that
 // make or switch crews, the ones that move, delete or bring back
-// every crew, and cadrei's own files.
+// every crew, cadrei's hooks (Claude Code runs them itself, never
+// through the Bash tool, and one run from a member's shell could forge
+// its record), and cadrei's own files.
 var FixedDeny = append(append(append([]string{}, Protect...), "Bash(cadrei use:*)", "Bash(cadrei cadreis:*)", "Bash(cadrei init:*)", "Bash(cadrei new:*)",
-	"Bash(cadrei uninstall:*)", "Bash(cadrei restore:*)"), cadreiDeny...)
+	"Bash(cadrei uninstall:*)", "Bash(cadrei restore:*)", "Bash(cadrei hook:*)"), cadreiDeny...)
 
 // FixedSoft is the autoMode.soft_deny entry a file must hold. Frozen, as
 // Protect is: change CadreiSoft, which only the build copy holds, instead.

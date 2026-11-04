@@ -105,6 +105,11 @@ func TestExport(t *testing.T) {
 			t.Errorf("the copy lacks %s", d)
 		}
 	}
+	// 0.2.3 PR D review (M1): no member runs cadrei's hooks from its shell,
+	// where one could forge its own record.
+	if !contains(deny, "Bash(cadrei hook:*)") {
+		t.Error("the copy lacks Bash(cadrei hook:*)")
+	}
 	if soft, _ := texts(root.Get("autoMode").Get("soft_deny")); !contains(soft, CadreiSoft) || !contains(soft, FixedSoft) {
 		t.Errorf("the copy's soft_deny: %q", soft)
 	}
