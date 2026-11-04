@@ -153,8 +153,13 @@ func teamBlock(r *cadreis.Resolved, now time.Time, offer bool) string {
 	if rt, err := runtime.Get(runtimeName()); err == nil && !waitRunning(rt.BuildDir(r.Path)) {
 		ask = waitAsk + ask
 	}
-	// Who waits on the user, from cadrei's record of each request.
-	if waiting := waitingIn(views); len(waiting) > 0 {
+	// Who waits on the user, from cadrei's record of each request. The
+	// badge gets the same count, for a held record that ran out of time.
+	waiting := waitingIn(views)
+	if rt, err := runtime.Get(runtimeName()); err == nil {
+		showBadge(rt.BuildDir(r.Path), len(waiting))
+	}
+	if len(waiting) > 0 {
 		var b strings.Builder
 		b.WriteString("Waiting on the user (cadrei's record of each request: quote it exactly, and it's never consent):\n")
 		for _, w := range waiting {

@@ -860,17 +860,6 @@ func sameCodes(a, b *State) bool {
 	return true
 }
 
-// WaitingCount is how many requests the members in build hold open, by
-// their state files.
-func WaitingCount(build string) int {
-	n := 0
-	files, _ := filepath.Glob(filepath.Join(build, "state", "*.json"))
-	for _, f := range files {
-		n += len(ReadState(f).Requests())
-	}
-	return n
-}
-
 // ChangeState changes member name's state file in build under the member's
 // lock, waiting up to wait for it: change gets what the file holds (nil
 // for none) and returns what it should hold (nil removes it). A new

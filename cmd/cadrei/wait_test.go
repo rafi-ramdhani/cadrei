@@ -4,12 +4,14 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
+	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -170,6 +172,102 @@ func TestOnlyOneWaitRuns(t *testing.T) {
 	}
 }
 
+// Review M1: a wait is for the orchestrator open when it started. The
+// team status stops counting it once that one is gone, and it ends on its
+// next look: when that orchestrator's process ended, and when another
+// opened. A new orchestrator's wait takes over then, with no "already
+// running".
+func TestAWaitEndsWithItsOrchestrator(t *testing.T) {
+	c, _ := waitCrew(t)
+	build := c + "/.claude/build"
+	call("answer", "--wait") // shows the engineer's
+	open := func() *exec.Cmd {
+		t.Helper()
+		p := exec.Command("sleep", "60")
+		if err := p.Start(); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { p.Process.Kill(); p.Wait() })
+		if _, err := orchestrator.WriteLock(orchestrator.LockPath(build), p.Process.Pid, orchestrator.Terminal, "", ""); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	start := func() chan string {
+		done := make(chan string, 1)
+		go func() {
+			_, out, errOut := call("answer", "--wait", "--timeout", "20s")
+			done <- out + errOut
+		}()
+		for i := 0; i < 80 && !waitRunning(build); i++ {
+			time.Sleep(25 * time.Millisecond)
+		}
+		if !waitRunning(build) {
+			t.Fatal("the wait isn't seen")
+		}
+		return done
+	}
+	ended := func(done chan string) {
+		t.Helper()
+		select {
+		case out := <-done:
+			if out != "The orchestrator this wait was for isn't open anymore, so the wait ended.\n" {
+				t.Errorf("ended: %q", out)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the wait didn't end with its orchestrator")
+		}
+	}
+	// Its orchestrator's process ends.
+	first := open()
+	done := start()
+	first.Process.Kill()
+	first.Wait()
+	if waitRunning(build) {
+		t.Error("a wait for an orchestrator that's gone still counts")
+	}
+	ended(done)
+	// Another orchestrator opens: the old wait ends, the new one runs.
+	open()
+	done = start()
+	open()
+	if waitRunning(build) {
+		t.Error("a wait for the orchestrator before still counts")
+	}
+	if n, out, errOut := call("answer", "--wait", "--timeout", "300ms"); n != 0 || out != "Nothing new came in for 300ms.\n" {
+		t.Errorf("the new orchestrator's wait: %d %q %q", n, out, errOut)
+	}
+	ended(done)
+}
+
+// Review L2: a wait that starts while the team status takes the lock for
+// its quick look still runs, even with a wait's note left by one that was
+// killed.
+func TestAWaitStartsDuringTheTeamStatusLook(t *testing.T) {
+	c, _ := waitCrew(t)
+	build := c + "/.claude/build"
+	call("answer", "--wait") // shows the engineer's
+	if err := os.WriteFile(waitOwnerPath(build), []byte(waitOwner(build)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The look holds the lock longer here than a real one, and the grace
+	// is longer to match, so the wait surely starts while it's held.
+	old := waitGrace
+	waitGrace = 3 * time.Second
+	t.Cleanup(func() { waitGrace = old })
+	look, err := fsx.Acquire(waitLockPath(build), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(time.Second)
+		look.Release()
+	}()
+	if n, out, errOut := call("answer", "--wait", "--timeout", "300ms"); n != 0 || out != "Nothing new came in for 300ms.\n" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+}
+
 // PR B's re-review (low): an answer stopped before it pressed a key (Ctrl-C
 // on the orchestrator's command) takes its mark off the request, so an
 // answer then given in the window isn't logged as one by its code. One
@@ -194,16 +292,31 @@ func TestAnAnswerStoppedEarlyTakesItsMarkOff(t *testing.T) {
 		if w == nil {
 			t.Fatal("not found")
 		}
-		if open, err := answering(build, w, true); !open || err != nil || mark().IsZero() {
-			t.Fatalf("not marked: %v %v", open, err)
+		m := &answerMark{}
+		if open, stopped, err := m.mark(build, w); !open || stopped || err != nil || mark().IsZero() {
+			t.Fatalf("not marked: %v %v %v", open, stopped, err)
 		}
-		var marked, pressing atomic.Bool
-		marked.Store(true)
-		pressing.Store(pressed)
+		if pressed && !m.press() {
+			t.Fatal("the press was refused")
+		}
 		restored := false
-		stopAnswer(build, w, &marked, &pressing, func() { restored = true })
+		stopAnswer(build, w, m, func() { restored = true })
 		if !restored || mark().IsZero() != !pressed {
 			t.Errorf("pressed %v: restored %v, mark %v", pressed, restored, mark())
 		}
+	}
+	// Review L3: a stop that comes before the mark's write leaves no mark,
+	// and the answer goes no further.
+	if _, err := answering(build, findWaiting(r, session.Default(), eng), false); err != nil {
+		t.Fatal(err)
+	}
+	w := findWaiting(r, session.Default(), eng)
+	m := &answerMark{}
+	stopAnswer(build, w, m, func() {})
+	if _, stopped, _ := m.mark(build, w); !stopped || !mark().IsZero() {
+		t.Errorf("a stop first: stopped %v, mark %v", stopped, mark())
+	}
+	if m.press() {
+		t.Error("a key would go after the stop")
 	}
 }

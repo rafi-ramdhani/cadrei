@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
+	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -26,7 +28,12 @@ import (
 // answers nothing.
 
 // waitEvery is how often a wait looks at the members' records.
-var waitEvery = time.Second
+// waitGrace is how long a wait starting waits for the lock, so the team
+// status's own quick look at it doesn't turn the wait away.
+var (
+	waitEvery = time.Second
+	waitGrace = 200 * time.Millisecond
+)
 
 // waitedPath is the file of the requests a wait already showed, one key a
 // line, so one that comes in between two waits is still shown by the
@@ -34,6 +41,26 @@ var waitEvery = time.Second
 // can tell whether one runs.
 func waitedPath(build string) string   { return filepath.Join(build, "state", "waited") }
 func waitLockPath(build string) string { return filepath.Join(build, "state", "wait.lock") }
+
+// waitOwnerPath holds the orchestrator a running wait is for, as
+// waitOwner names it. The lock file itself is never written.
+func waitOwnerPath(build string) string { return filepath.Join(build, "state", "wait.owner") }
+
+// waitOwner names the orchestrator open for build now, by its lock's pid
+// and start time, or "none" when none is open. A wait is for the one open
+// when it started: once another opens, or that one is gone, it ends.
+func waitOwner(build string) string {
+	if l := orchestrator.ReadLock(orchestrator.LockPath(build)); l != nil {
+		return strconv.Itoa(l.PID) + " " + l.Start
+	}
+	return "none"
+}
+
+// readWaitOwner is the orchestrator the running wait noted, or "".
+func readWaitOwner(build string) string {
+	raw, _ := fsx.ReadOwn(waitOwnerPath(build), 512)
+	return strings.TrimSpace(string(raw))
+}
 
 // waitKey names one request for the waited file: the member and the code,
 // and what it asks, so a code given again later to another request isn't
@@ -71,12 +98,14 @@ func writeWaited(build string, open []waitingOn, seen map[string]bool) error {
 	return fsx.WriteFile(waitedPath(build), []byte(text), 0o600)
 }
 
-// waitRunning reports whether a wait for build is running: it holds the
-// lock.
+// waitRunning reports whether a wait for build's open orchestrator is
+// running: one holds the lock, and noted the orchestrator open now. One
+// left by an orchestrator that's gone doesn't count: it ends on its next
+// look.
 func waitRunning(build string) bool {
 	l, err := fsx.Acquire(waitLockPath(build), 0)
 	if err != nil {
-		return errors.Is(err, fsx.ErrBusy)
+		return errors.Is(err, fsx.ErrBusy) && readWaitOwner(build) == waitOwner(build)
 	}
 	l.Release()
 	return false
@@ -100,23 +129,47 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 	if err := os.MkdirAll(filepath.Join(build, "state"), 0o755); err != nil {
 		return e.fail("%s", err)
 	}
-	lock, err := fsx.Acquire(waitLockPath(build), 0)
+	lock, err := fsx.Acquire(waitLockPath(build), waitGrace)
+	if errors.Is(err, fsx.ErrBusy) && !waitRunning(build) {
+		// The one running is for an orchestrator that's gone, and ends on
+		// its next look.
+		lock, err = fsx.Acquire(waitLockPath(build), 3*waitEvery)
+	}
 	if errors.Is(err, fsx.ErrBusy) {
 		return e.failWith("A " + cmd("cadrei answer --wait") + " is already running for this crew, so this one isn't needed.")
 	}
 	if err != nil {
 		return e.fail("%s", err)
 	}
-	defer lock.Release()
+	owner := waitOwner(build)
+	if err := fsx.WriteFile(waitOwnerPath(build), []byte(owner+"\n"), 0o600); err != nil {
+		lock.Release()
+		return e.fail("%s", err)
+	}
+	defer func() {
+		os.Remove(waitOwnerPath(build))
+		lock.Release()
+	}()
 	seen := readWaited(build)
 	start := time.Now()
+	shown := -1 // the count this wait last gave the badge
 	for {
+		if waitOwner(build) != owner {
+			e.say("The orchestrator this wait was for isn't open anymore, so the wait ended.")
+			return 0
+		}
 		if len(runningOf(r.Cadrei, r.Default, t)) == 0 {
 			writeWaited(build, nil, seen)
 			e.say("No member is running, so there's nothing to wait on.")
 			return 0
 		}
 		open := waitingRequests(r, t)
+		// A held record past its time ends with no write, so no hook sets
+		// the badge for it: the wait's looks do.
+		if len(open) != shown {
+			showBadge(build, len(open))
+			shown = len(open)
+		}
 		var fresh []waitingOn
 		for i := range open {
 			if k := waitKey(&open[i]); !seen[k] {

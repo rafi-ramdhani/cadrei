@@ -404,6 +404,11 @@ func teamsOf(c cadreis.Cadrei) map[string][]memberView {
 // team status hook and the snapshot: no orchestrator lock, projects or
 // problems, and one tmux listing whatever the number of teams.
 func runningOf(c cadreis.Cadrei, def string, t session.Tmux) []sessionView {
+	return viewsOf(c, def, t, true)
+}
+
+// viewsOf is runningOf, looking at the members' screens when look is set.
+func viewsOf(c cadreis.Cadrei, def string, t session.Tmux, look bool) []sessionView {
 	scope := session.Scope{Name: c.Name, Path: c.Path, Default: c.Name == def, T: t}
 	byTeam := map[string][]session.Window{}
 	var teams []session.Info
@@ -419,7 +424,7 @@ func runningOf(c cadreis.Cadrei, def string, t session.Tmux) []sessionView {
 	now := time.Now()
 	var out []sessionView
 	for _, i := range teams {
-		out = append(out, viewFrom(t, true, i, byTeam[i.Name], now))
+		out = append(out, viewFrom(t, look, i, byTeam[i.Name], now))
 	}
 	return out
 }

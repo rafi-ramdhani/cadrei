@@ -113,11 +113,19 @@ func TestHookTeamStatus(t *testing.T) {
 	if out := block(); out != later+waitAsk {
 		t.Errorf("later: %q", out)
 	}
-	// PR E (N8): with a wait running, the block doesn't ask for one.
-	lock, err := fsx.Acquire(waitLockPath(c+"/.claude/build"), 0)
+	// PR E (N8): with a wait running, the block doesn't ask for one. One
+	// that noted another orchestrator than the one open now (review M1)
+	// doesn't count.
+	build := c + "/.claude/build"
+	lock, err := fsx.Acquire(waitLockPath(build), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+	os.WriteFile(waitOwnerPath(build), []byte("1 gone\n"), 0o600)
+	if out := block(); out != later+waitAsk {
+		t.Errorf("with a wait for another orchestrator: %q", out)
+	}
+	os.WriteFile(waitOwnerPath(build), []byte(waitOwner(build)+"\n"), 0o600)
 	if out := block(); out != later {
 		t.Errorf("with a wait running: %q", out)
 	}

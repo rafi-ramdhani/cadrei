@@ -15,7 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -617,7 +617,7 @@ func runAnswer(e *env) int {
 	// window still goes back to its size, and a mark with no key pressed
 	// comes off.
 	build := rt.BuildDir(r.Path)
-	var marked, pressing atomic.Bool
+	mark := &answerMark{}
 	stop := make(chan os.Signal, 1)
 	done := make(chan struct{})
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -628,7 +628,7 @@ func runAnswer(e *env) int {
 	go func() {
 		select {
 		case <-stop:
-			stopAnswer(build, w, &marked, &pressing, restore)
+			stopAnswer(build, w, mark, restore)
 			os.Exit(1)
 		case <-done:
 		}
@@ -639,8 +639,9 @@ func runAnswer(e *env) int {
 	}
 	// Marked first: the hook of the tool's own end can come before the
 	// answer below drops the code, and the prompt log tells it by the mark.
-	marked.Store(true)
-	switch open, err := answering(build, w, true); {
+	switch open, stopped, err := mark.mark(build, w); {
+	case stopped:
+		return 1
 	case err != nil:
 		return e.failWith("The " + w.role + "'s record is busy right now, so I didn't press anything. Try again in a moment.")
 	case !open:
@@ -653,7 +654,9 @@ func runAnswer(e *env) int {
 		return e.answerHeld(w, build, choice)
 	}
 	pressed := time.Now()
-	pressing.Store(true)
+	if !mark.press() {
+		return 1
+	}
 	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
 		if why := answerSteps(t, w, picks); why != "" {
 			answering(build, w, false)
@@ -732,11 +735,45 @@ func runAnswer(e *env) int {
 // request comes off when no key went to the member yet, so an answer then
 // given in the window isn't logged as one by its code. Once a key went,
 // the mark stays: the answer was by its code.
-func stopAnswer(build string, w *waitingOn, marked, pressing *atomic.Bool, restore func()) {
+func stopAnswer(build string, w *waitingOn, m *answerMark, restore func()) {
 	restore()
-	if marked.Load() && !pressing.Load() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopped = true
+	if m.marked && !m.pressing {
 		answering(build, w, false)
 	}
+}
+
+// answerMark is how far an answer got, for stopAnswer: its mark written
+// on the request, its first key on the way. Each step and stopAnswer take
+// mu, so a stop never runs between the mark's write and its note here,
+// and no step goes on once a stop ran.
+type answerMark struct {
+	mu                        sync.Mutex
+	marked, pressing, stopped bool
+}
+
+// mark writes the answering mark on w's request, as answering does, and
+// notes it. stopped says a stop came first: nothing was written.
+func (m *answerMark) mark(build string, w *waitingOn) (open, stopped bool, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stopped {
+		return false, true, nil
+	}
+	open, err = answering(build, w, true)
+	m.marked = open && err == nil
+	return open, false, err
+}
+
+// press notes that a key goes to the member now, so a stop keeps the
+// mark. It's false when a stop came first: send nothing.
+func (m *answerMark) press() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pressing = !m.stopped
+	return !m.stopped
 }
 
 // growWait is how long a window cadrei grew may take to show the prompt

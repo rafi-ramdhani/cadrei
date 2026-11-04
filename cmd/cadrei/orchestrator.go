@@ -584,7 +584,7 @@ func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string,
 	look, windowLook := t.Look(r.Name, "", plain)
 	// Its bar shows what waits on the user, counted from the start.
 	look = session.Badged(look, plain)
-	waiting := strconv.Itoa(session.WaitingCount(filepath.Dir(lockPath)))
+	waiting := strconv.Itoa(badgeCount(r.Path, t))
 	start := func(c runtime.Command) error {
 		// The window stays when its command ends, until the start check,
 		// so a command that ends at once can say why (as a member's does).
