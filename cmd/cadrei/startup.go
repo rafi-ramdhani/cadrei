@@ -86,6 +86,15 @@ func trustYes(req *session.Request, label string) bool {
 	return req.Tool == runtime.StartTrust && strings.HasPrefix(label, "Yes")
 }
 
+// startTrustRefused says why cadrei won't trust the folder of a member up
+// started on a trust screen, or "" when it isn't one or cadrei may.
+func startTrustRefused(res session.Result) string {
+	if res.Start == nil || res.Start.Tool != runtime.StartTrust {
+		return ""
+	}
+	return trustRefused(&waitingOn{dir: res.Dir})
+}
+
 // trustRefused says why cadrei won't trust w's folder for the user, as
 // cadrei trust would refuse it, or "" when it may.
 func trustRefused(w *waitingOn) string {

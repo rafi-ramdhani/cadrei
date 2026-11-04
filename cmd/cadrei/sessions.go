@@ -253,7 +253,13 @@ func (e *env) reportUp(u session.Up) func(session.Result) {
 		case res.Start != nil:
 			// A start-up screen cadrei read: it has a code.
 			e.show("  ", "It's waiting on a start-up screen and won't get going until you answer it: "+printable(res.Start.Question))
-			e.show("  ", "See its choices with "+cmd("cadrei answer")+", or answer it in its window: "+cmd("cadrei attach "+where))
+			// A trust screen for a folder cadrei won't trust (a team's
+			// own folder, say) only its window can answer: said up front.
+			if why := startTrustRefused(res); why != "" {
+				e.show("  ", "Cadrei won't trust "+display(res.Dir)+" for you: "+why+". If you're sure, answer it in its window: "+cmd("cadrei attach "+where))
+			} else {
+				e.show("  ", "See its choices with "+cmd("cadrei answer "+res.Start.Code)+".")
+			}
 		case res.Waiting:
 			// Logged out, say: up started it, but it sits there.
 			e.show("  ", "It's waiting on a login or setup screen and won't get going until you answer it: "+cmd("cadrei attach "+where))

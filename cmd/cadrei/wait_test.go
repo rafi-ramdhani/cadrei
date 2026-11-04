@@ -5,9 +5,11 @@ package main
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -165,5 +167,43 @@ func TestOnlyOneWaitRuns(t *testing.T) {
 	must(t, "stop", "dev", "--yes")
 	if n, out, _ := call("answer", "--wait"); n != 0 || out != "No member is running, so there's nothing to wait on.\n" {
 		t.Errorf("no member: %d %q", n, out)
+	}
+}
+
+// PR B's re-review (low): an answer stopped before it pressed a key (Ctrl-C
+// on the orchestrator's command) takes its mark off the request, so an
+// answer then given in the window isn't logged as one by its code. One
+// stopped after a key went keeps it.
+func TestAnAnswerStoppedEarlyTakesItsMarkOff(t *testing.T) {
+	c, eng := waitCrew(t)
+	r, err := cadreis.Resolve(c, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	build := c + "/.claude/build"
+	mark := func() time.Time {
+		t.Helper()
+		st := session.ReadState(session.StatePath(build, "work-dev-engineer"))
+		if st == nil || st.Current() == nil {
+			t.Fatalf("no request: %+v", st)
+		}
+		return st.Current().Answering
+	}
+	for _, pressed := range []bool{false, true} {
+		w := findWaiting(r, session.Default(), eng)
+		if w == nil {
+			t.Fatal("not found")
+		}
+		if open, err := answering(build, w, true); !open || err != nil || mark().IsZero() {
+			t.Fatalf("not marked: %v %v", open, err)
+		}
+		var marked, pressing atomic.Bool
+		marked.Store(true)
+		pressing.Store(pressed)
+		restored := false
+		stopAnswer(build, w, &marked, &pressing, func() { restored = true })
+		if !restored || mark().IsZero() != !pressed {
+			t.Errorf("pressed %v: restored %v, mark %v", pressed, restored, mark())
+		}
 	}
 }

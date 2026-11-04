@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -613,7 +614,10 @@ func runAnswer(e *env) int {
 	screen, restore := promptScreen(t, w)
 	defer restore()
 	// Stopped partway (Esc on the orchestrator's command, a kill), a grown
-	// window still goes back to its size.
+	// window still goes back to its size, and a mark with no key pressed
+	// comes off.
+	build := rt.BuildDir(r.Path)
+	var marked, pressing atomic.Bool
 	stop := make(chan os.Signal, 1)
 	done := make(chan struct{})
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
@@ -624,7 +628,7 @@ func runAnswer(e *env) int {
 	go func() {
 		select {
 		case <-stop:
-			restore()
+			stopAnswer(build, w, &marked, &pressing, restore)
 			os.Exit(1)
 		case <-done:
 		}
@@ -635,7 +639,7 @@ func runAnswer(e *env) int {
 	}
 	// Marked first: the hook of the tool's own end can come before the
 	// answer below drops the code, and the prompt log tells it by the mark.
-	build := rt.BuildDir(r.Path)
+	marked.Store(true)
 	switch open, err := answering(build, w, true); {
 	case err != nil:
 		return e.failWith("The " + w.role + "'s record is busy right now, so I didn't press anything. Try again in a moment.")
@@ -649,6 +653,7 @@ func runAnswer(e *env) int {
 		return e.answerHeld(w, build, choice)
 	}
 	pressed := time.Now()
+	pressing.Store(true)
 	if picks, ok := partPicks(w.req, choice); ok && many(w.req) {
 		if why := answerSteps(t, w, picks); why != "" {
 			answering(build, w, false)
@@ -720,6 +725,18 @@ func runAnswer(e *env) int {
 		e.note("", markDone, "Told "+w.place()+" no. It won't "+verb+" "+object+", and it's waiting for what to do instead.")
 	}
 	return 0
+}
+
+// stopAnswer undoes what an answer stopped partway (Ctrl-C, a kill) leaves
+// behind: a window it grew goes back to its size, and its mark on the
+// request comes off when no key went to the member yet, so an answer then
+// given in the window isn't logged as one by its code. Once a key went,
+// the mark stays: the answer was by its code.
+func stopAnswer(build string, w *waitingOn, marked, pressing *atomic.Bool, restore func()) {
+	restore()
+	if marked.Load() && !pressing.Load() {
+		answering(build, w, false)
+	}
 }
 
 // growWait is how long a window cadrei grew may take to show the prompt

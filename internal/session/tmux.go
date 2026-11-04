@@ -422,19 +422,7 @@ func (t Tmux) Grow(session, window string, width, height int) (restore func(), g
 		own, _ = t.run("show-options", "-wqv", "-t", win, "window-size")
 		own = strings.TrimSpace(own)
 	}
-	restore = func() {
-		t.run("resize-window", "-t", win, "-x", strconv.Itoa(w), "-y", strconv.Itoa(h))
-		// resize-window set the window's own window-size to manual. Put
-		// back as it was, the size follows the session's and whoever opens
-		// the window again (tmux 3.8 doesn't size it anew when it's unset,
-		// hence the resize first).
-		if own == "" {
-			t.run("set-option", "-wu", "-t", win, "window-size")
-		} else {
-			t.run("set-option", "-w", "-t", win, "window-size", own)
-		}
-		t.run("set-option", "-wu", "-t", win, grownOption)
-	}
+	restore = func() { t.putBack(win, w, h, own) }
 	if left {
 		none = restore
 	}
@@ -454,6 +442,32 @@ func (t Tmux) Grow(session, window string, width, height int) (restore func(), g
 		return none, false
 	}
 	return restore, true
+}
+
+// putBack gives a grown window its size from before, width by height and
+// its own window-size, and drops the size it kept.
+func (t Tmux) putBack(win string, width, height int, own string) {
+	t.run("resize-window", "-t", win, "-x", strconv.Itoa(width), "-y", strconv.Itoa(height))
+	// resize-window set the window's own window-size to manual. Put back as
+	// it was, the size follows the session's and whoever opens the window
+	// again (tmux 3.8 doesn't size it anew when it's unset, hence the
+	// resize first).
+	if own == "" {
+		t.run("set-option", "-wu", "-t", win, "window-size")
+	} else {
+		t.run("set-option", "-w", "-t", win, "window-size", own)
+	}
+	t.run("set-option", "-wu", "-t", win, grownOption)
+}
+
+// PutBack gives a window a check grew its size from before, when it's
+// still grown: for a check that has to stop before its own restore can
+// run.
+func (t Tmux) PutBack(session, window string) {
+	win := target(session) + "=" + window
+	if w, h, own, ok := t.grownFrom(win); ok {
+		t.putBack(win, w, h, own)
+	}
 }
 
 // UnsetWindowOption removes a window option set on one window, so the
