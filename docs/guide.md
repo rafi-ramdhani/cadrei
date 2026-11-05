@@ -423,7 +423,7 @@ When a member runs in a different permission-mode class from your orchestrator, 
 
 A member that's `waiting` needs you: Claude Code is asking you something in its window. Either it wants to run something it isn't allowed to yet (a permission prompt), or it asked you a question. You can answer both from your orchestrator, without going to the member's window.
 
-**How your orchestrator hears about it.** While members run, your orchestrator keeps `cadrei answer --wait` going in the background. That command waits until something new is waiting on you, shows it, and ends, and Claude Code wakes your orchestrator when it does. So your orchestrator tells you right away, even when you haven't typed anything, then starts the wait again. When your orchestrator runs in tmux, its status bar also shows `! 2 waiting` while anything waits on you. Members ask you right away too, and send your orchestrator a short note about it at the same time, just in case.
+**How your orchestrator hears about it.** While members run, your orchestrator keeps `cadrei answer --wait` going in the background. That command waits until something new is waiting on you, shows it, and ends, and Claude Code wakes your orchestrator when it does. So your orchestrator tells you right away, even when you haven't typed anything, then starts the wait again. When your orchestrator runs in tmux, its status bar also shows `! 2 waiting` while anything waits on you. Members ask you right away too: they send your orchestrator a short note first, just in case, then ask without waiting for it to answer.
 
 **A permission prompt.** Your orchestrator tells you who's waiting and what for, then runs `cadrei answer 7f3 yes`. Claude Code stops it and asks you, in its own prompt:
 
