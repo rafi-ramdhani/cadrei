@@ -30,9 +30,12 @@ import (
 // waitEvery is how often a wait looks at the members' records.
 // waitGrace is how long a wait starting waits for the lock, so the team
 // status's own quick look at it doesn't turn the wait away.
+// takeoverLimit is how long a wait waits for one left by an orchestrator
+// that's gone to end.
 var (
-	waitEvery = time.Second
-	waitGrace = 200 * time.Millisecond
+	waitEvery     = time.Second
+	waitGrace     = 200 * time.Millisecond
+	takeoverLimit = time.Minute
 )
 
 // waitedPath is the file of the requests a wait already showed, one key a
@@ -130,10 +133,11 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 		return e.fail("%s", err)
 	}
 	lock, err := fsx.Acquire(waitLockPath(build), waitGrace)
-	if errors.Is(err, fsx.ErrBusy) && !waitRunning(build) {
-		// The one running is for an orchestrator that's gone, and ends on
-		// its next look.
-		lock, err = fsx.Acquire(waitLockPath(build), 3*waitEvery)
+	// The one running is for an orchestrator that's gone, and ends on its
+	// next look, however long its looks take. A minute is far past that: a
+	// wait still stuck then is left be.
+	for until := time.Now().Add(takeoverLimit); errors.Is(err, fsx.ErrBusy) && !waitRunning(build) && time.Now().Before(until); {
+		lock, err = fsx.Acquire(waitLockPath(build), waitEvery)
 	}
 	if errors.Is(err, fsx.ErrBusy) {
 		return e.failWith("A " + cmd("cadrei answer --wait") + " is already running for this crew, so this one isn't needed.")
@@ -158,12 +162,13 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 			e.say("The orchestrator this wait was for isn't open anymore, so the wait ended.")
 			return 0
 		}
-		if len(runningOf(r.Cadrei, r.Default, t)) == 0 {
+		views := runningOf(r.Cadrei, r.Default, t)
+		if len(views) == 0 {
 			writeWaited(build, nil, seen)
 			e.say("No member is running, so there's nothing to wait on.")
 			return 0
 		}
-		open := waitingRequests(r, t)
+		open := waitingIn(views)
 		// A held record past its time ends with no write, so no hook sets
 		// the badge for it: the wait's looks do.
 		if len(open) != shown {

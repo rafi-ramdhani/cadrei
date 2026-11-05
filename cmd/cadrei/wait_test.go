@@ -240,6 +240,31 @@ func TestAWaitEndsWithItsOrchestrator(t *testing.T) {
 	ended(done)
 }
 
+// Review R2-2: a new wait takes over from one left by an orchestrator
+// that's gone however long that one's look takes, with no "already
+// running".
+func TestAWaitTakesOverFromASlowOne(t *testing.T) {
+	c, _ := waitCrew(t)
+	build := c + "/.claude/build"
+	call("answer", "--wait") // shows the engineer's
+	// The old wait: it holds the lock for an orchestrator that's gone, and
+	// its look runs far past 3 of the test's polls.
+	old, err := fsx.Acquire(waitLockPath(build), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(waitOwnerPath(build), []byte("1 gone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		time.Sleep(40 * waitEvery)
+		old.Release()
+	}()
+	if n, out, errOut := call("answer", "--wait", "--timeout", "300ms"); n != 0 || out != "Nothing new came in for 300ms.\n" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+}
+
 // Review L2: a wait that starts while the team status takes the lock for
 // its quick look still runs, even with a wait's note left by one that was
 // killed.
