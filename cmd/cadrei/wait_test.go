@@ -256,8 +256,9 @@ func TestAWaitTakesOverFromASlowOne(t *testing.T) {
 	if err := os.WriteFile(waitOwnerPath(build), []byte("1 gone\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	hold := 40 * waitEvery // read here: waitCrew's cleanup sets it back
 	go func() {
-		time.Sleep(40 * waitEvery)
+		time.Sleep(hold)
 		old.Release()
 	}()
 	if n, out, errOut := call("answer", "--wait", "--timeout", "300ms"); n != 0 || out != "Nothing new came in for 300ms.\n" {
