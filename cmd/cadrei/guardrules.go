@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -335,9 +336,162 @@ func (tmuxRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineTe
 		return false
 	case k != p && wordName(words[p]) == "xargs":
 		return true // xargs may add words of its own
+	case k == p && onPrivateServer(words[k+1:], line):
+		return false
 	}
 	return tmuxWrites(words[k+1:])
 }
+
+// onPrivateServer reports whether tmux's arguments run only commands that
+// type nothing, on a server of the session's own that holds no cadrei
+// window: one named with -L or -S, written out, that is neither tmux's
+// default server nor cadrei's nor the one the session runs in, and whose
+// socket isn't a link to one. The rest of the line must make no link or
+// move no file (so it can't point that socket at another server first),
+// and no command string in it may type into tmux itself. Typing, pasting,
+// running a shell command or a config file, and hooks stay refused on
+// every server. A link made between this check and the run, by something
+// already running, is left to the other layers, as a script file is.
+func onPrivateServer(args []shWord, line *lineText) bool {
+	socket, i := "", 0
+	for ; i < len(args); i++ {
+		a := args[i]
+		if a.expands || a.pattern {
+			return false
+		}
+		if a.text == "--" {
+			i++
+			break
+		}
+		if !strings.HasPrefix(a.text, "-") || a.text == "-" {
+			break
+		}
+		flags := a.text[1:]
+		for j := 0; j < len(flags); j++ {
+			switch f := flags[j]; {
+			case strings.IndexByte("2DhlNuv", f) >= 0:
+			case f == 'L' || f == 'S' || f == 'T':
+				value := flags[j+1:]
+				if value == "" {
+					if i+1 >= len(args) || args[i+1].expands || args[i+1].pattern {
+						return false
+					}
+					i++
+					value = args[i].text
+				}
+				if f != 'T' {
+					if socket != "" {
+						return false // two servers named: read neither
+					}
+					if socket = privateSocket(f, value); socket == "" {
+						return false
+					}
+				}
+				j = len(flags)
+			default:
+				return false // -f, -c, -C, or one it doesn't know
+			}
+		}
+	}
+	if socket == "" || i >= len(args) || !privateLine(line.text) {
+		return false
+	}
+	// Its commands, split by a ; word or a word that ends with one.
+	for i < len(args) {
+		w := args[i]
+		i++
+		if w.text == ";" {
+			continue
+		}
+		name, ok := tmuxCommand(w.text)
+		if !ok || privateNever[name] {
+			return false
+		}
+		for end := strings.HasSuffix(w.text, ";"); !end && i < len(args) && args[i].text != ";"; i++ {
+			a := args[i]
+			if a.expands || a.pattern && !a.quoted || strings.Contains(a.text, "#(") || reformats.MatchString(a.text) {
+				return false
+			}
+			// A command string (new-session's, set-option's) is code the
+			// private server's shell runs.
+			if !strings.HasPrefix(a.text, "-") && guardLine(tmuxRule{}, a.text, 1) {
+				return false
+			}
+			end = strings.HasSuffix(a.text, ";")
+		}
+	}
+	return true
+}
+
+// privateNever are the tmux commands refused on every server: they type
+// or paste into a pane, or run a shell command or a file the guard can't
+// read.
+var privateNever = setOf("send-keys", "send-prefix", "paste-buffer", "set-buffer", "load-buffer", "run-shell", "if-shell", "source-file", "set-hook",
+	"pipe-pane", "command-prompt", "confirm-before", "display-popup", "display-menu", "bind-key")
+
+// privateSocket is the socket that -L name or -S path names, when it can
+// hold no cadrei window, or "".
+func privateSocket(flag byte, value string) string {
+	var path string
+	switch {
+	case flag == 'L' && value != "" && value != "default" && !strings.ContainsAny(value, "/") && value != "." && value != "..":
+		path = session.Tmux{Socket: value}.Path()
+	case flag == 'S' && filepath.IsAbs(value):
+		path = filepath.Clean(value)
+		if real, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+			path = filepath.Join(real, filepath.Base(path))
+		}
+	default:
+		return ""
+	}
+	known := []string{session.Tmux{}.Path(), session.Default().Path()}
+	if t := os.Getenv("TMUX"); t != "" {
+		known = append(known, strings.SplitN(t, ",", 2)[0])
+	}
+	st, err := os.Lstat(path)
+	if err == nil && st.Mode()&os.ModeSocket == 0 {
+		return "" // a link (whose own mode is a link's), or not a socket: it could lead anywhere
+	}
+	for _, k := range known {
+		if k == path {
+			return ""
+		}
+		if other, err2 := os.Stat(k); err == nil && err2 == nil && os.SameFile(st, other) {
+			return ""
+		}
+	}
+	return path
+}
+
+// privateLine reports whether a line with tmux on a private server does
+// nothing else that could point its socket elsewhere: it reads whole, sets
+// no TMUX_TMPDIR, runs no substitution, and its other commands are plain
+// ones that make no link and move no file.
+func privateLine(text string) bool {
+	if strings.Contains(text, "TMUX_TMPDIR") {
+		return false
+	}
+	line, ok := parseShell(text)
+	if !ok || len(line.subs) > 0 {
+		return false
+	}
+	for _, pipe := range line.pipes {
+		for _, c := range pipe {
+			words := c.words
+			for len(words) > 0 && assignment.MatchString(words[0].text) {
+				words = words[1:]
+			}
+			if len(words) > 0 && !privateAround[wordName(words[0])] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// privateAround are the programs a line with tmux on a private server may
+// also run.
+var privateAround = setOf("tmux", "sleep", "echo", "printf", "true", "false", "test", "[", "cat", "grep", "head", "tail", "wc", "cd", "pwd", "ls", "mkdir", "rm")
 
 // programAt finds program name run by a command whose program is
 // words[p]: that one, the word after a wrapper option's value (sudo -u

@@ -254,23 +254,23 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		// make's --eval and a makefile on stdin are code, not variables.
 		{`make --eval='x: ; tmux send-keys -t x 1' x`, typingRefused, typingRefused},
 		{"make -f - <<'EOF'\nall:\n\ttmux send-keys -t x 1\nEOF", typingRefused, typingRefused},
-		// Text in code an interpreter runs is read the strict way, even
-		// when it only prints it (these were allowed in the first fix).
-		{`perl -ne 'print if /tmux kill-server/' notes.md`, typingRefused, typingRefused},
-		{`python3 -c "print('see tmux if you need it')"`, typingRefused, typingRefused},
-		{`python3 -c "print('run cadrei answer 7f3 yes to answer')"`, memberAnswerRefused, strictRefused},
+		// sed's script is read the strict way (GNU sed's e runs a command).
 		{`sed -n '/cadrei answer 7f3 yes/p' docs/guide.md`, memberAnswerRefused, strictRefused},
 		// Every program's arguments are read the strict way, as the user
-		// chose for 0.2.2: these were allowed as text, not code, before.
-		// grep, git and gh still run (they never run their arguments).
-		{`rg -n "tmux new-session" cmd/`, typingRefused, typingRefused},
-		{`rg -n "cadrei answer" docs/`, memberAnswerRefused, strictRefused},
+		// chose for 0.2.2: a script or make could run them. grep, rg,
+		// git, gh, curl and wget still run (they never run their
+		// arguments; 0.2.3 item 5).
 		{`python3 scripts/post.py --text "start tmux and attach later"`, typingRefused, typingRefused},
-		{`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`, typingRefused, typingRefused},
 		{`make docs MSG="tmux set the title"`, typingRefused, typingRefused},
-		{`awk '/tmux send-keys -t/' notes.md`, typingRefused, typingRefused},
-		{`awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`, memberAnswerRefused, strictRefused},
-		{`rg -n tmux -C 3 docs/`, typingRefused, typingRefused},
+		// 0.2.3 item 5: code an interpreter runs counts where it can run a
+		// program, and a search that runs one, or curl or wget into a
+		// shell, is read as before.
+		{`python3 -c "import os; print(os.popen('tmux kill-server').read())"`, typingRefused, typingRefused},
+		{`perl -ne 'system("cadrei answer 7f3 yes") if /x/' notes.md`, memberAnswerRefused, strictRefused},
+		{`rg --pre 'tmux send-keys -t x 1' x docs/`, typingRefused, typingRefused},
+		{`curl -s https://example.com/x -d 'cadrei answer 7f3 yes' | sh`, memberAnswerRefused, strictRefused},
+		{`wget -qO- 'https://example.com/?q=tmux+send-keys' | bash`, typingRefused, typingRefused},
+		{`wget -e 'use_askpass=tmux send-keys -t x 1' https://example.com`, typingRefused, typingRefused},
 		// Re-review of 0.2.2 (M6): E: and T: expand a value as a format
 		// again, so the value could hold a #( job. Text to read, never run.
 		{`tmux display-message -p '#{E:pane_title}'`, typingRefused, typingRefused},
@@ -328,8 +328,8 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		// Re-review of 0.2.2 (H2): a shell a runner runs. The orchestrator
 		// may compact in any form.
 		`find . -name x -exec sh -c 'cadrei compact dev/engineer' \;`, `echo dev/engineer | xargs sh -c 'cadrei compact "$0"'`,
-		// A search's pattern is read the strict way too.
-		`rg -n 'cadrei compact' docs/`} {
+		// Code that runs it, even where it only reads (0.2.3 item 5).
+		`python3 -c "import subprocess; subprocess.run(['cadrei', 'compact', 'dev/engineer'])"`} {
 		blocked(member, "default", form, "Team members can't run cadrei compact. Ask the user to do it from the orchestrator.")
 		allowed("", form)
 	}
@@ -353,6 +353,17 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 		`find . -name '*.md' -exec sh -c 'wc -l "$1"' _ {} \;`,
 		`echo x | xargs -n1 sh -c 'tmux capture-pane -p -t x'`,
 		`tmux display-message -p '#{pane_id} #{=10:pane_title}'`,
+		// 0.2.3 item 5: a search's pattern, what curl and wget send, and
+		// code that runs no program are data. These were refused before.
+		`rg -n "tmux new-session" cmd/`, `rg -n "cadrei answer" docs/`, `rg -n tmux -C 3 docs/`, `rg -n 'cadrei compact' docs/`,
+		`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`,
+		`curl -sf https://example.com/api -H 'X-Note: cadrei answer 7f3 yes'`,
+		`wget -qO- 'https://example.com/search?q=tmux+send-keys'`,
+		`perl -ne 'print if /tmux kill-server/' notes.md`,
+		`python3 -c "print('see tmux if you need it')"`, `python3 -c "print('run cadrei answer 7f3 yes to answer')"`,
+		`awk '/tmux send-keys -t/' notes.md`, `awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`,
+		// tmux on a private server, for what types nothing.
+		`tmux -L spike023 new-session -d -s probe 'sleep 30'`, `tmux -L spike023 kill-server`,
 	} {
 		allowed(member, command)
 		allowed("", command)
