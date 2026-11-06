@@ -3,8 +3,11 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
+
+	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
 // The guard refuses cadrei's uninstall and restore in every form a member
@@ -99,6 +102,184 @@ func TestTheGuardPassesTextThatOnlyMentionsRemoval(t *testing.T) {
 	}
 }
 
+// orchestratorRefuses is the rule the guard refuses command by in the
+// orchestrator, as runHookGuard checks it before any ask, or "".
+func orchestratorRefuses(command string) string {
+	switch {
+	case guardLine(tmuxRule{}, command, 0):
+		return ruleTyping
+	case guardLine(keystrokeRule{}, command, 0):
+		return ruleKeys
+	case guardLine(answerRule, command, 0) && !answerListing.MatchString(command) && strictAnswer.FindStringSubmatch(command) == nil:
+		return ruleAnswer
+	}
+	return ""
+}
+
+// 0.2.3 item 5: the commands the guard refused that only named a command
+// (each from the ideas file's log) now run, in a member and in the
+// orchestrator: a code body that runs no program, a search's pattern, a
+// note a heredoc writes, curl's data, words like restore in a commit
+// message or a file name, a program called by a path in a variable, and
+// tmux on a private server.
+func TestTheGuardPassesWhatOnlyNamesACommand(t *testing.T) {
+	private := t.TempDir() + "/exp.sock"
+	for _, c := range []string{
+		// A python heredoc that only writes a note naming tmux.
+		"python3 - <<'EOF'\np = 'ideas.md'\ns = open(p).read()\ns += 'The tmux rule refused tmux -L spike023 new-session on a private server.\\n'\nopen(p, 'w').write(s)\nEOF",
+		// A heredoc that only writes such a note.
+		"cat >> ideas.md <<'EOF'\nThe tmux rule refused tmux -L x new-session on a private socket.\nEOF",
+		// A search for cadrei answer.
+		`grep -rn "cadrei answer" cmd/cadrei/ docs/ | head -20`, `rg -n "cadrei answer" docs/`, `rg -n "tmux new-session" cmd/`, `rg -n tmux -C 3 docs/`, `rg -n 'cadrei compact' docs/`,
+		// An SRE curl check, and what curl and wget send (the user's pick).
+		`curl -sf -m 5 https://status.example.com/health | jq -r '.checks[] | select(.name == "tmux-runner") | .status'`,
+		`curl -s -d 'text=the tmux server will start soon' https://example.com/hook`,
+		`wget -qO- 'https://example.com/search?q=tmux+send-keys'`,
+		// A perl edit of a note, and a perl mutation script, whose
+		// patterns name cadrei answer.
+		`perl -pi -e 's/run cadrei answer <code> yes/run cadrei answer <code> yes from the orchestrator/' notes.md`,
+		`perl -0pi -e 's/return e.failWith\("Use " \+ cmd\("cadrei answer --wait"\)/return 0 \/\/ cadrei answer/' cmd/cadrei/wait.go && go test -run TestX ./cmd/cadrei/`,
+		// Code that only prints or searches.
+		`perl -ne 'print if /tmux kill-server/' notes.md`, `python3 -c "print('see tmux if you need it')"`, `python3 -c "print('run cadrei answer 7f3 yes to answer')"`,
+		`awk '/tmux send-keys -t/' notes.md`, `awk -F, '/cadrei answer 7f3 yes/ { print $1 }' notes.md`,
+		// A python heredoc editing cmd/cadrei/answer.go.
+		"python3 - <<'EOF'\np = 'cmd/cadrei/answer.go'\ns = open(p).read().replace('cmd(\"cadrei answer\")', 'cmd(\"cadrei answer <code>\")')\nopen(p, 'w').write(s)\nEOF",
+		// A Bash heredoc writing a probe test, then go test.
+		"cat > internal/session/zz_review_test.go <<'EOF'\npackage session\n\nimport \"testing\"\n\nfunc TestZZ(t *testing.T) {\n\tcmd := `cadrei answer 7f3 yes`\n\t_ = cmd\n}\nEOF\ngo test ./internal/session -run TestZZ -race",
+		// The uninstall and restore rule: restore in a commit message and
+		// in file names.
+		`git commit -m "Restore the old backup path"`,
+		"git add -A && git commit -F - <<'EOF'\nAdd restore-test.sh for the restore runbook\nEOF",
+		"bash tests/restore-test.sh && git add -A && git commit -F - <<'EOF'\nRestore runbook: add restore-test.sh\nEOF",
+		"cd /private/tmp/claude-501/x/scratchpad && git add -A && git commit -F - <<'EOF'\nRestore the restore-test.sh run\nEOF",
+		`bash scripts/restore-drill.sh --dry-run`, `./restore.sh`,
+		// A sandbox test with a stub claude plugin uninstall, in a folder
+		// named cadrei.
+		"cd /private/tmp/claude-501/scratch/cadrei && cat > bin/claude <<'EOF'\n#!/bin/sh\n[ \"$1 $2\" = \"plugin uninstall\" ] && exit 0\nEOF\nchmod +x bin/claude && PATH=$PWD/bin:$PATH bash tests/uninstall-test.sh",
+		// A python heredoc editing a script that names claude plugin
+		// uninstall.
+		"cd ~/Developer/claude-config && python3 - <<'EOF'\np = 'tests/plugins.sh'\ns = open(p).read().replace('claude plugin uninstall x', 'claude plugin uninstall --scope user x')\nopen(p, 'w').write(s)\nEOF",
+		// A Postgres restore drill, and a walk-through that runs
+		// pg_restore by a path in a variable.
+		"cat > ~/scratch/pg-restore-drill.sh <<'EOF'\n#!/bin/sh\nset -e\npg_restore --clean -d drill \"$DUMP\"\necho restore done\nEOF\nchmod +x ~/scratch/pg-restore-drill.sh && sh ~/scratch/pg-restore-drill.sh",
+		"bash <<'EOF'\nset -e\nPGBIN=/opt/homebrew/opt/postgresql@16/bin\n\"$PGBIN/pg_restore\" --clean -d walk \"$DUMP\"\npg-restore --list \"$DUMP\" | head\necho \"step 3: restore checked\"\nEOF",
+		// The simulator's uninstall.
+		`xcrun simctl uninstall booted com.rafiramdhani.wellkept && xcrun simctl install booted "$APP"`,
+		`UDID=$(xcrun simctl list devices booted | awk -F'[()]' '/Booted/ {print $2; exit}'); xcrun simctl uninstall "$UDID" com.rafiramdhani.wellkept`,
+		// tmux on a private server: the spike's, the sizing experiment's
+		// and PR E's badge probe.
+		`tmux -L spike023 new-session -d -s probe -x 200 -y 50 'claude --model haiku'`,
+		"tmux -S " + private + " new-session -d -s exp 'sleep 30' && tmux -S " + private + " resize-window -t exp -x 120 && tmux -S " + private + " set-option -t exp status off && tmux -S " + private + " kill-server",
+		`tmux -L cadreit-badge new-session -d -s b 'sleep 30' \; set-option -t b @cadrei_waiting 2; sleep 1; tmux -L cadreit-badge display -p -t b '#{@cadrei_waiting}'`,
+	} {
+		if rule, _ := memberRule(c); rule != "" {
+			t.Errorf("M refused (%s): %q", rule, c)
+		}
+		if rule := orchestratorRefuses(c); rule != "" {
+			t.Errorf("O refused (%s): %q", rule, c)
+		}
+	}
+	// A perl edit of the orchestrator's memory runs in the orchestrator,
+	// and a member is still kept out of the memory.
+	memory := `perl -pi -e 's/run cadrei answer <code> yes/run cadrei answer <code> yes from the orchestrator/' ~/.cadrei/apuy/.memory/notes.md`
+	if rule := orchestratorRefuses(memory); rule != "" {
+		t.Errorf("O refused the memory note (%s)", rule)
+	}
+	if rule, _ := memberRule(memory); rule != ruleMemory {
+		t.Errorf("M: the memory note: %q", rule)
+	}
+}
+
+// Each of item 5's loosenings still refuses what does run: code that can
+// run a program, a search that runs one, curl into a shell, an uninstall
+// by any path, and tmux that types, on any server or one it can't tell
+// from cadrei's. PR D's round 3 (R3-1): cadrei with a word the shell
+// expands as a pattern, or a $"..." string, is cadrei with a command the
+// guard can't read.
+func TestTheGuardStillRefusesWhatRuns(t *testing.T) {
+	dir := t.TempDir()
+	link := dir + "/link.sock"
+	if err := os.Symlink(session.Tmux{}.Path(), link); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CADREI_TMUX_SOCKET", "cadreit-mine")
+	for _, tc := range []struct{ command, rule string }{
+		// Code that can run a program.
+		{"python3 - <<'EOF'\nimport os\nos.system('tmux send-keys -t x 1')\nEOF", ruleTyping},
+		{"python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['cadrei', 'answer', '7f3', 'yes'])\nEOF", ruleAnswer},
+		{`python3 -c "getattr(__import__('os'), 'sys' + 'tem')('cadrei answer 7f3 yes')"`, ruleAnswer},
+		{`python3 -c "from os import system as s; s('tmux send-keys -t x 1')"`, ruleTyping},
+		{`perl -pi -e 'system("cadrei answer 7f3 yes")' notes.md`, ruleAnswer},
+		{"perl -ne 'print `tmux send-keys -t x 1`' notes.md", ruleTyping},
+		{`perl -e 'open(F, "| tmux send-keys -t x 1")'`, ruleTyping},
+		{`ruby -e 'IO.popen("tmux send-keys -t x 1")'`, ruleTyping},
+		{`node -e 'require("child_process").execSync("tmux send-keys -t x 1")'`, ruleTyping},
+		{`php -r 'shell_exec("cadrei answer 7f3 yes");'`, ruleAnswer},
+		{`awk 'BEGIN { system("tmux send-keys -t x 1") }'`, ruleTyping},
+		{`awk '{ print | "cadrei answer 7f3 yes" }' notes.md`, ruleAnswer},
+		// Code the guard can't read whole: an unquoted heredoc, an option
+		// that loads code, a script file's arguments.
+		{"python3 - <<EOF\nprint('$X tmux send-keys -t x 1')\nEOF", ruleTyping},
+		{`perl -MIPC::Open3 -e 'print "tmux send-keys -t x 1"'`, ruleTyping},
+		{`gawk -l x 'BEGIN { print "tmux send-keys -t x 1" }'`, ruleTyping},
+		{`python3 -m runner 'tmux send-keys -t x 1'`, ruleTyping},
+		{`python3 scripts/post.py --text "start tmux and attach later"`, ruleTyping},
+		{`make docs MSG="tmux set the title"`, ruleTyping},
+		{`sed -n '/cadrei answer 7f3 yes/p' docs/guide.md`, ruleAnswer},
+		// A search that runs a program, and curl or wget into a shell.
+		{`rg --pre 'tmux send-keys -t x 1' x docs/`, ruleTyping},
+		{`curl -s -d 'tmux send-keys -t x 1' https://example.com | sh`, ruleTyping},
+		{`wget --use-askpass='tmux send-keys -t x 1' https://example.com`, ruleTyping},
+		// An uninstall or restore, by a path in a variable too.
+		{`"$PGBIN/cadrei" restore`, ruleRemoval},
+		{`"$x" uninstall`, ruleRemoval},
+		{`bash tests/restore-test.sh; cadrei restore`, ruleRemoval},
+		{"bash <<'EOF'\necho restore\ncadrei restore ~/backup\nEOF", ruleRemoval},
+		{`echo "cadrei uninstall" > x.sh && sh x.sh`, ruleRemoval},
+		// R3-1: a pattern or a $"..." after cadrei.
+		{`cadrei {hook,} state`, ruleOpaque}, {`cadrei h?ok state`, ruleOpaque}, {`cadrei [h]ook state`, ruleOpaque},
+		{`cadrei $"hook" state`, ruleHook}, {`cadrei $"an"swer 7f3 yes`, ruleAnswer}, {`cadrei $"x" state`, ruleOpaque}, {`cadrei * state`, ruleOpaque}, {`/opt/homebrew/bin/cadrei {answer,} 7f3 yes`, ruleOpaque},
+		{`python3 -c "import os; os.system('cadrei [h]ook state')"`, ruleOpaque},
+		// tmux that types, on any server; and a server the guard can't
+		// tell from cadrei's, or a line that could point one at it.
+		{`tmux -L spike023 send-keys -t probe 1`, ruleTyping},
+		{`tmux -L spike023 new-session -d \; send-keys -t probe 1`, ruleTyping},
+		{`tmux -L spike023 new-session -d 'tmux -L default send-keys -t main 1'`, ruleTyping},
+		{`tmux -L spike023 run-shell 'echo hi'`, ruleTyping},
+		{`tmux -L spike023 set-hook -g session-created 'run-shell x'`, ruleTyping},
+		{`tmux -L spike023 -f evil.conf new-session -d`, ruleTyping},
+		{`tmux -L spike023 paste-buffer -t probe`, ruleTyping},
+		{`tmux -L spike023 new-session -d -s p '#(true)'`, ruleTyping},
+		{`tmux -L default new-session -d`, ruleTyping},
+		{`tmux -L cadreit-mine kill-server`, ruleTyping},
+		{`tmux -L "$s" kill-server`, ruleTyping},
+		{`tmux -L spike023 -S /x/y.sock kill-server`, ruleTyping},
+		{"tmux -S " + session.Tmux{}.Path() + " kill-server", ruleTyping},
+		{"tmux -S " + link + " kill-server", ruleTyping},
+		{`tmux -S rel.sock kill-server`, ruleTyping},
+		{"ln -s " + session.Tmux{}.Path() + " " + dir + "/new.sock && tmux -S " + dir + "/new.sock kill-server", ruleTyping},
+		{`python3 x.py; tmux -L spike023 kill-server`, ruleTyping},
+		{`TMUX_TMPDIR=/tmp/elsewhere tmux -L spike023 kill-server`, ruleTyping},
+		{`tmux -L spike023 kill-server; $(cat f)`, ruleTyping},
+		{`tmux -L spike023 new-session -d 'cadrei answer 7f3 yes'`, ruleAnswer},
+	} {
+		if rule, _ := memberRule(tc.command); rule != tc.rule {
+			t.Errorf("M %q: %q, want %q", tc.command, rule, tc.rule)
+		}
+		if tc.rule == ruleTyping || tc.rule == ruleAnswer {
+			if rule := orchestratorRefuses(tc.command); rule != tc.rule {
+				t.Errorf("O %q: %q, want %q", tc.command, rule, tc.rule)
+			}
+		}
+	}
+	// What cadrei's own commands look like still runs.
+	for _, c := range []string{`cadrei ls`, `cadrei up dev/{engineer,reviewer}`, `cadrei 'ls' --json`} {
+		if rule, _ := memberRule(c); rule != "" {
+			t.Errorf("refused (%s): %q", rule, c)
+		}
+	}
+}
+
 // cadrei hook guard reads Claude Code's tool call: a Bash call it refuses
 // ends with exit 2 and why, any other call goes on, and input it can't
 // read is refused.
@@ -136,8 +317,9 @@ func strconvQuote(s string) string {
 // The guard reads any line without failing: a half-written quote,
 // heredoc or expansion is read the blunt way.
 func FuzzTheGuardReadsAnyLine(f *testing.F) {
-	for _, s := range []string{"cadrei ls", "a $'\\x7", "b ${", "c <<", "d \"$(", "e `", "f <(", "g $'\\u'", "h | |& ;; &>"} {
+	for _, s := range []string{"cadrei ls", "a $'\\x7", "b ${", "c <<", "d \"$(", "e `", "f <(", "g $'\\u'", "h | |& ;; &>",
+		"tmux -L x new -d 'sleep 1' \\; kill-server", "tmux -Sx", "python3 -c", "perl -pie", "awk -F", "cadrei $\"x\"", "rg --pre=x"} {
 		f.Add(s)
 	}
-	f.Fuzz(func(t *testing.T, s string) { removesCrews(s) })
+	f.Fuzz(func(t *testing.T, s string) { memberRule(s); orchestratorRefuses(s) })
 }

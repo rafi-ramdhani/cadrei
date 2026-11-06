@@ -14,8 +14,10 @@ import (
 // (un"inst"all is uninstall). Case doesn't count, as a case-insensitive
 // disk doesn't count it. Text that only goes to a program that never runs
 // it (a heredoc to cat, grep's pattern, gh's or git commit's message) is
-// passed over. Text a shell, eval or another program could run is read
-// too, and a line it can't read whole is read the blunt way, as words.
+// passed over, and so is a word alone (restore in a file name). Text a
+// shell, eval or another program could run is read too, and a line it
+// can't read whole is read the blunt way, for cadrei's program (or an
+// expansion) followed by the command.
 func removesCrews(command string) bool { return guardLine(removalRule, command, 0) }
 
 // guardRule is one thing the guard looks for in a command line, as
@@ -155,8 +157,10 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 	}
 	prog, name := words[p], wordName(words[p])
 	// A program that is itself an expansion, such as $(printf 'cadrei
-	// uninstall'), could be anything the line spells.
-	if prog.expands && line.mentions() {
+	// uninstall'), could be anything the line spells. One whose last path
+	// part is written out ("$PGBIN/pg_restore") is that program.
+	unknown := nameExpands(prog)
+	if unknown && line.mentions() {
 		return true
 	}
 	if inert(name, words[p+1:]) {
@@ -165,14 +169,18 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 	if rule.runs(c, words, p, fed, line) {
 		return true
 	}
-	// Code in an argument or on stdin.
-	for _, w := range words {
-		if rule.calls(w.text) {
+	// Code in an argument or on stdin. An interpreter's own code counts
+	// only where it can run a program, for the rules about what runs (a
+	// write is a write, run or not).
+	code, stdinCode, read := codeOf(name, words[p+1:])
+	gated := read && !writing && !unknown
+	for i, w := range words {
+		if rule.calls(w.text) && !(gated && i == p+1+code && !execLike(w.text)) {
 			return true
 		}
 	}
-	for _, in := range c.input {
-		if rule.calls(in) {
+	for k, in := range c.input {
+		if rule.calls(in) && !(gated && stdinCode && c.literal[k] && !execLike(in)) {
 			return true
 		}
 	}
@@ -203,7 +211,7 @@ func guardCommand(rule guardRule, c *shCommand, fed bool, line *lineText, depth 
 		return guardLine(rule, strings.Join(code, " "), depth+1)
 	case name == "source" || name == ".":
 		return len(words) > p+1 && line.blunt()
-	case shells[name] || prog.expands:
+	case shells[name] || unknown:
 		return shellRuns(rule, c, words[p+1:], fed, line, depth)
 	}
 	return false
@@ -228,12 +236,14 @@ func shellRuns(rule guardRule, c *shCommand, args []shWord, fed bool, line *line
 	if c.fromFile {
 		return line.blunt()
 	}
+	// Its heredocs are read as its code, as the shell reads them; what a
+	// pipe feeds it, the guard can't read, so a mention there counts.
 	for _, in := range c.input {
 		if guardLine(rule, in, depth+1) {
 			return true
 		}
 	}
-	return feeds(rule, c, fed)
+	return fed
 }
 
 // codeFlag reports whether a shell's options, the words before its first
@@ -288,7 +298,7 @@ func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *li
 		}
 		cadrei := isCadrei(w)
 		afterCadrei = afterCadrei || cadrei
-		afterEither = afterEither || cadrei || w.expands
+		afterEither = afterEither || cadrei || nameExpands(w)
 	}
 	// xargs running cadrei, a shell, or a program it can't name, with
 	// words from its stdin.
@@ -304,22 +314,24 @@ func (r cadreiRule) runs(c *shCommand, words []shWord, p int, fed bool, line *li
 
 // opaqueRule looks for cadrei's program run with a command the guard can't
 // read: a variable or a substitution right after it (cadrei $x, cadrei
-// $(cat f), cadrei `cat f`), whatever the line names elsewhere. In a
-// member, that could be any command, cadrei hook or answer too.
+// $(cat f), cadrei `cat f`), a $"..." string, or a word the shell expands
+// as a pattern (cadrei {hook,}, cadrei h?ok, cadrei [h]ook), whatever the
+// line names elsewhere. In a member, that could be any command, cadrei
+// hook or answer too.
 type opaqueRule struct{}
 
 func (opaqueRule) runs(c *shCommand, words []shWord, p int, fed bool, line *lineText) bool {
 	for i := p; i+1 < len(words); i++ {
-		if isCadrei(words[i]) && words[i+1].expands {
+		if isCadrei(words[i]) && (words[i+1].expands || words[i+1].pattern) {
 			return true
 		}
 	}
 	return false
 }
 
-// opaqueText is cadrei followed by an expansion, in code another program
-// runs.
-var opaqueText = regexp.MustCompile(`(?i)(^|[^a-z0-9_./-])(cadrei|cadre)["']?\s+["']?(\$[({a-z_0-9@*#?!-]|` + "`)")
+// opaqueText is cadrei followed by an expansion or a pattern, in code
+// another program runs.
+var opaqueText = regexp.MustCompile(`(?i)(^|[^a-z0-9_./-])(cadrei|cadre)["']?\s+["']?(\$[({a-z_0-9@*#?!"-]|` + "`" + `|[a-z0-9_-]*[{*?\[])`)
 
 func (opaqueRule) calls(text string) bool    { return opaqueText.MatchString(text) }
 func (opaqueRule) mentions(text string) bool { return opaqueText.MatchString(text) }
@@ -346,15 +358,15 @@ var (
 	}
 	shKeywords = setOf("if", "then", "else", "elif", "fi", "do", "done", "while", "until", "for", "in", "case", "esac", "select", "function", "{", "}", "!", "[[", "]]")
 	// inertPrograms never run their arguments or their stdin.
-	inertPrograms = setOf("echo", "printf", "cat", "grep", "egrep", "fgrep", "ls", "head", "tail", "wc", "uniq", "cut", "tr", "diff", "cmp", "comm", "tee", "jq", "mkdir", "cp", "mv", "rm", "rmdir", "ln", "touch", "chmod", "stat", "test", "[", "true", "false", "pwd", "cd", "basename", "dirname", "realpath", "readlink", "which", "whoami", "date", "sleep", "shasum", "od", "hexdump", "column", "nl", "paste", "rev", "git", "gh")
+	inertPrograms = setOf("echo", "printf", "cat", "grep", "egrep", "fgrep", "ls", "head", "tail", "wc", "uniq", "cut", "tr", "diff", "cmp", "comm", "tee", "jq", "mkdir", "cp", "mv", "rm", "rmdir", "ln", "touch", "chmod", "stat", "test", "[", "true", "false", "pwd", "cd", "basename", "dirname", "realpath", "readlink", "which", "whoami", "date", "sleep", "shasum", "od", "hexdump", "column", "nl", "paste", "rev", "git", "gh",
+		// A search's pattern and files, and what curl and wget send or
+		// fetch, are data (but for the options inert checks).
+		"rg", "curl", "wget")
 	// gitInert: git commands that run nothing of the line's (hooks in
 	// the repo aside, which are files).
 	gitInert = setOf("add", "am", "apply", "blame", "branch", "checkout", "cherry-pick", "clone", "commit", "describe", "diff", "fetch", "grep", "init", "log", "ls-files", "merge", "mv", "notes", "pull", "push", "remote", "reset", "restore", "rev-parse", "revert", "rm", "shortlog", "show", "stash", "status", "switch", "tag", "worktree")
 	// ghRuns: gh commands that can run a command of the line's.
 	ghRuns = setOf("alias", "extension", "ext")
-	// bluntHides: words that can hide the program's name, to the blunt
-	// reading.
-	bluntHides = setOf("sh", "bash", "zsh", "dash", "ksh", "fish", "eval", "source", "xargs", "exec", "env")
 
 	assignment    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*\+?=`)
 	guardDuration = regexp.MustCompile(`^[0-9.]+[smhd]?$`)
@@ -430,12 +442,27 @@ func splitString(wrapper string, args []shWord) (string, bool) {
 }
 
 // inert reports whether a program runs none of its arguments: git only
-// with no -c and a command from gitInert, gh with none of ghRuns.
+// with no -c and a command from gitInert, gh with none of ghRuns, rg with
+// no --pre (a program it runs on each file), wget with no command of its
+// own (-e runs a .wgetrc line, which can name a program to run).
 func inert(name string, args []shWord) bool {
 	if !inertPrograms[name] {
 		return false
 	}
 	switch name {
+	case "rg":
+		for _, a := range args {
+			if opt, _, _ := strings.Cut(a.bare, "="); opt == "--pre" {
+				return false
+			}
+		}
+	case "wget":
+		for _, a := range args {
+			if b := a.bare; b == "-e" || strings.HasPrefix(b, "--execute") || strings.HasPrefix(b, "--use-askpass") || strings.HasPrefix(b, "--config") ||
+				(strings.HasPrefix(b, "-") && !strings.HasPrefix(b, "--") && strings.Contains(b, "e")) {
+				return false
+			}
+		}
 	case "git":
 		for i := 0; i < len(args); i++ {
 			a := args[i].bare
@@ -459,6 +486,19 @@ func inert(name string, args []shWord) bool {
 	return true
 }
 
+// nameExpands reports whether a word's last path part, as a program's
+// name, holds an expansion: $c and ${x}rei do, "$PGBIN/pg_restore" doesn't.
+func nameExpands(w shWord) bool {
+	if !w.expands {
+		return false
+	}
+	spans := anyExpansion.FindAllStringIndex(w.text, -1)
+	if len(spans) == 0 {
+		return true // one the guard spells differently ($'\x..'): unknown
+	}
+	return !strings.Contains(w.text[spans[len(spans)-1][1]:], "/")
+}
+
 // wordName is a word as a program's name: its last path part, in lower case.
 func wordName(w shWord) string {
 	b := strings.ToLower(w.bare)
@@ -474,6 +514,9 @@ func isCadrei(w shWord) bool {
 
 // expansion is a shell expansion the guard can't know the value of.
 var expansion = regexp.MustCompile(`\$\{[^}]*\}|\$\([^)]*\)|\$[a-z_][a-z0-9_]*|\$[0-9@*#?$!-]|` + "`[^`]*`")
+
+// anyExpansion is expansion in text of any case.
+var anyExpansion = regexp.MustCompile("(?i)" + expansion.String())
 
 // guardWord is a word of a command line, as far as the blunt reading
 // reads one.
@@ -503,25 +546,26 @@ func readWords(text string, word *regexp.Regexp) []string {
 	return words
 }
 
-// blunt is the blunt reading, for text the guard can't read as commands:
-// one of the commands, with cadrei's program by any path, or with
-// something that can hide the program's name: an expansion ($, a
-// backtick), or another shell, eval, source or xargs.
+// blunt is the blunt reading, for text the guard can't read as commands,
+// or a line that hands a shell a script it can't see: one of the commands
+// after cadrei's program, by any path (calls), or right after an
+// expansion that could be the program ($c uninstall, `which cadrei`
+// restore). A word alone (a commit message's "restore", restore-test.sh,
+// pg_restore) is no command.
 func (r cadreiRule) blunt(text string) bool {
-	hides := strings.ContainsAny(text, "$`")
-	program, sub := false, false
-	for _, w := range bluntWords(text) {
-		switch {
-		case programs[w]:
-			program = true
-		case r.subs[w]:
-			sub = true
-		case bluntHides[w]:
-			hides = true
+	if r.calls(text) {
+		return true
+	}
+	for _, m := range hiddenProgram.FindAllStringSubmatch(strings.NewReplacer(`"`, "", `'`, "", `\`, "").Replace(text), -1) {
+		if r.subs[strings.ToLower(m[1])] {
+			return true
 		}
 	}
-	return sub && (program || hides)
+	return false
 }
+
+// hiddenProgram is an expansion, then the word after it.
+var hiddenProgram = regexp.MustCompile(`(?:\$\{[^}]*\}|\$\([^)]*\)|\$[A-Za-z_][A-Za-z0-9_]*|\$[0-9@*#?$!-]|` + "`[^`]*`" + `)\s+([A-Za-z_-]+)`)
 
 // mentions reports whether text has one of the commands as a word.
 func (r cadreiRule) mentions(text string) bool {
@@ -558,10 +602,12 @@ type (
 		bare    string // the same, without its expansions
 		quoted  bool   // part of it was quoted
 		expands bool   // it has an expansion, whose value the guard can't know
+		pattern bool   // it has an unquoted {, *, ? or [, which the shell can expand
 	}
 	shCommand struct {
 		words    []shWord
 		input    []string // the heredocs and here-strings it reads
+		literal  []bool   // for each input, whether the shell expands nothing in it
 		fromFile bool     // it reads a file on stdin (<)
 		outputs  []shWord // the files its output goes to (>, >>, &>)
 	}
@@ -589,7 +635,7 @@ func parseShell(s string) (shLine, bool) {
 		pipe         []*shCommand
 		cmd          = &shCommand{}
 		text, bare   []byte
-		in, q, x     bool   // in a word, quoted, expands
+		in, q, x, g  bool   // in a word, quoted, expands, a pattern
 		target       string // what the next word is for: a redirection's operator, or "" for an argument
 		docs         []doc
 		bad          bool
@@ -608,12 +654,13 @@ func parseShell(s string) (shLine, bool) {
 		if !in {
 			return
 		}
-		w := shWord{text: string(text), bare: string(bare), quoted: q, expands: x}
+		w := shWord{text: string(text), bare: string(bare), quoted: q, expands: x, pattern: g}
 		switch target {
 		case "":
 			cmd.words = append(cmd.words, w)
 		case "<<<":
 			cmd.input = append(cmd.input, w.text)
+			cmd.literal = append(cmd.literal, !w.expands)
 		case "<<", "<<-":
 			docs = append(docs, doc{cmd, w.bare, target == "<<-", w.quoted})
 		case "<":
@@ -621,7 +668,7 @@ func parseShell(s string) (shLine, bool) {
 		case ">":
 			cmd.outputs = append(cmd.outputs, w)
 		}
-		text, bare, in, q, x, target = nil, nil, false, false, false, ""
+		text, bare, in, q, x, g, target = nil, nil, false, false, false, false, ""
 	}
 	endCmd = func() {
 		endWord()
@@ -715,6 +762,11 @@ func parseShell(s string) (shLine, bool) {
 		case c >= '0' && c <= '9' || strings.IndexByte("@*#?$!-", c) >= 0:
 			addx(s[i : i+2])
 			return i + 1
+		case c == '"':
+			// $"...": a string the shell may translate, so its words can't
+			// be known. The quotes are read as a string after it.
+			addx("$")
+			return i
 		}
 		addc('$')
 		return i
@@ -763,6 +815,7 @@ func parseShell(s string) (shLine, bool) {
 			for _, d := range docs {
 				body, next := heredoc(s, i+1, d.delim, d.tabs)
 				d.cmd.input = append(d.cmd.input, body)
+				d.cmd.literal = append(d.cmd.literal, d.literal)
 				if !d.literal {
 					subs, ok := substitutions(body)
 					if !ok {
@@ -827,6 +880,7 @@ func parseShell(s string) (shLine, bool) {
 		case c == '`':
 			i = readBacktick(i)
 		default:
+			g = g || strings.IndexByte("{*?[", c) >= 0
 			addc(c)
 		}
 	}

@@ -444,6 +444,33 @@ func TestAnAutoModeDenialGetsACode(t *testing.T) {
 	}
 }
 
+// PR D's round 3 (R3-2): auto mode denied a command that could type into
+// a member's window or answer for one. Cadrei gives no ! line for it,
+// neither in the listing nor in a yes, as for the guard's own refusals.
+func TestAnAutoModeDenialThatCouldTypeGetsNoBangLine(t *testing.T) {
+	c := heldCrew(t)
+	const member = "work-dev-engineer"
+	for _, command := range []string{"tmux send-keys -t main:engineer 1", "cadrei answer k2m yes"} {
+		raw, _ := json.Marshal(command)
+		feed(t, c, member, `{"hook_event_name":"PermissionDenied","tool_name":"Bash","tool_use_id":"toolu_t","cwd":"/src/app","tool_input":{"command":`+string(raw)+`},"reason":"Not that."}`)
+		held := heldOf(t, c, member)
+		if len(held) != 1 || held[0].Kind != session.ForDenied {
+			t.Fatalf("%s: record %+v", command, held)
+		}
+		code := held[0].Code
+		if _, out, _ := call("answer"); strings.Contains(out, "! ") || !strings.Contains(out, "Cadrei can't override auto mode from here. Tell the engineer what to do instead.") {
+			t.Errorf("%s: listing:\n%s", command, out)
+		}
+		yes := "Auto mode denied that, and cadrei can't override the engineer's auto mode from here. The command could answer or type for a member, so there's no ! line for it either: tell the engineer what to do instead. Then close it with cadrei answer " + code + " no."
+		if n, _, errOut := call("answer", code, "yes"); n != 1 || flat(errOut) != failed(yes) {
+			t.Errorf("%s: yes: %d %q", command, n, flat(errOut))
+		}
+		if n, _, _ := call("answer", code, "no"); n != 0 {
+			t.Errorf("%s: no: %d", command, n)
+		}
+	}
+}
+
 // A no to a prompt the member waits on ends its turn and every prompt in
 // it, but a held record stays: its call was over already.
 func TestANoLeavesAHeldRecord(t *testing.T) {
