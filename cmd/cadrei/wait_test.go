@@ -266,6 +266,109 @@ func TestAWaitTakesOverFromASlowOne(t *testing.T) {
 	}
 }
 
+// PR E's round 2 note: with no orchestrator lock (cadrei couldn't write
+// it, and only warned), a wait is for the orchestrator's tmux session, by
+// the process its window runs. Once that session is gone, the wait ends.
+func TestAWaitWithNoLockEndsWithItsSession(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	build := c + "/.claude/build"
+	must(t, "--tmux", "--detach")
+	must(t, "up", "dev")
+	request(t, c, "engineer", mkdirRequest)
+	ownTerminal(t)
+	old := waitEvery
+	waitEvery = 50 * time.Millisecond
+	t.Cleanup(func() { waitEvery = old })
+	call("answer", "--wait") // shows the engineer's
+	if err := os.Remove(orchestrator.LockPath(build)); err != nil {
+		t.Fatal(err)
+	}
+	if got := waitOwner(build); got == "none" {
+		t.Fatal("no owner from the orchestrator's session")
+	}
+	done := make(chan string, 1)
+	go func() {
+		_, out, errOut := call("answer", "--wait", "--timeout", "20s")
+		done <- out + errOut
+	}()
+	for i := 0; i < 80 && !waitRunning(build); i++ {
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !waitRunning(build) {
+		t.Fatal("the wait isn't seen")
+	}
+	session.Default().KillSession(orchestrator.SessionName("work"))
+	select {
+	case out := <-done:
+		if out != "The orchestrator this wait was for isn't open anymore, so the wait ended.\n" {
+			t.Errorf("ended: %q", out)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait didn't end with its session")
+	}
+}
+
+// PR E's round 3 note: an orchestrator that opens during a wait's look,
+// as a request comes in, never sees what the wait shows. So the wait
+// checks its orchestrator again before it notes the request as shown, and
+// ends with it unnoted for the new one's wait.
+func TestAWaitChecksItsOrchestratorBeforeItNotes(t *testing.T) {
+	c, _ := waitCrew(t)
+	build := c + "/.claude/build"
+	call("answer", "--wait") // shows the engineer's
+	rev := ask(t, c, "reviewer", "Upload the test file?")
+	p := exec.Command("sleep", "60")
+	if err := p.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { p.Process.Kill(); p.Wait() })
+	looked := waitLooked
+	waitLooked = func() {
+		waitLooked = func() {}
+		if _, err := orchestrator.WriteLock(orchestrator.LockPath(build), p.Process.Pid, orchestrator.Terminal, "", ""); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { waitLooked = looked })
+	if n, out, errOut := call("answer", "--wait", "--timeout", "5s"); n != 0 || out != "The orchestrator this wait was for isn't open anymore, so the wait ended.\n" {
+		t.Errorf("exit %d: %q %q", n, out, errOut)
+	}
+	if raw, _ := os.ReadFile(waitedPath(build)); strings.Contains(string(raw), "work-dev-reviewer "+rev) {
+		t.Errorf("noted for nobody: %q", raw)
+	}
+	if n, out, _ := call("answer", "--wait", "--timeout", "5s"); n != 0 || !strings.Contains(out, rev+"  The reviewer in dev asks: Upload the test file?") {
+		t.Errorf("the new orchestrator's wait: %d %q", n, out)
+	}
+}
+
+// PR E's round 3 note: --timeout counts the time a new wait spends
+// waiting for one left by an orchestrator that's gone.
+func TestAWaitsTimeoutCountsItsTakeover(t *testing.T) {
+	c, _ := waitCrew(t)
+	build := c + "/.claude/build"
+	call("answer", "--wait") // shows the engineer's
+	old, err := fsx.Acquire(waitLockPath(build), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(waitOwnerPath(build), []byte("1 gone\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hold := 60 * waitEvery
+	go func() {
+		time.Sleep(hold)
+		old.Release()
+	}()
+	start := time.Now()
+	n, out, errOut := call("answer", "--wait", "--timeout", "300ms")
+	if took := time.Since(start); n != 0 || out != "Nothing new came in for 300ms.\n" || took >= hold {
+		t.Errorf("exit %d after %s: %q %q", n, took, out, errOut)
+	}
+}
+
 // Review L2: a wait that starts while the team status takes the lock for
 // its quick look still runs, even with a wait's note left by one that was
 // killed.

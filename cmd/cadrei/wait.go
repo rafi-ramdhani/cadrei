@@ -17,6 +17,8 @@ import (
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
 	"github.com/rafi-ramdhani/cadrei/internal/fsx"
 	"github.com/rafi-ramdhani/cadrei/internal/orchestrator"
+	"github.com/rafi-ramdhani/cadrei/internal/proc"
+	"github.com/rafi-ramdhani/cadrei/internal/runtime"
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
 
@@ -36,6 +38,8 @@ var (
 	waitEvery     = time.Second
 	waitGrace     = 200 * time.Millisecond
 	takeoverLimit = time.Minute
+	// waitLooked is called after each look at the members (for tests).
+	waitLooked = func() {}
 )
 
 // waitedPath is the file of the requests a wait already showed, one key a
@@ -55,6 +59,21 @@ func waitOwnerPath(build string) string { return filepath.Join(build, "state", "
 func waitOwner(build string) string {
 	if l := orchestrator.ReadLock(orchestrator.LockPath(build)); l != nil {
 		return strconv.Itoa(l.PID) + " " + l.Start
+	}
+	// No lock (cadrei couldn't write it, and only warned): the
+	// orchestrator's tmux session, by the process its window runs, which
+	// the lock would have named.
+	home := filepath.Dir(filepath.Dir(build))
+	if rt, err := runtime.Get(runtimeName()); err != nil || rt.BuildDir(home) != build {
+		return "none"
+	}
+	t, name := session.Default(), orchestrator.SessionName(filepath.Base(home))
+	if orchestratorSession(t, name, home, 0) {
+		if pid, err := t.PanePID(name, "orchestrator"); err == nil {
+			if info, err := proc.Of(pid); err == nil {
+				return strconv.Itoa(pid) + " " + info.Start
+			}
+		}
 	}
 	return "none"
 }
@@ -132,14 +151,24 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 	if err := os.MkdirAll(filepath.Join(build, "state"), 0o755); err != nil {
 		return e.fail("%s", err)
 	}
+	// The timeout counts from here, a takeover's wait too.
+	start := time.Now()
 	lock, err := fsx.Acquire(waitLockPath(build), waitGrace)
 	// The one running is for an orchestrator that's gone, and ends on its
 	// next look, however long its looks take. A minute is far past that: a
 	// wait still stuck then is left be.
-	for until := time.Now().Add(takeoverLimit); errors.Is(err, fsx.ErrBusy) && !waitRunning(build) && time.Now().Before(until); {
-		lock, err = fsx.Acquire(waitLockPath(build), waitEvery)
+	until := start.Add(takeoverLimit)
+	if limit > 0 && start.Add(limit).Before(until) {
+		until = start.Add(limit)
+	}
+	for errors.Is(err, fsx.ErrBusy) && !waitRunning(build) && time.Now().Before(until) {
+		lock, err = fsx.Acquire(waitLockPath(build), min(waitEvery, time.Until(until)))
 	}
 	if errors.Is(err, fsx.ErrBusy) {
+		if limit > 0 && time.Since(start) >= limit {
+			e.say("%s", "Nothing new came in for "+limitText+".")
+			return 0
+		}
 		return e.failWith("A " + cmd("cadrei answer --wait") + " is already running for this crew, so this one isn't needed.")
 	}
 	if err != nil {
@@ -155,11 +184,16 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 		lock.Release()
 	}()
 	seen := readWaited(build)
-	start := time.Now()
 	shown := -1 // the count this wait last gave the badge
+	gone := func() bool {
+		if waitOwner(build) == owner {
+			return false
+		}
+		e.say("The orchestrator this wait was for isn't open anymore, so the wait ended.")
+		return true
+	}
 	for {
-		if waitOwner(build) != owner {
-			e.say("The orchestrator this wait was for isn't open anymore, so the wait ended.")
+		if gone() {
 			return 0
 		}
 		views := runningOf(r.Cadrei, r.Default, t)
@@ -169,6 +203,7 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 			return 0
 		}
 		open := waitingIn(views)
+		waitLooked()
 		// A held record past its time ends with no write, so no hook sets
 		// the badge for it: the wait's looks do.
 		if len(open) != shown {
@@ -183,6 +218,11 @@ func (e *env) runWait(r *cadreis.Resolved, t session.Tmux, build string, args []
 			}
 		}
 		if len(fresh) > 0 {
+			// Its orchestrator again, as one that opened during the look
+			// would never see what this wait notes as shown.
+			if gone() {
+				return 0
+			}
 			// Noted first: shown and not noted would show again.
 			if err := writeWaited(build, open, seen); err != nil {
 				return e.fail("%s", err)
