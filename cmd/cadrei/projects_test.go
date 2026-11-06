@@ -111,6 +111,26 @@ func TestProjectsFolderIsAskedOnce(t *testing.T) {
 	}
 }
 
+// 0.2.3 item 3: cadrei project dir warns about a folder iCloud may sync
+// (Desktop and Documents, iCloud Drive), and still sets it.
+func TestProjectDirWarnsOfASyncedFolder(t *testing.T) {
+	home := sandbox(t)
+	for dir, where := range map[string]string{"~/Documents/code": "~/Documents", "~/Desktop": "~/Desktop", "~/Library/Mobile Documents/com~apple~CloudDocs/code": "iCloud Drive"} {
+		out := must(t, "project", "dir", dir)
+		if want := "! " + dir + " is in " + where + ", which iCloud may sync. Syncing can mess with git and slow your team down, so a folder like ~/Developer is safer: cadrei project dir ~/Developer"; !strings.Contains(flat(out), want) {
+			t.Errorf("%s: %q", dir, out)
+		}
+		if got := strings.TrimSpace(readFile(t, home+"/.cadrei/config/projects-dir")); got != dir {
+			t.Errorf("%s: projects-dir %q", dir, got)
+		}
+	}
+	for _, dir := range []string{"~/Developer", "~/Documentsish"} {
+		if out := must(t, "project", "dir", dir); strings.Contains(out, "iCloud") {
+			t.Errorf("%s: %q", dir, out)
+		}
+	}
+}
+
 func TestProjectAddTrustsAndLinks(t *testing.T) {
 	home := sandbox(t)
 	must(t, "init", "work")

@@ -19,7 +19,8 @@ export HOME="$T/home" CADREI_TMUX_SOCKET="cadrei-test-$$"
 # (a short path: socket paths have a length limit).
 TMUX_TMPDIR=$(mktemp -d /tmp/cadrei-smoke.XXXXXX)
 export TMUX_TMPDIR
-unset TMUX TMUX_PANE CADREI_HOME CADREI_MEMBER CADRE_PERSONA CADREI_OFF CADREI_ORCHESTRATOR CLAUDE_CONFIG_DIR XDG_CACHE_HOME
+unset TMUX TMUX_PANE CADREI_HOME CADREI_MEMBER CADRE_PERSONA CADREI_OFF CADREI_ORCHESTRATOR CLAUDE_CONFIG_DIR XDG_CACHE_HOME \
+  GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GH_CONFIG_DIR GH_HOST
 # The hooks name this test build, which lives in a temporary folder: a
 # release build refuses that (checked with $T/rel/cadrei).
 export CADREI_TEST_HOOK_ANYWHERE=1
@@ -33,6 +34,9 @@ trap 'command tmux -L "$CADREI_TMUX_SOCKET" kill-server 2>/dev/null || true; rm 
 # The binary under test, built with the test-only parts (the fake runtime,
 # the JSON race hook), and a release build for the checks that need one.
 (cd "$ROOT" && go build -tags cadreitest -o "$T/bin/cadrei" ./cmd/cadrei && go build -o "$T/rel/cadrei" ./cmd/cadrei)
+# A gh that isn't signed in, so the first run never asks the real one
+# about your GitHub repos.
+printf '#!/bin/sh\nexit 1\n' > "$T/bin/gh" && chmod +x "$T/bin/gh"
 
 # A stand-in for Claude Code: it answers the health check as a current,
 # logged-in install; an orchestrator records its arguments and, in the
@@ -148,6 +152,7 @@ check "it is the default" grep -qx main "$HOME/.cadrei/config/default"
 check "the skill is written out and linked" test "$(readlink "$HOME/.claude/skills/cadrei")" = "$HOME/.cadrei/framework/skills/cadrei" -a -f "$HOME/.cadrei/framework/skills/cadrei/SKILL.md"
 check "no every-chat hook on the first run" bash -c "! grep -q 'hook orchestrator' '$HOME/.claude/settings.json' 2>/dev/null"
 check "the plan" grep -q "Here's the plan" <<<"$out"
+check "new projects go in ~/Developer" bash -c "grep -qx '~/Developer' '$HOME/.cadrei/config/projects-dir' && grep -q 'New projects will go in ~/Developer' <<<\"\$1\"" _ "$out"
 check "then the work lines" grep -q "Created your crew main" <<<"$out"
 check "then the orchestrator opens" grep -qx main-orchestrator "$T/orch-ran"
 check "cadrei hook on adds the every-chat hook" bash -c "cadrei hook on | grep -q 'now open as your orchestrator' && grep -q 'test -x $T/bin/cadrei && $T/bin/cadrei hook orchestrator 2>/dev/null; exit 0' '$HOME/.claude/settings.json'"
@@ -221,6 +226,7 @@ cd "$C"
 mkdir -p "$C/members/ops" && printf '# Member: sre\n' > "$C/members/ops/sre.md"
 git -C "$C" add members && git -C "$C" commit -qm "Add member ops/sre"
 check "team and member commands are gone" bash -c "cadrei team add ops 2>&1 | flat | grep -q 'no command team' && cadrei member add ops/x 2>&1 | flat | grep -q 'no command member'"
+rm -f "$HOME/.cadrei/config/projects-dir" # as on a machine set up before 0.2.3
 check "no projects folder: refused without a terminal" bash -c "cadrei project add app '$T/remote.git' 2>&1 | flat | grep -q 'projects folder isn.t set yet'"
 cadrei project dir "$HOME/Developer" >/dev/null
 out=$(cadrei project add app "$T/remote.git")

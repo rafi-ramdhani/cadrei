@@ -222,7 +222,7 @@ cd "$(cadrei project path my-app)"
 
 ### `cadrei project dir [<folder>]`
 
-Shows or sets the folder new clones go into.
+Shows or sets the folder new clones go into. The first run sets `~/Developer` when nothing's set yet. A folder in `~/Documents`, `~/Desktop` or iCloud Drive is set, with a warning: iCloud may sync those, which can mess with git.
 
 ```bash
 cadrei project dir ~/Developer

@@ -19,6 +19,7 @@
   + Created your crew main
   ! Claude Code will ask to trust ~/.cadrei/main when it opens. That's your
     crew's own folder, so say yes.
+  + New projects will go in ~/Developer
   + Linked cadrei's instructions into Claude Code
 
   Opening your orchestrator here. Your team still runs in tmux, and you can

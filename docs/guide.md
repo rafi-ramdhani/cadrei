@@ -57,6 +57,7 @@ The header names the version and the folder you're in, with a small figure besid
 | `a` | shows up when the repo has its own Claude Code settings: adds it to the plan anyway, and pressed again leaves it out |
 | `o` | shows up when an archived setup is waiting: brings it back instead ([Bring back an archived setup](#bring-back-an-archived-setup)) |
 
+- **Got a crew backed up on GitHub?** When `gh` (GitHub's command-line tool) is signed in and you have a repo named `cadrei-<something>`, the plan is to restore it instead: `Restore your crew from you/cadrei-main`. Enter restores it, `n` makes a new crew instead, and `r` lets you type another repo. With a few backups, they're listed, the one you pushed to last first: Enter restores that one, and its number restores another. If `gh` can't tell (it isn't signed in, or GitHub doesn't answer), you get the new crew's plan, as above.
 - **Your first crew is called `main`.** There's no name question. `cadrei new <name>` makes more later.
 - **Missing tools stop it.** If Claude Code, git or tmux 3.2 or newer is missing, the checks say how to install it, and nothing is changed. A Claude Code that isn't logged in doesn't stop it: the plan gets a login step, and before your orchestrator opens, the setup runs `claude auth login` (Claude Code's own login, which opens your browser) right in your terminal. If you cancel it, your crew is still made: log in with `claude auth login`, then run `cadrei` again.
 - **A repo with its own Claude Code settings** (`.claude/settings.json`, `.claude/settings.local.json` or `.mcp.json` at its top, or anything in a `.claude/skills`, `agents` or `commands` folder anywhere in it, outside what git ignores) isn't in the plan. Trusting it would let those settings run commands for your whole team, so press `a` only if you trust where the repo came from. Outside a git repo, there's no project line at all.
@@ -68,10 +69,13 @@ After Enter you see one `✓` line per step, and your orchestrator opens. There'
   ✓ Created your crew main
   ✓ Added my-app as a project
   ✓ Trusted both in Claude Code
+  ✓ New projects will go in ~/Developer
   ✓ Linked cadrei's instructions into Claude Code
 
   Opening your orchestrator in tmux.
 ```
+
+New projects your team clones go in `~/Developer`, unless you've set a folder already. Change it anytime with `cadrei project dir <folder>`.
 
 The keys come from your own tmux prefix: with `C-a`, the plan says `Ctrl-a s switch, Ctrl-a d leave`.
 
@@ -556,11 +560,11 @@ A fingerprint in `~/.cadrei/config/member-settings.sha256` flags a file changed 
 
 Your crew is a git repository, and your orchestrator commits every change to it. Say "back up my crew to GitHub": your orchestrator shows the repository it will create (`<your GitHub user>/cadrei-<name>`, private) and, on your yes, creates it with `gh` and pushes. From then on it pushes after each commit.
 
-On a new machine, run `cadrei` and press `r` on the first run's plan. Type the repo (`you/cadrei-main`, or a URL), and cadrei shows a plan to copy it into `~/.cadrei/<name>` (named after the repo, so `cadrei-main` becomes `main`; it asks for a name only when that one's taken). After Enter, it checks the copy before anything takes effect:
+On a new machine, run `cadrei`. With `gh` signed in, the first run finds your `cadrei-*` repos and offers to restore one ([Your first run](#your-first-run)). Otherwise, press `r` on the first run's plan and type the repo (`you/cadrei-main`, or a URL). Either way, cadrei shows a plan to copy it into `~/.cadrei/<name>` (named after the repo, so `cadrei-main` becomes `main`; it asks for a name only when that one's taken). After Enter, it checks the copy before anything takes effect:
 
 - A backup that isn't a crew (no `members` folder), or one with a link where cadrei reads its files or runs sessions (members, `teams/`, `.claude/`, the top folder), isn't kept: cadrei would follow the link out of the crew.
 - Files that Claude Code loads into your orchestrator once you trust the crew's folder (`.claude/settings.json` and `settings.local.json`, `.claude/commands`, `agents`, `skills` and `output-styles`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`) are listed, and your orchestrator opens only after your yes (the default is no). Cadrei never writes these itself; on a no, look at them and remove any you didn't put there.
-- The projects are listed with their repositories. Ones already in your projects folder are linked, and the rest are cloned, after your yes (`Press Enter for yes, type another folder, or press n to skip`). Only clones without their own Claude Code settings are trusted; the others are added but not trusted until you ask. On `n` they stay "not on this machine", for your orchestrator to offer later.
+- The projects are listed with their repositories. Ones already in your projects folder are linked, and the rest are cloned, after your yes (`Press Enter for yes, type another folder, or press n to skip`). With no projects folder set yet, it's `~/Developer`. A folder in `~/Documents`, `~/Desktop` or iCloud Drive gets a warning: iCloud may sync those, which can mess with git. Only clones without their own Claude Code settings are trusted; the others are added but not trusted until you ask. On `n` they stay "not on this machine", for your orchestrator to offer later.
 - The restored crew's folder isn't trusted in advance, so Claude Code asks once. Say yes only if it's your backup.
 
 Projects with no repo are listed as missing until you link them. Your orchestrator greets you as on any later run, since the crew isn't new.

@@ -31,6 +31,9 @@ func withTmux(t *testing.T, home string) string {
 	bin := filepath.Join(home, "bin")
 	os.MkdirAll(bin, 0o755)
 	writeStub(t, filepath.Join(bin, "claude"), "#!/bin/sh\n"+stubAnswers+"printf '%s\\n' \"$@\" > \""+home+"/args-$CADREI_MEMBER\"\n"+stubReady+"exec sleep 300\n")
+	// A gh that isn't signed in, so no test reaches the real one (and the
+	// user's GitHub account). ghSignedInWith signs one in.
+	writeStub(t, filepath.Join(bin, "gh"), "#!/bin/sh\nexit 1\n")
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
 	return socket
 }
