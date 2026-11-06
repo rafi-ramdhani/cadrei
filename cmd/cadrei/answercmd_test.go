@@ -588,7 +588,7 @@ func TestAnswerPressesNothingWhenItCant(t *testing.T) {
 		{[]string{"zz9", "yes"}, "cadrei: nothing's waiting under zz9 anymore. Run cadrei answer to see what's waiting now."},
 		{[]string{"ZZ9", "yes"}, "cadrei: nothing's waiting under ZZ9 anymore. Run cadrei answer to see what's waiting now."},
 		{[]string{changed, "1"}, "cadrei: " + changed + " is a yes-or-no prompt. Use cadrei answer " + changed + " yes or cadrei answer " + changed + " no."},
-		{[]string{changed}, "cadrei: use cadrei answer to see who's waiting on you, or cadrei answer <code> yes|no|<n> to answer."},
+		{[]string{"--yes"}, "cadrei: use cadrei answer to see who's waiting on you, cadrei answer <code> for one of them, cadrei answer <code> yes|no|<n> to answer, or cadrei answer --wait to wait for the next."},
 	} {
 		if n, out, errOut := call(append([]string{"answer"}, tc.args...)...); n != 1 || out != "" || flat(errOut) != tc.want {
 			t.Errorf("%v: exit %d, %q %q", tc.args, n, out, errOut)

@@ -580,12 +580,16 @@ func (e *env) startTmux(r *cadreis.Resolved, c runtime.Command, lockPath string,
 		release()
 		return 1
 	}
-	look, windowLook := t.Look(r.Name, "", os.Getenv("NO_COLOR") != "")
+	plain := os.Getenv("NO_COLOR") != ""
+	look, windowLook := t.Look(r.Name, "", plain)
+	// Its bar shows what waits on the user, counted from the start.
+	look = session.Badged(look, plain)
+	waiting := strconv.Itoa(badgeCount(r.Path, t))
 	start := func(c runtime.Command) error {
 		// The window stays when its command ends, until the start check,
 		// so a command that ends at once can say why (as a member's does).
 		err := t.Start(session.StartSpec{Session: name, Window: "orchestrator", Dir: c.Dir, Env: c.Env, Unset: c.Unset, Argv: c.Argv,
-			SessionOptions: append([]session.Option{{Name: "@cadrei_home", Value: r.Path}, {Name: "@cadrei_role", Value: "orchestrator"}, {Name: "@cadrei_version", Value: version}}, look...),
+			SessionOptions: append([]session.Option{{Name: "@cadrei_home", Value: r.Path}, {Name: "@cadrei_role", Value: "orchestrator"}, {Name: "@cadrei_version", Value: version}, {Name: session.WaitingOption, Value: waiting}}, look...),
 			WindowOptions:  append([]session.Option{{Name: "remain-on-exit", Value: "on"}}, windowLook...)})
 		if err != nil {
 			return err

@@ -86,7 +86,7 @@ func init() {
 		{name: "project dir", usage: "[<folder>]", summary: "where new clones go", group: "Projects", run: runProjectDir},
 
 		{name: "up", usage: "<team|team/role> [project|dir] [--fresh] [--model <model>] [--effort <level>]", summary: "start a team or one member (--model and --effort for this start only)", group: "Sessions", run: runUp},
-		{name: "answer", usage: "[<code> yes|no|<n>]", summary: "see who's waiting on you, and answer a member's prompt or question", group: "Sessions", run: runAnswer},
+		{name: "answer", usage: "[<code> [yes|no|<n>] | --wait [--timeout <time>]]", summary: "see who's waiting on you, answer a member's prompt or question, or wait for the next", group: "Sessions", run: runAnswer},
 		{name: "compact", usage: "<team>/<role> [project]", summary: "compact an idle member's conversation", group: "Sessions", run: runCompact},
 
 		{name: "allow", usage: "[list]", summary: "the grants every member gets", group: "Permissions", run: runAllowList},

@@ -49,3 +49,30 @@ func (t Tmux) Look(crew, rest string, plain bool) (sessionOptions, windowOptions
 // StartServer starts the server, which reads the user's tmux.conf, when it
 // isn't running.
 func (t Tmux) StartServer() { t.run("start-server") }
+
+// WaitingOption is the orchestrator session's option that holds how many
+// requests wait on the user ("0" for none), for its status bar's badge.
+const WaitingOption = "@cadrei_waiting"
+
+// Badged is opts, the orchestrator session's look, with a badge first on
+// the right of its status bar while anything waits on the user: "! 2
+// waiting", on the clay block (bold only, plain). tmux's conditional picks
+// it when WaitingOption is set and not 0. Its styles are split by spaces:
+// a comma would end the conditional's first part.
+func Badged(opts []Option, plain bool) []Option {
+	badge := "#{?" + WaitingOption + ",#[bold bg=#A9502F fg=#FAF8F4] ! #{" + WaitingOption + "} waiting #[default] ,}"
+	if plain {
+		badge = "#{?" + WaitingOption + ",#[bold]! #{" + WaitingOption + "} waiting#[nobold] · ,}"
+	}
+	out := make([]Option, len(opts))
+	copy(out, opts)
+	for i := range out {
+		switch out[i].Name {
+		case "status-right":
+			out[i].Value = badge + out[i].Value
+		case "status-right-length":
+			out[i].Value = "80"
+		}
+	}
+	return out
+}

@@ -28,7 +28,7 @@ jobs:
           git config --global user.email "ci@example.com"
           git config --global init.defaultBranch main
       - name: Lint
-        run: shellcheck -x bin/cadre bin/orchestrator-hook.sh install.sh packaging/homebrew/formula.sh tests/smoke.sh tests/bridge.sh tests/skips.sh
+        run: shellcheck -x bin/cadre bin/orchestrator-hook.sh install.sh packaging/homebrew/formula.sh tests/smoke.sh tests/bridge.sh tests/skips.sh tests/live-prompts.sh
       # 0.1.x installs point into a clone of this repository; a pull must
       # leave them quiet and pointing to the new install.
       - name: The bridge for 0.1.x installs

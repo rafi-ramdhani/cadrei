@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/session"
 )
@@ -299,7 +301,7 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer zz9 yes`, "Nothing's waiting under zz9 anymore. Run cadrei answer to see what's waiting now.")
 	for _, mode := range []string{"bypassPermissions", "dontAsk", "plan", ""} {
 		blocked(member, mode, `cadrei answer 7f3 yes`, memberAnswerRefused)
-		blocked("", mode, `cadrei answer 7f3 yes`, "Claude Code can't ask the user in this permission mode. Ask them to type ! cadrei answer 7f3 yes themselves, or to answer in the member's window.")
+		blocked("", mode, `cadrei answer 7f3 yes`, "Claude Code can't ask the user in this permission mode. Ask them to type ! cadrei answer 7f3 yes themselves.")
 	}
 	for _, mode := range []string{"auto", "acceptEdits"} {
 		blocked(member, mode, `cadrei answer 7f3 yes`, memberAnswerRefused)
@@ -310,6 +312,18 @@ func TestTheGuardsRolesAndRules(t *testing.T) {
 	blocked("", "default", `cadrei answer k2m 3`, "k2m has options 1 to 2. Use cadrei answer k2m 1, for example.")
 	blocked(member, "default", `cadrei answer`, memberAnswerRefused)
 	allowed("", `cadrei answer`)
+	// PR E: a code alone, and the wait, answer nothing: no ask. In a
+	// member they're refused as any cadrei answer is, and one that runs
+	// into something else, or a timeout the shell would expand, is no
+	// listing.
+	for _, form := range []string{`cadrei answer 7f3`, `cadrei answer zz9`, `cadrei answer --wait`, `cadrei answer --wait --timeout 30m`, `/opt/homebrew/bin/cadrei answer --wait`} {
+		blocked(member, "default", form, memberAnswerRefused)
+		allowed("", form)
+	}
+	for _, form := range []string{`cadrei answer --wait; tmux ls`, `cadrei answer --wait --timeout $(cat t)`, `cadrei answer 7f3 && echo`, `cadrei answer --wait --timeout`, `cadrei answer --wait 7f3 yes`} {
+		blocked(member, "default", form, memberAnswerRefused)
+		blocked("", "default", form, strictRefused)
+	}
 	for _, form := range []string{`cadrei compact dev/engineer my-app`, `env cadrei compact dev/engineer`, `sh -c 'cadrei compact dev/engineer'`, `/opt/homebrew/bin/cadrei compact dev/engineer`,
 		// Re-review of 0.2.2 (H2): a shell a runner runs. The orchestrator
 		// may compact in any form.
@@ -415,5 +429,56 @@ func TestTheAskShowsOnlyTheRecord(t *testing.T) {
 	// The old code names nothing now.
 	if code, _, errOut := guardAs(t, c, "", "default", "cadrei answer "+eng+" yes"); code != 2 || !strings.Contains(errOut, "Nothing's waiting under "+eng) {
 		t.Errorf("old code: %d %q", code, errOut)
+	}
+}
+
+// PR B's re-review (low): a guard that runs out of time while it has a
+// member's window grown (the runtime would kill it at 10 seconds) puts the
+// window back to its size and refuses, rather than leave it grown until
+// the next answer.
+func TestAGuardOutOfTimePutsTheWindowBack(t *testing.T) {
+	home := sandbox(t)
+	withTmux(t, home)
+	must(t, "init", "work")
+	c := home + "/.cadrei/work"
+	tm, s := session.Default(), session.SessionName("work", "dev")
+	promptMember(t, home, "engineer", "bash-prompt-live.txt")
+	code := request(t, c, "engineer", mkdirRequest)
+	release := make(chan struct{})
+	read, limit, exit := guardScreen, guardLimit, guardExit
+	t.Cleanup(func() { guardScreen, guardLimit, guardExit = read, limit, exit })
+	// The look grows the window, then hangs.
+	guardScreen = func(w *waitingOn) (string, func()) {
+		restore, _ := tm.Grow(w.session, w.window, 300, 100)
+		<-release
+		return "", restore
+	}
+	guardLimit = 300 * time.Millisecond
+	exited := make(chan int, 1)
+	guardExit = func(n int) {
+		exited <- n
+		goruntime.Goexit()
+	}
+	done := make(chan struct{})
+	var errOut string
+	go func() {
+		_, _, errOut = guardAs(t, c, "", "default", "cadrei answer "+code+" yes")
+		close(done)
+	}()
+	select {
+	case n := <-exited:
+		if n != 2 {
+			t.Errorf("exit %d", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the guard didn't stop")
+	}
+	if w, h := tm.WindowSize(s, "engineer"); w != 220 || h != 60 || tm.Grown(s, "engineer") {
+		t.Errorf("left at %dx%d, grown %v", w, h, tm.Grown(s, "engineer"))
+	}
+	close(release)
+	<-done
+	if !strings.Contains(errOut, "Cadrei ran out of time checking the engineer's screen, so I didn't ask.") {
+		t.Errorf("reason: %q", errOut)
 	}
 }

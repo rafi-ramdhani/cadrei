@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
@@ -77,7 +79,7 @@ func runHookGuard(e *env) int {
 	}
 	code, choice := m[2], strings.Join(strings.Fields(m[3]), " ")
 	if !promptModes[call.Mode] {
-		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves, or to answer in the member's window.")
+		return guardRefuses(e, rt.Title()+" can't ask the user in this permission mode. Ask them to type ! cadrei answer "+code+" "+choice+" themselves.")
 	}
 	var w *waitingOn
 	if home := os.Getenv("CADREI_HOME"); home != "" {
@@ -94,8 +96,10 @@ func runHookGuard(e *env) int {
 	// The prompt must be on the member's screen now, as cadrei answer
 	// checks it again after the user's yes: a yes for one it can't find
 	// would come to nothing.
+	end := guardDeadline(e, w)
 	screen, restore := guardScreen(w)
 	_, why := keyOn(screen, w, choice, plain)
+	end()
 	restore()
 	if why != "" {
 		return guardRefuses(e, why)
@@ -218,6 +222,41 @@ func refusalNote(rule, code string) string {
 // window's size back.
 var guardScreen = func(w *waitingOn) (string, func()) { return promptScreen(session.Default(), w) }
 
+// guardLimit is how long the guard's look at a member's screen may take:
+// well under the 10 seconds the runtime gives the hook before it kills it.
+// guardExit ends the guard (variables for tests).
+var (
+	guardLimit = 6 * time.Second
+	guardExit  = os.Exit
+)
+
+// guardDeadline watches the guard's look at w's screen until end is
+// called. A look that runs out of time, or a guard stopped by a signal
+// (the runtime ending the hook), puts a window the look grew back to its
+// size and refuses, rather than leave the member's window grown.
+func guardDeadline(e *env, w *waitingOn) (end func()) {
+	stop := make(chan os.Signal, 1)
+	done := make(chan struct{})
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	timer := time.NewTimer(guardLimit)
+	go func() {
+		select {
+		case <-stop:
+		case <-timer.C:
+		case <-done:
+			return
+		}
+		session.Default().PutBack(w.session, w.window)
+		fmt.Fprintln(e.stderr, "Cadrei ran out of time checking the "+w.role+"'s screen, so I didn't ask. Try again in a moment.")
+		guardExit(2)
+	}()
+	return func() {
+		signal.Stop(stop)
+		timer.Stop()
+		close(done)
+	}
+}
+
 // isThisCadrei reports whether path is this program, or the cadrei the
 // PATH finds.
 func isThisCadrei(path string) bool {
@@ -260,7 +299,8 @@ var promptModes = setOf("default", "acceptEdits", "auto")
 // cadrei by its name or a full path, literal words, nothing around it.
 // The choice is yes, no, or a pick for each of up to four questions (a
 // number, or numbers joined by commas). answerListing is cadrei answer
-// with nothing after it.
+// that answers nothing: with nothing after it, a code alone, or --wait
+// (with a --timeout of letters and digits), as one simple command.
 const picksRule = `[0-9]{1,2}(?:,[0-9]{1,2}){0,5}`
 
 // stopModelRule is 1 and a model, a safeguard stop's answer: a model name
@@ -270,7 +310,7 @@ const stopModelRule = `1[ \t]+[A-Za-z0-9._:/@][A-Za-z0-9._:/@-]{0,199}`
 
 var (
 	strictAnswer  = regexp.MustCompile(`^\s*(cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer[ \t]+([a-z0-9]{3})[ \t]+(yes|no|` + stopModelRule + `|` + picksRule + `(?:[ \t]+` + picksRule + `){0,3})\s*$`)
-	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer\s*$`)
+	answerListing = regexp.MustCompile(`^\s*(?:cadrei|/[A-Za-z0-9_./-]*/cadrei)[ \t]+answer(?:[ \t]+[a-z0-9]{3}|[ \t]+--wait(?:[ \t]+--timeout[ \t]+[0-9][0-9a-z.]{0,15})?)?\s*$`)
 )
 
 // tmuxRule looks for a tmux command that isn't read-only: one that types,

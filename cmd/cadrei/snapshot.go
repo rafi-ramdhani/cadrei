@@ -35,8 +35,9 @@ const seed = "(cadrei opened this chat)"
 var preAllowed = []string{"cadrei ls", "cadrei ls --json", "cadrei ls --all", "cadrei ls --json --all", "cadrei ls --all --json", "cadrei allow", "cadrei allow list",
 	// It only records the user's no to the every-chat hook.
 	"cadrei hook skip",
-	// The listing of who's waiting: it answers nothing.
-	"cadrei answer",
+	// The listing of who's waiting, and the wait for the next one: they
+	// answer nothing.
+	"cadrei answer", "cadrei answer --wait",
 	// What the crew's other machines pushed, at each session start. It
 	// never force-pushes, and it says which files came in changed.
 	"cadrei pull"}
@@ -122,6 +123,9 @@ func snapshotOf(rt runtime.Runtime, r *cadreis.Resolved, o opening, now time.Tim
 			var live, held []string
 			for _, w := range waitingIn([]sessionView{{Team: v.Team, Project: v.Project, Members: []memberView{m}}}) {
 				switch {
+				case w.req.Kind == session.ForSafeguard && m.status.State == session.SafeguardStopped:
+					// Its stop's code, and the two ways on.
+					stopped[len(stopped)-1] += ". " + w.note()
 				case session.Held(w.req):
 					held = append(held, w.note())
 				case m.status.State == session.Waiting:

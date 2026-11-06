@@ -327,8 +327,10 @@ func TestAStartUpScreenGetsACode(t *testing.T) {
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
 	out := flat(startMember(t, home, "trust.txt", 0, ""))
+	// PR C's report (low 3): a team folder cadrei won't trust is said up
+	// front, with its window as the way.
 	if !strings.Contains(out, "It's waiting on a start-up screen and won't get going until you answer it: Is this a project you created or one you trust?"+
-		" See its choices with cadrei answer, or answer it in its window: cadrei attach dev") {
+		" Cadrei won't trust ~/.cadrei/work/teams/dev for you: it's inside ~/.cadrei, where cadrei keeps its own files. If you're sure, answer it in its window: cadrei attach dev") {
 		t.Errorf("up: %q", out)
 	}
 	st := startState(t, c, "work-dev-engineer")
@@ -410,8 +412,12 @@ func TestATrustYesForAProject(t *testing.T) {
 	withTmux(t, home)
 	must(t, "init", "work")
 	c := home + "/.cadrei/work"
-	startMember(t, home, "trust.txt", 0, gitRepo(t, home))
+	up := flat(startMember(t, home, "trust.txt", 0, gitRepo(t, home)))
 	code := startState(t, c, "work-dev-app-engineer").Current().Code
+	// PR E: one cadrei may trust is answered by its code.
+	if !strings.HasSuffix(up, "Is this a project you created or one you trust? See its choices with cadrei answer "+code+".") {
+		t.Errorf("up: %q", up)
+	}
 	ownTerminal(t)
 	if n, out, errOut := call("answer", code, "2"); n != 0 || flat(out) != "+ Answered the start-up screen of the engineer on app: 2. Yes, I trust this folder" {
 		t.Errorf("exit %d: %q %q", n, out, errOut)

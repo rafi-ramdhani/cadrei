@@ -56,12 +56,12 @@ Up to three lines, each on its own line:
 | Condition | Third line |
 |---|---|
 | `Memory` ends with `notice not given yet` | `Heads up: I now keep my memory in the crew, so your private backup carries it to your other machines. It can hold personal things you've told me. Say "keep my memory on this machine" if you'd rather not.` |
-| A member was stopped by safeguards | `Heads up: Claude's safeguards stopped <place>, so it won't answer. Open its window with <command> and pick the model again, or I can restart it fresh. Which do you want?` |
+| A member was stopped by safeguards | `Heads up: Claude's safeguards stopped <place>, so it won't answer on that model. It can start again on its chat with another model (! cadrei answer <code> 1 <model>), or fresh (! cadrei answer <code> 2). Which do you want?` |
 | One-time grants left over | `<n> one-time grants are left from last time. Want me to remove them?` |
 | A project is `not here`, `missing` or on a `drive` | `Heads up: <name> isn't on this machine. Want me to clone it?` (`missing`: `<name>'s folder is gone. Want me to find it or clone it again?`; `drive`: `<name> is on a drive that isn't connected.`) |
 | Opened from a git repo that isn't a project | `You're in <path>, which isn't a project yet. Want me to add it?` |
-| A member is waiting on you, with a code | A prompt: `<Place> wants to <what it wants>. Want to answer it here?` A question: `<Place> asks: <question> To answer, type ! cadrei answer <code> and the number: <options>.` One only its window can answer: `<Place> is waiting on you in its window: <command>.` |
-| A member is waiting on you, with no code | `<Place> is waiting on you for an approval. Want to open its window?` |
+| A member is waiting on you, with a code | A prompt: `<Place> wants to <what it wants>. Want to answer it here?` A question: `<Place> asks: <question> To answer, type ! cadrei answer <code> and the number: <options>.` One only its window can answer (cadrei says so, and why): `<Place> is waiting on you, and only its window can answer it (<cadrei's reason>): <command>.` |
+| A member is waiting on you, with no code | `<Place> is waiting on you, and cadrei couldn't read it, so only its window can answer it: <command>.` |
 | A team is running (the team line already says who) | `What's next?` |
 | Otherwise | `Your team is ready. What's next?` |
 
@@ -69,5 +69,6 @@ Up to three lines, each on its own line:
 - `<what it wants>`, `<question>`, `<code>` and `<options>` are word for word from the snapshot's `Waiting on the user` entry (`The engineer on my-app (7f3) wants to run: gh pr merge 42 --squash`). On a yes to "Want to answer it here?", run `cadrei answer <code> yes` on its own, as the skill's "Waiting on the user" says: Claude Code then asks the user.
 - The team line in the greeting is the reply's team line: don't add it again at the end. One team line per reply.
 - If the chat joins these lines into one paragraph, put a blank line between them.
-- When the greeting has a safeguard stop, the skill's "Safeguard stops" flow follows.
+- When the greeting has a safeguard stop, the skill's "Safeguard stops" flow follows. Its `<code>` is word for word from the snapshot's `Stopped by safeguards` entry.
+- When a member is running, start a `cadrei answer --wait` in the background right after the greeting, as the skill's "Waiting on the user" says.
 - Anything else from session start (more grants, more missing projects) comes up after the user's first reply, in the same order.

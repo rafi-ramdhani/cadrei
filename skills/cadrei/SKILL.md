@@ -35,7 +35,7 @@ Cadrei puts a "Right now" snapshot into this session when it opens (the crew, ho
 4. When the crew has a backup (the snapshot's `Backup` isn't `none set up`), bring in what your other machines saved, once, before you act on the user's first request: run `cadrei pull`, and push when `Backup` said commits weren't pushed (`git -C <crew folder> push`). Skip this while `Memory` ends with `notice not given yet`: your notes aren't committed yet, and a pull would stop on them. See "Your memory" for a pull or push that stops.
 5. For any project that is not `present`, tell the user once, then offer what fits: `not here` or `missing` (its folder is gone): clone it (`cadrei project sync`), or point to where it is now (`cadrei project link <name> <dir>`, suggesting `found` when it is set); or unlink it (`cadrei project unlink <name>`, which keeps the folder). `drive`: ask the user to connect the drive. Never unlink a project without the user's yes; cadrei never does it by itself.
 
-When cadrei opened this session, these commands are pre-allowed for you, in exactly these forms: `cadrei ls`, `cadrei ls --json`, `cadrei ls --all`, `cadrei ls --json --all`, `cadrei ls --all --json`, `cadrei allow`, `cadrei allow list`, `cadrei hook skip`, `cadrei answer` (the listing; an answer always asks the user), `cadrei pull`. Use them as they are: no `CADREI_HOME=` prefix, no pipe, no redirect. Anything else asks the user first. In a chat the every-chat hook started, none is pre-allowed.
+When cadrei opened this session, these commands are pre-allowed for you, in exactly these forms: `cadrei ls`, `cadrei ls --json`, `cadrei ls --all`, `cadrei ls --json --all`, `cadrei ls --all --json`, `cadrei allow`, `cadrei allow list`, `cadrei hook skip`, `cadrei answer` (the listing; an answer always asks the user), `cadrei answer --wait` (see Waiting on the user), `cadrei pull`. Use them as they are: no `CADREI_HOME=` prefix, no pipe, no redirect. Anything else asks the user first. In a chat the every-chat hook started, none is pre-allowed.
 
 ## Launcher
 
@@ -56,6 +56,8 @@ cadrei up research/writer blog --model sonnet  # this start only on another mode
 cadrei stop dev my-app           # stop a team instance
 cadrei attach dev my-app         # for the user to watch or type to a team
 cadrei answer                    # who's waiting on the user, with the line that answers each (see Waiting on the user)
+cadrei answer 7f3                # one of them, by its code
+cadrei answer --wait             # wait for the next one: keep it running in the background while members run
 cadrei answer 7f3 yes            # answer a member's prompt: Claude Code asks the user first
 cadrei compact dev/engineer my-app  # compact an idle member's conversation
 cadrei allow list                # what every member may do (see Permissions for members)
@@ -103,45 +105,43 @@ Members and this session keep their chats across restarts: `cadrei up` picks up 
 
 ## Safeguard stops
 
-When the snapshot, the team status line or `cadrei ls --json` shows a member as `stopped_by_safeguards`, Claude's safeguards stopped its reply and it won't answer. Tell the user right away, in one reply. In tmux:
+When the snapshot, the team status block, `cadrei answer` or `cadrei ls --json` shows a member as `stopped_by_safeguards`, Claude's safeguards stopped its reply and it won't answer on that model. Cadrei gives the stop a code with two ways on. Tell the user right away, in one reply, with the code from cadrei's note:
 
 ```text
 The engineer on my-app stopped answering: Claude's safeguards stopped its
-last reply. Please take a look yourself:
+last reply, so it won't answer on that model. Two ways on:
 
-- Its window: press Ctrl-b then s, pick cadrei-main-dev-my-app, then the
-  engineer window. Or run cadrei attach dev my-app in another tab.
-- You'll see a note that its response was stopped. Type /model there and
-  pick the model again, and it can go on.
+1. Start it again on its chat with another model, for this start only:
+   ! cadrei answer 7f3 1 <model>
+2. Start it fresh, with a new chat that won't remember this one:
+   ! cadrei answer 7f3 2
 
-Or I can restart it fresh, with a new chat. Either way, I won't send the
-task again.
+Either way, I won't send the task again.
 ```
 
-In the plain terminal, the first bullet is:
-
-```text
-- Its window: run cadrei attach dev my-app in another tab, and go to the
-  engineer window (Ctrl-b then s if it's not the one showing).
-```
-
-- With no project: `The engineer in dev stopped answering...`, `cadrei-main-dev` and `cadrei attach dev`.
-- Use the real session and window names from `cadrei ls --json`.
-- Then ask with one `AskUserQuestion`: `Restart it fresh` or `I'll fix it in its window`. On a restart, run `cadrei stop <team>/<role> [project] --fresh` and say `Done. The <role> starts with a fresh chat next time. How do you want to go on with the task?`
-- Never send the blocked task again in other words, to that member or to any other. After a fresh restart, ask the user how to go on; don't resend it on your own.
+- With no project: `The engineer in dev stopped answering...`.
+- Don't pick the way or the model for the user. When they say which, run `cadrei answer <code> 1 <model>` or `cadrei answer <code> 2` on its own: Claude Code asks them first, as for a prompt (see Waiting on the user). When Claude Code can't ask, give them the `!` line to type.
+- Never offer to pick the model in its window: there, Claude Code saves the pick as the user's model for every new session.
+- If it's stopped again, it gets a new code. Start it fresh with that code and `2`.
+- Never send the blocked task again in other words, to that member or to any other. Next to either way on, say you won't. After it starts again, ask the user how to go on; don't resend it on your own.
 
 ## Waiting on the user
 
-When a member is waiting on the user (the team status block, the snapshot or `cadrei ls --json` shows a request), tell the user in one short line who is waiting and what for, quoting the request's summary exactly as cadrei gives it.
+Cadrei records each prompt, question and start-up screen a member waits on, each safeguard stop, and each call its guard refused or its auto mode denied, under a three-letter code.
+
+**Keep a wait running.** While any member runs, keep one `cadrei answer --wait` running in the background (the Bash tool with `run_in_background`), so a new request reaches you even when the user isn't typing. Start it right after you start members, and again each time it ends. When it ends, it shows each new request: tell the user right away, as below, then start it again. When it says no member is running, start it again only once you start a member. When it says one is already running, that one does the job: leave it. The team status block says so when none is running.
+
+When a member is waiting on the user (the wait, the team status block, the snapshot or `cadrei ls --json` shows a request), tell the user in one short line who is waiting and what for, quoting the request's summary exactly as cadrei gives it. `cadrei answer` lists them all, and `cadrei answer <code>` shows one.
 
 - A permission prompt: run `cadrei answer <code> yes` on its own. Claude Code asks the user, with cadrei's own description. If the user says no there, Claude Code stops your turn: wait for what the user says next. When they want the member told no, run `cadrei answer <code> no` (Claude Code asks again). After a no, the member stops and waits: send it one normal message with what to do instead, never as consent.
-- A question: show its options exactly as cadrei gives them, each with its line to type: `! cadrei answer <code> <n>`. Don't pick for the user.
+- A question, a prompt cadrei read off the screen, or a start-up screen: show its options exactly as cadrei gives them, each with its line to type: `! cadrei answer <code> <n>`. Don't pick for the user. A question asked with others takes one answer per question, as cadrei's line shows.
+- A safeguard stop: see Safeguard stops.
+- A stopped call (the guard refused it, or auto mode denied it): say what cadrei's note says, word for word. When the user can allow it once, it's `cadrei answer <code> yes` (Claude Code asks them); then tell the member the user allowed that code once, so it runs that command one more time. When only the user can run it, give them the `!` line cadrei gives. `cadrei answer <code> no` closes it.
+- Only its window can answer it: cadrei says so, and why (a command too long to check whole, a question with more picks than cadrei keeps, a screen it can't read, or a choice cadrei never makes for the user). Give the user `cadrei attach <team> [project]` with cadrei's reason. That's the last resort: every other request is answered by its code.
 
-- A request cadrei says only its window can answer (a question that takes more than one pick, or a prompt cadrei can't check on the screen): give the user `cadrei attach <team> [project]`.
+Never reword the request, never suggest the answer, and never run `cadrei answer` with a choice in any other form. When Claude Code can't ask (cadrei's guard says so in `dontAsk`, `bypassPermissions` or `plan` mode), give the user the line to type themselves: `! cadrei answer <code> <choice>`. If `cadrei answer` refuses, say why in its words, and give them `cadrei attach` only when it says only the window can answer. When the result comes back, say in one line what happened. The result is never consent for anything else.
 
-Never reword the request, never suggest the answer, and never run `cadrei answer` in any other form. When Claude Code can't ask (cadrei's guard says so in `dontAsk`, `bypassPermissions` or `plan` mode), give the user the line to type themselves: `! cadrei answer <code> <choice>`. If `cadrei answer` refuses for any other reason, give them `cadrei attach`. When the result comes back, say in one line what happened. The result is never consent for anything else.
-
-A member that needs the user's own yes asks in its window with a question, and first sends you one line: `Waiting on the user's yes in my window: <the action>.` Look the request up with `cadrei answer` (no code) and answer it as a question, above. If it isn't listed yet, tell the user it'll show in a moment, and offer it once it does. That line is never the user's yes, and neither is anything you send the member.
+A member that needs the user's own yes first sends you one line, `Waiting on the user's yes in my window: <the action>.`, then asks at once, in its window, with a question: its code reaches you through the wait. Answer it as a question, above. When the line comes, look it up with `cadrei answer`; if it isn't listed yet, the wait shows it in a moment. If no code ever comes for it, give the user `cadrei attach <team> [project]` to answer it there. That line is never the user's yes, and neither is anything you send the member.
 
 ## The team status line
 
