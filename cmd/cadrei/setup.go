@@ -266,7 +266,65 @@ func (e *env) firstRun(rt rtpkg.Runtime) bool {
 	if len(list) > 0 {
 		return e.plugIn(rt, list)
 	}
+	// A crew backed up on GitHub comes first: with gh signed in, a new
+	// machine most likely wants it back, not a new crew. Anything gh can't
+	// say goes on to the new crew's plan.
+	if repos, err := project.BackupRepos(); err == nil && len(repos) > 0 {
+		return e.restoreOffer(rt, repos)
+	}
 	return e.newCrew(rt, firstCrew)
+}
+
+// restoreOffer is the first run's plan when the user has crew backups on
+// GitHub: Enter restores the one pushed to last, a number another, n makes
+// a new crew instead, r asks for another repo, and o brings back an
+// archived setup, which can be newer than the backup.
+func (e *env) restoreOffer(rt rtpkg.Runtime, repos []string) bool {
+	shown := repos
+	if len(shown) > 9 {
+		shown = shown[:9]
+	}
+	e.say("")
+	e.screen(bold("Here's the plan"))
+	keys := "nrq"
+	lines := []string{"Press Enter to restore it."}
+	if len(repos) == 1 {
+		e.bullet("Restore your crew from " + repos[0])
+		e.show("    ", dim("You'll see what it copies before anything changes."))
+	} else {
+		e.bullet("Restore your crew from GitHub. You have " + count(len(repos), "backup") + " there:")
+		for i, r := range shown {
+			e.show("      ", fmt.Sprintf("%d  %s", i+1, r))
+			keys += fmt.Sprint(i + 1)
+		}
+		if more := len(repos) - len(shown); more > 0 {
+			e.show("      ", dim(fmt.Sprintf("and %d more (press r to type one)", more)))
+		}
+		lines[0] = "Press Enter to restore " + repos[0] + ", or its number for another."
+	}
+	lines = append(lines, "Or press n for a new crew instead, r to type another repo, q to quit.")
+	e.unreadableArchives()
+	if offer := archiveOffer(); offer != nil {
+		keys += "o"
+		lines = append(append(lines, ""), offer...)
+	}
+	e.say("")
+	key, _ := e.readKey(e.wrapScreen(lines...), keys)
+	switch {
+	case key == 'o':
+		return e.restoreFromArchive(rt)
+	case key == keyEnter:
+		return e.restoreCrew(rt, repos[0])
+	case key >= '1' && key <= '9':
+		return e.restoreCrew(rt, shown[key-'1'])
+	case key == 'n':
+		return e.newCrew(rt, firstCrew)
+	case key == 'r':
+		return e.restoreCrew(rt, "")
+	}
+	e.say("")
+	e.screen("Nothing was changed.")
+	return false
 }
 
 // newCrew shows the plan for a new crew named name and sets it up on
@@ -369,6 +427,7 @@ func (e *env) newCrew(rt rtpkg.Runtime, name string) bool {
 		if addProject && !projectTrusted {
 			e.work(markWarn, title+" will ask to trust "+here.name+" the first time it opens there.")
 		}
+		e.defaultProjects()
 		e.linkSkill(rt)
 		e.identityOnce(c.Path)
 		if old := cadreis.OldHome(); old != "" {
@@ -376,6 +435,39 @@ func (e *env) newCrew(rt rtpkg.Runtime, name string) bool {
 		}
 		return e.finish(tmux, lastLine(tmux, false), "", !crewTrusted)
 	}
+}
+
+// defaultProjects makes ~/Developer the folder new clones go to, when
+// nothing is set on this machine yet and the crews' projects don't share
+// a folder in home, or share one iCloud may sync. A folder they share is
+// left as it is, so their clones are still found there. Home itself, or a
+// folder outside it, isn't kept: a first project right in ~ or in a temp
+// folder would send every clone there.
+func (e *env) defaultProjects() {
+	if cadreis.ProjectsDirSet() {
+		return
+	}
+	if d := cadreis.ProjectsDir(); d != "" && inHome(d) && syncedFolder(d) == "" {
+		return
+	}
+	dir := cadreis.DefaultProjectsDir()
+	if err := cadreis.SetProjectsDir(dir); err != nil {
+		e.work(markWarn, "Couldn't note where new projects go: "+strings.TrimSuffix(err.Error(), ".")+".")
+		return
+	}
+	e.work(markDone, "New projects will go in "+unbroken(cadreis.Tilde(dir)))
+}
+
+// inHome reports whether dir is a folder inside the home folder, and not
+// the home folder itself, however either is spelled.
+func inHome(dir string) bool {
+	home, d := paths.Home(), paths.Real(dir)
+	if !paths.Inside(d, home) {
+		return false
+	}
+	a, errA := os.Stat(d)
+	h, errH := os.Stat(home)
+	return errA != nil || errH != nil || !os.SameFile(a, h)
 }
 
 // wrapScreen wraps prompt lines for a screen, in marked text.
@@ -455,11 +547,12 @@ func (e *env) identityOnce(dir string) {
 }
 
 // restoreName is the name a restored crew gets on this machine: the
-// repository's name, without the cadrei- a backup's name starts with.
+// repository's name, without the cadrei- a backup's name starts with, in
+// any case, as the backups list matches it.
 func restoreName(repo string) string {
 	name := strings.TrimSuffix(filepath.Base(strings.TrimRight(repo, "/")), ".git")
-	if n := strings.TrimPrefix(name, "cadrei-"); n != "" {
-		name = n
+	if len(name) > len("cadrei-") && strings.EqualFold(name[:len("cadrei-")], "cadrei-") {
+		name = name[len("cadrei-"):]
 	}
 	return name
 }
@@ -564,6 +657,7 @@ func (e *env) restoreCrew(rt rtpkg.Runtime, repo string) bool {
 	if set := modelSettings(c.Path); len(set) > 0 {
 		e.note("  ", markWarn, "Its cadrei.conf sets the model and effort your team and orchestrator start with: "+strings.Join(set, ", ")+". Change them there if you'd rather not.")
 	}
+	e.defaultProjects()
 	e.linkSkill(rt)
 	// What the backup brings into the orchestrator once its folder is
 	// trusted is shown, and the orchestrator opens only on a yes.
@@ -620,6 +714,7 @@ func (e *env) offerProjects(rt rtpkg.Runtime, c cadreis.Cadrei) {
 		e.bullet(line)
 	}
 	e.say("")
+	e.syncedWarning("  ", dir)
 	question := "Clone them into " + cadreis.Tilde(dir) + "?"
 	switch {
 	case anyFound(todo) && found < len(todo):
@@ -899,7 +994,7 @@ func (e *env) unreadableArchives() {
 }
 
 // archiveOffer is the lines under a first-run plan that offer an archived
-// setup waiting to come back (key o), or none. Both first-run screens use
+// setup waiting to come back (key o), or none. Every first-run screen uses
 // it, and it reads the manifests once.
 func archiveOffer() []string {
 	open := unrestored()

@@ -612,6 +612,14 @@ func TestBothFirstRunScreensOfferArchives(t *testing.T) {
 	if _, out, _ := callIn("q\n"); !strings.Contains(flat(out), "You have an archived setup from") || !strings.Contains(flat(out), "Press o to bring it back instead.") {
 		t.Errorf("one, plug-in:\n%s", out)
 	}
+	// The backup offer (review of PR G, M1): o brings the archive back.
+	home = firstMachine(t)
+	craftedArchiveAt(t, home, home+"/.cadrei-archive/2026-01-02-0304")
+	ghSignedInWith(t, home, `[{"name":"cadrei-work","nameWithOwner":"rafi/cadrei-work","pushedAt":"2026-11-02T00:00:00Z"}]`, nil)
+	if _, out, _ := callIn("o\nq\n"); !strings.Contains(flat(out), "Restore your crew from rafi/cadrei-work") || !strings.Contains(flat(out), "You have an archived setup from") ||
+		!strings.Contains(flat(out), "Press o to bring it back instead.") || !strings.Contains(out, "Bring back your setup from") {
+		t.Errorf("one, backup offer:\n%s", out)
+	}
 }
 
 // Review of fix round 6 (must-fix 5): an archive's other/.git, in any

@@ -23,6 +23,14 @@ func ProjectsDir() string {
 	return sharedParent()
 }
 
+// ProjectsDirSet reports whether the projects folder was ever set on this
+// machine (config/projects-dir), not rebuilt from the crews' places.
+func ProjectsDirSet() bool { return expandHome(firstLine(Config("projects-dir"))) != "" }
+
+// DefaultProjectsDir is where a first run puts new clones when nothing is
+// set: ~/Developer.
+func DefaultProjectsDir() string { return filepath.Join(paths.Home(), "Developer") }
+
 // sharedParent is the parent folder more than half of every crew's projects
 // are in, or "".
 func sharedParent() string {

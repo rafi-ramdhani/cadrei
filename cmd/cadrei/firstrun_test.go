@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"os/exec"
@@ -696,6 +697,251 @@ func TestFirstRunWithoutATerminal(t *testing.T) {
 	}
 	if _, err := os.Stat(home + "/.cadrei"); err == nil {
 		t.Error("something was made")
+	}
+}
+
+// 0.2.3 item 1: with gh signed in and a crew backup on GitHub, the first
+// run's plan is to restore it: Enter restores it, the rest as r does.
+func TestFirstRunOffersTheBackup(t *testing.T) {
+	home := firstMachine(t)
+	claudeConfig(t, home)
+	backup := backupOf(t, "work", bareRepo(t, "app"))
+	calls := ghSignedInWith(t, home, `[{"name":"site","nameWithOwner":"rafi/site","pushedAt":"2026-11-01T00:00:00Z"},`+
+		`{"name":"cadrei-work","nameWithOwner":"rafi/cadrei-work","pushedAt":"2026-11-02T00:00:00Z"}]`, map[string]string{"rafi/cadrei-work": backup})
+	code, out, errOut := callIn("\np\nn\n")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	first, _, _ := strings.Cut(out, "Restore your crew from GitHub")
+	plan := flat(first)
+	for _, want := range []string{"Here's the plan - Restore your crew from rafi/cadrei-work", "Press Enter to restore it.", "Or press n for a new crew instead, r to type another repo, q to quit."} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("no %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(plan, "Create your crew") || strings.Contains(plan, "rafi/site") {
+		t.Errorf("the new crew's plan, or a repo that's no backup:\n%s", out)
+	}
+	if !strings.Contains(flat(out), "+ Restored your crew work into ~/.cadrei/work") || cadreis.Default() != "work" {
+		t.Errorf("not restored:\n%s", out)
+	}
+	if got := readFile(t, calls); !strings.Contains(got, "repo list --limit 200 --json name,nameWithOwner,pushedAt\n") || !strings.Contains(got, "repo clone rafi/cadrei-work ") {
+		t.Errorf("gh calls:\n%s", got)
+	}
+}
+
+// With several backups, the plan lists them, the one pushed to last
+// first: a number restores another, and n makes a new crew instead.
+func TestFirstRunListsEveryBackup(t *testing.T) {
+	list := `[{"name":"cadrei-home","nameWithOwner":"rafi/cadrei-home","pushedAt":"2026-10-01T00:00:00Z"},` +
+		`{"name":"cadrei-work","nameWithOwner":"rafi/cadrei-work","pushedAt":"2026-11-02T00:00:00Z"},` +
+		`{"name":"cadrei-x","nameWithOwner":"rafi/cadrei-x\u001b[31m","pushedAt":"2026-11-03T00:00:00Z"}]`
+	home := firstMachine(t)
+	claudeConfig(t, home)
+	backup := backupOf(t, "home", bareRepo(t, "app"))
+	ghSignedInWith(t, home, list, map[string]string{"rafi/cadrei-home": backup})
+	code, out, errOut := callIn("2\np\nn\n")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	plan := flat(out)
+	for _, want := range []string{"Restore your crew from GitHub. You have 2 backups there: 1 rafi/cadrei-work 2 rafi/cadrei-home",
+		"Press Enter to restore rafi/cadrei-work, or its number for another.", "+ Restored your crew home into ~/.cadrei/home"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("no %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "\x1b[31m") {
+		t.Error("a name gh gave with a terminal's escape")
+	}
+	// n: the new crew's plan, as with no backup.
+	home = firstMachine(t)
+	ghSignedInWith(t, home, list, nil)
+	if code, out, _ := callIn("n\nq\n"); code != 1 || !strings.Contains(flat(out), "Here's the plan - Create your crew main") {
+		t.Errorf("n: %d\n%s", code, out)
+	}
+	if list, _ := cadreis.List(); len(list) != 0 {
+		t.Error("q after n changed something")
+	}
+}
+
+// Review of PR G: on the backup offer, r restores another repo, typed,
+// and q changes nothing.
+func TestTheBackupOffersOtherKeys(t *testing.T) {
+	list := `[{"name":"cadrei-work","nameWithOwner":"rafi/cadrei-work","pushedAt":"2026-11-02T00:00:00Z"}]`
+	home := firstMachine(t)
+	claudeConfig(t, home)
+	backup := backupOf(t, "home", bareRepo(t, "app"))
+	calls := ghSignedInWith(t, home, list, nil)
+	if code, out, errOut := callIn("r\n" + backup + "\np\nn\n"); code != 0 || !strings.Contains(flat(out), "+ Restored your crew home into ~/.cadrei/home") {
+		t.Errorf("r: exit %d\n%s%s", code, out, errOut)
+	}
+	if strings.Contains(readFile(t, calls), "repo clone") {
+		t.Errorf("r cloned from GitHub:\n%s", readFile(t, calls))
+	}
+	home = firstMachine(t)
+	ghSignedInWith(t, home, list, nil)
+	if code, out, _ := callIn("q\n"); code != 1 || !strings.Contains(out, "Nothing was changed.") {
+		t.Errorf("q: %d\n%s", code, out)
+	}
+	if list, _ := cadreis.List(); len(list) != 0 {
+		t.Error("q changed something")
+	}
+}
+
+// Review of PR G: past 9 backups, the plan shows 9 and says how many more.
+// 0 isn't a pick, 9 opens the 9th's plan, and q there changes nothing.
+func TestTheBackupOfferPastNine(t *testing.T) {
+	var repos []string
+	for i := 1; i <= 12; i++ {
+		repos = append(repos, fmt.Sprintf(`{"name":"cadrei-c%02d","nameWithOwner":"rafi/cadrei-c%02d","pushedAt":"2026-10-%02dT00:00:00Z"}`, i, i, 30-i))
+	}
+	home := firstMachine(t)
+	ghSignedInWith(t, home, "["+strings.Join(repos, ",")+"]", nil)
+	code, out, errOut := callIn("0\n9\nq\n")
+	plan := flat(out + errOut)
+	for _, want := range []string{"You have 12 backups there: 1 rafi/cadrei-c01", "9 rafi/cadrei-c09 and 3 more (press r to type one)", "Copy rafi/cadrei-c09 into ~/.cadrei/c09"} {
+		if !strings.Contains(plan, want) {
+			t.Errorf("no %q in:\n%s", want, plan)
+		}
+	}
+	if strings.Contains(plan, "rafi/cadrei-c10") || code != 1 {
+		t.Errorf("exit %d, a 10th shown:\n%s", code, plan)
+	}
+	if list, _ := cadreis.List(); len(list) != 0 {
+		t.Error("q changed something")
+	}
+}
+
+// Review of PR G, L5: a backup's cadrei- comes off in any case.
+func TestRestoreName(t *testing.T) {
+	for repo, want := range map[string]string{"rafi/cadrei-work": "work", "rafi/Cadrei-Work": "Work", "git@github.com:rafi/CADREI-home.git": "home", "rafi/cadrei-": "cadrei-", "rafi/notes": "notes"} {
+		if got := restoreName(repo); got != want {
+			t.Errorf("%s: %q, want %q", repo, got, want)
+		}
+	}
+}
+
+// Review of PR G, M2: a restore from the plug-in screen, on a machine
+// whose crews' projects share ~/code and with no projects folder set,
+// links the clone that's there, and new clones still go to ~/code. When
+// the folder they share is one iCloud may sync, ~/Developer is set.
+func TestAPlugInRestoreKeepsTheCrewsFolder(t *testing.T) {
+	for _, tc := range []struct{ shared, want string }{{"code", "~/code"}, {"Documents/code", "~/Developer"}} {
+		t.Run(tc.shared, func(t *testing.T) {
+			home := firstMachine(t)
+			onAMac(t, true)
+			claudeConfig(t, home)
+			app := bareRepo(t, "app")
+			must(t, "init", "life")
+			exec.Command("git", "clone", "-q", app, home+"/"+tc.shared+"/a").Run()
+			os.MkdirAll(home+"/"+tc.shared+"/b", 0o755)
+			life, _ := cadreis.Find("life")
+			cadreis.SetPlace(life, "a", home+"/"+tc.shared+"/a")
+			cadreis.SetPlace(life, "b", home+"/"+tc.shared+"/b")
+			os.RemoveAll(home + "/.cadrei/config")
+			_, out, errOut := callIn("r\n" + backupOf(t, "work", app) + "\np\n\n")
+			all := flat(out + errOut)
+			if got := cadreis.Tilde(cadreis.ProjectsDir()); got != tc.want {
+				t.Errorf("projects folder %s:\n%s", got, all)
+			}
+			if tc.want == "~/code" {
+				if !strings.Contains(all, "found in ~/code/a") || strings.Contains(all, "New projects will go in") {
+					t.Errorf("not linked:\n%s", all)
+				}
+				if _, err := os.Stat(home + "/Developer/app"); err == nil {
+					t.Error("app was cloned again")
+				}
+			} else if !strings.Contains(all, "+ New projects will go in ~/Developer") {
+				t.Errorf("no ~/Developer:\n%s", all)
+			}
+		})
+	}
+}
+
+// A gh that isn't signed in, fails, or has no backup gives today's plan.
+func TestFirstRunWithoutABackupMakesACrew(t *testing.T) {
+	for name, stub := range map[string]string{
+		"not signed in": "#!/bin/sh\nexit 1\n",
+		"list fails":    "#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n",
+		"bad json":      "#!/bin/sh\necho 'not json'\n",
+		"no backup":     "#!/bin/sh\necho '[{\"name\":\"site\",\"nameWithOwner\":\"rafi/site\"}]'\n",
+	} {
+		home := firstMachine(t)
+		writeStub(t, home+"/bin/gh", stub)
+		if code, out, _ := callIn("q\n"); code != 1 || !strings.Contains(flat(out), "Here's the plan - Create your crew main") || strings.Contains(out, "Restore your crew from") {
+			t.Errorf("%s: %d\n%s", name, code, out)
+		}
+	}
+}
+
+// 0.2.3 item 3: a first run and a restore make ~/Developer where new
+// clones go, when nothing is set yet. One already set stays.
+func TestFirstRunSetsTheProjectsFolder(t *testing.T) {
+	home := firstMachine(t)
+	claudeConfig(t, home)
+	if code, out, errOut := callIn("p\n"); code != 0 || !strings.Contains(out, "+ New projects will go in ~/Developer\n") {
+		t.Fatalf("exit %d\n%s%s", code, out, errOut)
+	}
+	if got := strings.TrimSpace(readFile(t, home+"/.cadrei/config/projects-dir")); got != "~/Developer" {
+		t.Errorf("projects-dir %q", got)
+	}
+	// A restore, with no projects to clone.
+	home = firstMachine(t)
+	backup := backupOf(t, "work", bareRepo(t, "app"), func(src string) { os.WriteFile(src+"/projects.yaml", []byte("notes:\n  team: dev\n"), 0o644) })
+	if code, out, errOut := callIn("r\n" + backup + "\np\n"); code != 0 || !strings.Contains(out, "+ New projects will go in ~/Developer\n") {
+		t.Fatalf("restore: exit %d\n%s%s", code, out, errOut)
+	}
+	if got := strings.TrimSpace(readFile(t, home+"/.cadrei/config/projects-dir")); got != "~/Developer" {
+		t.Errorf("restore: projects-dir %q", got)
+	}
+	// One that's set stays.
+	home = firstMachine(t)
+	cadreis.SetProjectsDir(home + "/code")
+	if code, out, _ := callIn("p\n"); code != 0 || strings.Contains(out, "New projects will go in") {
+		t.Errorf("set already: %d\n%s", code, out)
+	}
+	if got := strings.TrimSpace(readFile(t, home+"/.cadrei/config/projects-dir")); got != "~/code" {
+		t.Errorf("set already: projects-dir %q", got)
+	}
+}
+
+// Review of PR G, round 2 (R2-L1): a first project right in home, or
+// outside it, doesn't make that folder where new clones go: ~/Developer
+// does. One in ~/code keeps ~/code.
+func TestAFirstProjectsFolderMustBeInHome(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{{"home", "~/Developer"}, {"outside", "~/Developer"}, {"code", "~/code"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := firstMachine(t)
+			claudeConfig(t, home)
+			dir := map[string]string{"home": home + "/my-app", "outside": t.TempDir() + "/my-app", "code": home + "/code/my-app"}[tc.name]
+			os.MkdirAll(dir, 0o755)
+			exec.Command("git", "-C", dir, "init", "-q").Run()
+			t.Chdir(dir)
+			code, out, errOut := callIn("p\n")
+			if code != 0 || !strings.Contains(out, "+ Added my-app as a project") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			if got := cadreis.Tilde(cadreis.ProjectsDir()); got != tc.want {
+				t.Errorf("projects folder %s:\n%s", got, out)
+			}
+			if line := strings.Contains(out, "+ New projects will go in ~/Developer\n"); line != (tc.want == "~/Developer") {
+				t.Errorf("the ~/Developer line: %v\n%s", line, out)
+			}
+		})
+	}
+}
+
+// A restore warns when its projects would go in a folder iCloud may sync.
+func TestARestoreWarnsOfASyncedProjectsFolder(t *testing.T) {
+	home := firstMachine(t)
+	onAMac(t, true)
+	claudeConfig(t, home)
+	cadreis.SetProjectsDir(home + "/Documents/code")
+	backup := backupOf(t, "work", bareRepo(t, "app"))
+	_, out, errOut := callIn("r\n" + backup + "\np\nn\n")
+	if want := "! ~/Documents/code is in ~/Documents, which iCloud may sync. Syncing can mess with git and slow your team down, so a folder like ~/Developer is safer: cadrei project dir ~/Developer"; !strings.Contains(flat(out+errOut), want) {
+		t.Errorf("no warning in:\n%s%s", out, errOut)
 	}
 }
 

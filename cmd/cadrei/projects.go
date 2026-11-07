@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
@@ -62,7 +63,41 @@ func (e *env) setProjectsDir(answer string, protected []string) (string, bool) {
 		return "", false
 	}
 	e.note("", markDone, "New clones go to "+unbroken(cadreis.Tilde(paths.Real(dir))))
+	e.syncedWarning("", dir)
 	return paths.Real(dir), true
+}
+
+// synced are the folders macOS can sync to iCloud, by what they're called.
+var synced = []struct{ path, name string }{
+	{"Documents", "~/Documents"}, {"Desktop", "~/Desktop"}, {"Library/Mobile Documents", "iCloud Drive"},
+}
+
+// iCloudSyncs is whether this is a Mac, where iCloud can sync the synced
+// folders. It's a variable so tests can be either.
+var iCloudSyncs = goruntime.GOOS == "darwin"
+
+// syncedFolder names the folder iCloud may sync that dir is in, or "",
+// however it's spelled (the disk is case-insensitive on macOS). Off a
+// Mac, there's none.
+func syncedFolder(dir string) string {
+	if !iCloudSyncs {
+		return ""
+	}
+	home := paths.Home()
+	for _, s := range synced {
+		if paths.Inside(paths.Real(dir), paths.Real(filepath.Join(home, s.path))) {
+			return s.name
+		}
+	}
+	return ""
+}
+
+// syncedWarning warns, at indent, when projects would go in a folder iCloud
+// may sync.
+func (e *env) syncedWarning(indent, dir string) {
+	if where := syncedFolder(dir); where != "" {
+		e.note(indent, markWarn, unbroken(cadreis.Tilde(paths.Real(dir)))+" is in "+where+", which iCloud may sync. Syncing can mess with git and slow your team down, so a folder like ~/Developer is safer: "+cmd("cadrei project dir ~/Developer"))
+	}
 }
 
 func runProjectDir(e *env) int {
