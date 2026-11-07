@@ -906,6 +906,32 @@ func TestFirstRunSetsTheProjectsFolder(t *testing.T) {
 	}
 }
 
+// Review of PR G, round 2 (R2-L1): a first project right in home, or
+// outside it, doesn't make that folder where new clones go: ~/Developer
+// does. One in ~/code keeps ~/code.
+func TestAFirstProjectsFolderMustBeInHome(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{{"home", "~/Developer"}, {"outside", "~/Developer"}, {"code", "~/code"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := firstMachine(t)
+			claudeConfig(t, home)
+			dir := map[string]string{"home": home + "/my-app", "outside": t.TempDir() + "/my-app", "code": home + "/code/my-app"}[tc.name]
+			os.MkdirAll(dir, 0o755)
+			exec.Command("git", "-C", dir, "init", "-q").Run()
+			t.Chdir(dir)
+			code, out, errOut := callIn("p\n")
+			if code != 0 || !strings.Contains(out, "+ Added my-app as a project") {
+				t.Fatalf("exit %d\n%s%s", code, out, errOut)
+			}
+			if got := cadreis.Tilde(cadreis.ProjectsDir()); got != tc.want {
+				t.Errorf("projects folder %s:\n%s", got, out)
+			}
+			if line := strings.Contains(out, "+ New projects will go in ~/Developer\n"); line != (tc.want == "~/Developer") {
+				t.Errorf("the ~/Developer line: %v\n%s", line, out)
+			}
+		})
+	}
+}
+
 // A restore warns when its projects would go in a folder iCloud may sync.
 func TestARestoreWarnsOfASyncedProjectsFolder(t *testing.T) {
 	home := firstMachine(t)

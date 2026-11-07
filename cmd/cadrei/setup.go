@@ -439,13 +439,15 @@ func (e *env) newCrew(rt rtpkg.Runtime, name string) bool {
 
 // defaultProjects makes ~/Developer the folder new clones go to, when
 // nothing is set on this machine yet and the crews' projects don't share
-// a folder, or share one iCloud may sync. A folder they share is left as
-// it is, so their clones are still found there.
+// a folder in home, or share one iCloud may sync. A folder they share is
+// left as it is, so their clones are still found there. Home itself, or a
+// folder outside it, isn't kept: a first project right in ~ or in a temp
+// folder would send every clone there.
 func (e *env) defaultProjects() {
 	if cadreis.ProjectsDirSet() {
 		return
 	}
-	if d := cadreis.ProjectsDir(); d != "" && syncedFolder(d) == "" {
+	if d := cadreis.ProjectsDir(); d != "" && inHome(d) && syncedFolder(d) == "" {
 		return
 	}
 	dir := cadreis.DefaultProjectsDir()
@@ -454,6 +456,18 @@ func (e *env) defaultProjects() {
 		return
 	}
 	e.work(markDone, "New projects will go in "+unbroken(cadreis.Tilde(dir)))
+}
+
+// inHome reports whether dir is a folder inside the home folder, and not
+// the home folder itself, however either is spelled.
+func inHome(dir string) bool {
+	home, d := paths.Home(), paths.Real(dir)
+	if !paths.Inside(d, home) {
+		return false
+	}
+	a, errA := os.Stat(d)
+	h, errH := os.Stat(home)
+	return errA != nil || errH != nil || !os.SameFile(a, h)
 }
 
 // wrapScreen wraps prompt lines for a screen, in marked text.

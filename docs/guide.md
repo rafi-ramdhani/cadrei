@@ -74,7 +74,7 @@ After Enter you see one `✓` line per step, and your orchestrator opens. There'
   Opening your orchestrator in tmux.
 ```
 
-New projects your team clones go in the folder your projects already share (`~/code` here). When they don't share one, or it's one iCloud may sync on a Mac, it's `~/Developer`, and you get a `✓ New projects will go in ~/Developer` line. A folder you've set yourself stays. Change it anytime with `cadrei project dir <folder>`.
+New projects your team clones go in the folder your projects already share, when it's inside your home folder (`~/code` here). Otherwise they go in `~/Developer`, and you get a `✓ New projects will go in ~/Developer` line: that's when your projects share no folder, share your home folder itself or one outside it, or share one iCloud may sync on a Mac. A folder you've set yourself stays. Change it anytime with `cadrei project dir <folder>`.
 
 The keys come from your own tmux prefix: with `C-a`, the plan says `Ctrl-a s switch, Ctrl-a d leave`.
 
@@ -563,7 +563,7 @@ On a new machine, run `cadrei`. With `gh` signed in, the first run finds your `c
 
 - A backup that isn't a crew (no `members` folder), or one with a link where cadrei reads its files or runs sessions (members, `teams/`, `.claude/`, the top folder), isn't kept: cadrei would follow the link out of the crew.
 - Files that Claude Code loads into your orchestrator once you trust the crew's folder (`.claude/settings.json` and `settings.local.json`, `.claude/commands`, `agents`, `skills` and `output-styles`, `.mcp.json`, `CLAUDE.md`, `CLAUDE.local.md`) are listed, and your orchestrator opens only after your yes (the default is no). Cadrei never writes these itself; on a no, look at them and remove any you didn't put there.
-- The projects are listed with their repositories. Ones already in your projects folder are linked, and the rest are cloned, after your yes (`Press Enter for yes, type another folder, or press n to skip`). With no projects folder set yet, it's the one your crews' projects already share, or `~/Developer`. On a Mac, a folder in `~/Documents`, `~/Desktop` or iCloud Drive gets a warning: iCloud may sync those, which can mess with git. Only clones without their own Claude Code settings are trusted; the others are added but not trusted until you ask. On `n` they stay "not on this machine", for your orchestrator to offer later.
+- The projects are listed with their repositories. Ones already in your projects folder are linked, and the rest are cloned, after your yes (`Press Enter for yes, type another folder, or press n to skip`). With no projects folder set yet, it's the folder in your home folder that your crews' projects already share, or `~/Developer`. On a Mac, a folder in `~/Documents`, `~/Desktop` or iCloud Drive gets a warning: iCloud may sync those, which can mess with git. Only clones without their own Claude Code settings are trusted; the others are added but not trusted until you ask. On `n` they stay "not on this machine", for your orchestrator to offer later.
 - The restored crew's folder isn't trusted in advance, so Claude Code asks once. Say yes only if it's your backup.
 
 Projects with no repo are listed as missing until you link them. Your orchestrator greets you as on any later run, since the crew isn't new.
