@@ -20,7 +20,6 @@
   + Created your crew main
   + Added my-app as a project
   + Trusted both in Claude Code
-  + New projects will go in ~/Developer
   + Linked cadrei's instructions into Claude Code
 
   Opening your orchestrator in tmux.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 
 	"github.com/rafi-ramdhani/cadrei/internal/cadreis"
@@ -71,9 +72,17 @@ var synced = []struct{ path, name string }{
 	{"Documents", "~/Documents"}, {"Desktop", "~/Desktop"}, {"Library/Mobile Documents", "iCloud Drive"},
 }
 
+// iCloudSyncs is whether this is a Mac, where iCloud can sync the synced
+// folders. It's a variable so tests can be either.
+var iCloudSyncs = goruntime.GOOS == "darwin"
+
 // syncedFolder names the folder iCloud may sync that dir is in, or "",
-// however it's spelled (the disk is case-insensitive on macOS).
+// however it's spelled (the disk is case-insensitive on macOS). Off a
+// Mac, there's none.
 func syncedFolder(dir string) string {
+	if !iCloudSyncs {
+		return ""
+	}
 	home := paths.Home()
 	for _, s := range synced {
 		if paths.Inside(paths.Real(dir), paths.Real(filepath.Join(home, s.path))) {

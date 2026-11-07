@@ -115,6 +115,7 @@ func TestProjectsFolderIsAskedOnce(t *testing.T) {
 // (Desktop and Documents, iCloud Drive), and still sets it.
 func TestProjectDirWarnsOfASyncedFolder(t *testing.T) {
 	home := sandbox(t)
+	onAMac(t, true)
 	for dir, where := range map[string]string{"~/Documents/code": "~/Documents", "~/Desktop": "~/Desktop", "~/Library/Mobile Documents/com~apple~CloudDocs/code": "iCloud Drive"} {
 		out := must(t, "project", "dir", dir)
 		if want := "! " + dir + " is in " + where + ", which iCloud may sync. Syncing can mess with git and slow your team down, so a folder like ~/Developer is safer: cadrei project dir ~/Developer"; !strings.Contains(flat(out), want) {
@@ -129,6 +130,19 @@ func TestProjectDirWarnsOfASyncedFolder(t *testing.T) {
 			t.Errorf("%s: %q", dir, out)
 		}
 	}
+	// Off a Mac, iCloud doesn't sync them (review of PR G, L4).
+	onAMac(t, false)
+	if out := must(t, "project", "dir", "~/Documents/code"); strings.Contains(out, "iCloud") {
+		t.Errorf("off a Mac: %q", out)
+	}
+}
+
+// onAMac makes the iCloud warnings act as on a Mac, or as off one, for t.
+func onAMac(t *testing.T, yes bool) {
+	t.Helper()
+	old := iCloudSyncs
+	iCloudSyncs = yes
+	t.Cleanup(func() { iCloudSyncs = old })
 }
 
 func TestProjectAddTrustsAndLinks(t *testing.T) {

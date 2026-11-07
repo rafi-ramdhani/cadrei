@@ -277,7 +277,8 @@ func (e *env) firstRun(rt rtpkg.Runtime) bool {
 
 // restoreOffer is the first run's plan when the user has crew backups on
 // GitHub: Enter restores the one pushed to last, a number another, n makes
-// a new crew instead, and r asks for another repo.
+// a new crew instead, r asks for another repo, and o brings back an
+// archived setup, which can be newer than the backup.
 func (e *env) restoreOffer(rt rtpkg.Runtime, repos []string) bool {
 	shown := repos
 	if len(shown) > 9 {
@@ -302,9 +303,16 @@ func (e *env) restoreOffer(rt rtpkg.Runtime, repos []string) bool {
 		lines[0] = "Press Enter to restore " + repos[0] + ", or its number for another."
 	}
 	lines = append(lines, "Or press n for a new crew instead, r to type another repo, q to quit.")
+	e.unreadableArchives()
+	if offer := archiveOffer(); offer != nil {
+		keys += "o"
+		lines = append(append(lines, ""), offer...)
+	}
 	e.say("")
 	key, _ := e.readKey(e.wrapScreen(lines...), keys)
 	switch {
+	case key == 'o':
+		return e.restoreFromArchive(rt)
 	case key == keyEnter:
 		return e.restoreCrew(rt, repos[0])
 	case key >= '1' && key <= '9':
@@ -430,10 +438,14 @@ func (e *env) newCrew(rt rtpkg.Runtime, name string) bool {
 }
 
 // defaultProjects makes ~/Developer the folder new clones go to, when
-// nothing is set on this machine yet, so they don't land wherever most
-// projects happen to sit (which can be a folder iCloud syncs).
+// nothing is set on this machine yet and the crews' projects don't share
+// a folder, or share one iCloud may sync. A folder they share is left as
+// it is, so their clones are still found there.
 func (e *env) defaultProjects() {
 	if cadreis.ProjectsDirSet() {
+		return
+	}
+	if d := cadreis.ProjectsDir(); d != "" && syncedFolder(d) == "" {
 		return
 	}
 	dir := cadreis.DefaultProjectsDir()
@@ -521,11 +533,12 @@ func (e *env) identityOnce(dir string) {
 }
 
 // restoreName is the name a restored crew gets on this machine: the
-// repository's name, without the cadrei- a backup's name starts with.
+// repository's name, without the cadrei- a backup's name starts with, in
+// any case, as the backups list matches it.
 func restoreName(repo string) string {
 	name := strings.TrimSuffix(filepath.Base(strings.TrimRight(repo, "/")), ".git")
-	if n := strings.TrimPrefix(name, "cadrei-"); n != "" {
-		name = n
+	if len(name) > len("cadrei-") && strings.EqualFold(name[:len("cadrei-")], "cadrei-") {
+		name = name[len("cadrei-"):]
 	}
 	return name
 }
@@ -967,7 +980,7 @@ func (e *env) unreadableArchives() {
 }
 
 // archiveOffer is the lines under a first-run plan that offer an archived
-// setup waiting to come back (key o), or none. Both first-run screens use
+// setup waiting to come back (key o), or none. Every first-run screen uses
 // it, and it reads the manifests once.
 func archiveOffer() []string {
 	open := unrestored()

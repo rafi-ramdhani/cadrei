@@ -254,9 +254,6 @@ func TestHookOrchestrator(t *testing.T) {
 	}
 }
 
-// backupOf makes the backup repository of a cadrei called name, as a
-// machine that backed it up would have pushed it: members, a registry
-// with a project that has a repo and one that has none, and no places.
 // ghSignedInWith stubs gh signed in as rafi, with list as what gh repo
 // list prints, and gh repo clone cloning each owner/name in clones from
 // its path. It returns the file each call's arguments go to.
@@ -273,6 +270,9 @@ func ghSignedInWith(t *testing.T, home, list string, clones map[string]string) s
 	return calls
 }
 
+// backupOf makes the backup repository of a cadrei called name, as a
+// machine that backed it up would have pushed it: members, a registry
+// with a project that has a repo and one that has none, and no places.
 func backupOf(t *testing.T, name, appRepo string, extra ...func(src string)) string {
 	t.Helper()
 	src := filepath.Join(t.TempDir(), name)
