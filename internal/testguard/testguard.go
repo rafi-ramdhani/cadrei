@@ -22,6 +22,8 @@ var cleared = []string{
 	"CLAUDE_CONFIG_DIR", "TMUX", "TMUX_PANE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
 	"CADREI_HOME", "CADREI_MEMBER", "CADRE_PERSONA", "CADREI_OFF", "CADREI_ORCHESTRATOR", "CADREI_TEST_TTY",
 	"CADREI_MEMORY_NOTICE",
+	// gh signed in by a token would reach the user's GitHub account.
+	"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_CONFIG_DIR", "GH_HOST",
 }
 
 // Environment a guarded test binary passes to the test binaries it runs as

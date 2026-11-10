@@ -21,6 +21,7 @@
 
   + Created your crew main
   + Trusted it in Claude Code
+  + New projects will go in ~/Developer
   + Linked cadrei's instructions into Claude Code
 
   Opening your orchestrator here. Your team still runs in tmux, and you can

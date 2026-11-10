@@ -254,6 +254,22 @@ func TestHookOrchestrator(t *testing.T) {
 	}
 }
 
+// ghSignedInWith stubs gh signed in as rafi, with list as what gh repo
+// list prints, and gh repo clone cloning each owner/name in clones from
+// its path. It returns the file each call's arguments go to.
+func ghSignedInWith(t *testing.T, home, list string, clones map[string]string) string {
+	t.Helper()
+	calls := home + "/gh-calls"
+	os.WriteFile(home+"/gh-list.json", []byte(list), 0o644)
+	script := "#!/bin/sh\necho \"$@\" >> '" + calls + "'\ncase \"$1 $2\" in\n\"auth status\") exit 0 ;;\n\"repo list\") cat '" + home + "/gh-list.json'; exit 0 ;;\n\"repo clone\")\n  case \"$3\" in\n"
+	for repo, path := range clones {
+		script += "  " + repo + ") exec git clone -q -- '" + path + "' \"$4\" ;;\n"
+	}
+	script += "  esac\n  echo \"GraphQL: Could not resolve to a Repository\" >&2; exit 1 ;;\nesac\nexit 1\n"
+	writeStub(t, home+"/bin/gh", script)
+	return calls
+}
+
 // backupOf makes the backup repository of a cadrei called name, as a
 // machine that backed it up would have pushed it: members, a registry
 // with a project that has a repo and one that has none, and no places.
